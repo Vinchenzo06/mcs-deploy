@@ -1,0 +1,6 @@
+{
+  "id": "proxymanager",
+  "name": "proxymanager",
+  "version": "${version}",
+  "main": "vinch.mcs.proxymanager.Proxymanager"
+}

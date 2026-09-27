@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: mcs-api
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/mcs_db}
+    username: ${DB_USERNAME:mcs_api}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: true
+    show-sql: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+server:
+  port: 8081
+
+logging:
+  level:
+    root: INFO
+    vinch.mcs.api: DEBUG
+
+mcs:
+  api:
+    lobby-key: ${LOBBY_API_KEY}
+  ports:
+    start: 25600
+    end: 25620
+  velocity:
+    url: http://127.0.0.1:8082
+    plugin-key: ${VELOCITY_PLUGIN_KEY}

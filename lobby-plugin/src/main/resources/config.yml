@@ -1,0 +1,7 @@
+# Configuration du plugin MCS Lobby
+
+# URL de l'API centrale
+api-url: http://localhost:8081
+
+# Clé API pour s'authentifier auprès de l'API centrale
+api-key: CHANGE_ME

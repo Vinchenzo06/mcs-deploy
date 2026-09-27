@@ -1,0 +1,234 @@
+package vinch.mcs.api.websocket;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
+import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
+import org.springframework.web.socket.handler.TextWebSocketHandler;
+import vinch.mcs.api.entities.Node;
+import vinch.mcs.api.repositories.NodeRepository;
+import vinch.mcs.api.services.NodeService;
+
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.UUID;
+
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class AgentWebSocketHandler extends TextWebSocketHandler {
+
+    private final NodeService nodeService;
+    private final NodeRepository nodeRepository;
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    // Map nodeId -> WebSocketSession pour pouvoir envoyer des messages plus tard
+    private final Map<Long, WebSocketSession> activeSessions = new ConcurrentHashMap<>();
+
+    // Map sessionId -> nodeId pour identifier qui est connecté
+    private final Map<String, Long> sessionToNode = new ConcurrentHashMap<>();
+
+    // Map command_id -> CompletableFuture pour gérer les réponses asynchrones
+    private final Map<String, CompletableFuture<JsonNode>> pendingCommands = new ConcurrentHashMap<>();
+
+    @Override
+    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
+        log.info("Nouvelle connexion WebSocket : {}", session.getId());
+        // L'agent doit envoyer un message register dans les 5 secondes, sinon on le déconnecte
+    }
+
+    @Override
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
+        try {
+            JsonNode json = objectMapper.readTree(message.getPayload());
+            String type = json.has("type") ? json.get("type").asText() : "";
+
+            switch (type) {
+                case "register" -> handleRegister(session, json);
+                case "heartbeat" -> handleHeartbeat(session, json);
+                case "command_result" -> handleCommandResult(json);
+                default -> {
+                    if (sessionToNode.containsKey(session.getId())) {
+                        log.debug("Message reçu de node {} : type={}", sessionToNode.get(session.getId()), type);
+                    } else {
+                        log.warn("Message reçu d'une session non authentifiée : {}", type);
+                        sendError(session, "not_authenticated");
+                        session.close(CloseStatus.POLICY_VIOLATION);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Erreur de traitement du message WebSocket", e);
+            sendError(session, "invalid_message");
+        }
+    }
+
+    private void handleCommandResult(JsonNode json) {
+        if (!json.has("command_id")) {
+            log.warn("command_result sans command_id reçu");
+            return;
+        }
+
+        String commandId = json.get("command_id").asText();
+        CompletableFuture<JsonNode> future = pendingCommands.remove(commandId);
+
+        if (future != null) {
+            future.complete(json);
+            log.debug("Résultat de commande {} reçu", commandId);
+        } else {
+            log.warn("Résultat reçu pour commande inconnue : {}", commandId);
+        }
+    }
+
+    public CompletableFuture<JsonNode> sendCommand(Long nodeId, String commandType, Map<String, Object> data) {
+        WebSocketSession session = activeSessions.get(nodeId);
+        if (session == null || !session.isOpen()) {
+            CompletableFuture<JsonNode> failed = new CompletableFuture<>();
+            failed.completeExceptionally(new RuntimeException("Node " + nodeId + " non connecté"));
+            return failed;
+        }
+
+        String commandId = UUID.randomUUID().toString();
+
+        ObjectNode message = objectMapper.createObjectNode();
+        message.put("type", commandType);
+        message.put("command_id", commandId);
+        if (data != null) {
+            message.set("data", objectMapper.valueToTree(data));
+        }
+
+        CompletableFuture<JsonNode> future = new CompletableFuture<>();
+        pendingCommands.put(commandId, future);
+
+        try {
+            session.sendMessage(new TextMessage(objectMapper.writeValueAsString(message)));
+            log.debug("Commande {} ({}) envoyée à node {}", commandType, commandId, nodeId);
+        } catch (Exception e) {
+            pendingCommands.remove(commandId);
+            future.completeExceptionally(e);
+            return future;
+        }
+
+        // Timeout après 30 secondes
+        future.orTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
+                .exceptionally(ex -> {
+                    pendingCommands.remove(commandId);
+                    return null;
+                });
+
+        return future;
+    }
+
+    private void handleRegister(WebSocketSession session, JsonNode json) throws Exception {
+        if (!json.has("node_token")) {
+            sendError(session, "missing_token");
+            session.close(CloseStatus.POLICY_VIOLATION);
+            return;
+        }
+
+        String token = json.get("node_token").asText();
+        Node node = nodeService.authenticateNode(token);
+
+        if (node == null) {
+            log.warn("Tentative d'authentification avec un token invalide");
+            sendError(session, "invalid_token");
+            session.close(CloseStatus.POLICY_VIOLATION);
+            return;
+        }
+
+        // Si le node était déjà connecté avec une autre session, on ferme l'ancienne
+        WebSocketSession previousSession = activeSessions.get(node.getId());
+        if (previousSession != null && previousSession.isOpen()) {
+            previousSession.close(CloseStatus.POLICY_VIOLATION.withReason("Replaced by new connection"));
+        }
+
+        activeSessions.put(node.getId(), session);
+        sessionToNode.put(session.getId(), node.getId());
+
+        // Mise à jour du node en base
+        node.setIsOnline(true);
+        node.setLastHeartbeatAt(LocalDateTime.now());
+        if (json.has("agent_version")) {
+            node.setAgentVersion(json.get("agent_version").asText());
+        }
+        nodeRepository.save(node);
+
+        log.info("Node {} authentifié et connecté (volontaire {})", node.getId(), node.getVolunteer().getId());
+
+        // Réponse au client
+        ObjectNode response = objectMapper.createObjectNode();
+        response.put("type", "register_ok");
+        response.put("node_id", node.getId());
+        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(response)));
+    }
+
+    private void handleHeartbeat(WebSocketSession session, JsonNode json) throws Exception {
+        Long nodeId = sessionToNode.get(session.getId());
+        if (nodeId == null) {
+            sendError(session, "not_authenticated");
+            return;
+        }
+
+        Node node = nodeRepository.findById(nodeId).orElse(null);
+        if (node == null) return;
+
+        node.setLastHeartbeatAt(LocalDateTime.now());
+
+        // Mise à jour des stats si fournies
+        if (json.has("stats")) {
+            JsonNode stats = json.get("stats");
+            if (stats.has("ram_used_mb")) node.setUsedRamMb(stats.get("ram_used_mb").asInt());
+            if (stats.has("storage_used_mb")) node.setUsedStorageMb(stats.get("storage_used_mb").asInt());
+        }
+
+        nodeRepository.save(node);
+
+        log.debug("Heartbeat reçu de node {}", nodeId);
+    }
+
+    @Override
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
+        Long nodeId = sessionToNode.remove(session.getId());
+        if (nodeId != null) {
+            activeSessions.remove(nodeId);
+
+            // Marquer le node comme offline
+            nodeRepository.findById(nodeId).ifPresent(node -> {
+                node.setIsOnline(false);
+                nodeRepository.save(node);
+            });
+
+            log.info("Node {} déconnecté (raison : {})", nodeId, status);
+        }
+    }
+
+    private void sendError(WebSocketSession session, String errorCode) throws Exception {
+        if (!session.isOpen()) return;
+        ObjectNode error = objectMapper.createObjectNode();
+        error.put("type", "error");
+        error.put("error", errorCode);
+        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(error)));
+    }
+
+    public boolean isNodeOnline(Long nodeId) {
+        WebSocketSession session = activeSessions.get(nodeId);
+        return session != null && session.isOpen();
+    }
+
+    public void sendToNode(Long nodeId, String message) throws Exception {
+        WebSocketSession session = activeSessions.get(nodeId);
+        if (session != null && session.isOpen()) {
+            session.sendMessage(new TextMessage(message));
+        } else {
+            throw new RuntimeException("Node " + nodeId + " non connecté");
+        }
+    }
+}

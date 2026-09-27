@@ -1,0 +1,9 @@
+api:
+  url: ws://IP_DE_TON_VPS:8081/ws/agent
+
+node:
+  token: TON_TOKEN
+  agent_version: "0.1.0"
+
+heartbeat:
+  interval_seconds: 30

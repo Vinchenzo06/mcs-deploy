@@ -1,0 +1,13 @@
+# Configuration du plugin ProxyManager
+
+# URL de l'API centrale
+api-url: http://localhost:8081
+
+# Clé API pour s'authentifier auprès de l'API centrale
+api-key: CHANGE_ME
+
+# Port de l'API locale exposée par ce plugin (pour que l'API Spring puisse parler à Velocity)
+local-api-port: 8082
+
+# Clé pour sécuriser l'API locale (à mettre dans la config de l'API Spring)
+local-api-key: CHANGE_ME_PLUGIN

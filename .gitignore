@@ -1,0 +1,16 @@
+# Compilation
+target/
+out/
+*.class
+
+# IntelliJ
+.idea/
+*.iml
+
+# Agent Go : binaire et config locale (contient le token du node)
+agent/mcs-agent
+agent/*.exe
+agent/config.yaml
+
+# Config et secrets locaux
+*.env

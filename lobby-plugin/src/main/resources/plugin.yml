@@ -1,0 +1,12 @@
+name: MCSLobbyPlugin
+version: 1.0.0
+main: vinch.mcs.lobby.McsLobbyPlugin
+api-version: '26.1.2'
+authors: [Vincent]
+description: Plugin lobby pour le réseau MCS
+softdepend: [LuckPerms]
+
+commands:
+  mcs:
+    description: Gestion des serveurs MCS
+    usage: /mcs <create|list|delete|join|start|stop|restart> [args]

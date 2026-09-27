@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  mcs-deploy : récupère la dernière version du dépôt GitHub, compile ce qu'il
+#  faut et installe/met à jour le VPS.
+#
+#    sudo mcs-deploy                 tout (première installation ou mise à jour complète)
+#    sudo mcs-deploy api             seulement l'API
+#    sudo mcs-deploy velocity lobby  plusieurs étapes
+#    sudo mcs-deploy --no-pull api   sans récupérer GitHub (code déjà présent)
+#    sudo mcs-deploy --no-build lobby  sans recompiler (réutilise le dernier jar)
+#
+#  Étapes : system java postgres rathole api velocity lobby firewall bootstrap summary
+# =============================================================================
+set -euo pipefail
+
+INSTALL_DIR=/opt/mcs-deploy
+die() { echo -e "\033[1;31m    ✘ $*\033[0m" >&2; exit 1; }
+[[ $EUID -eq 0 ]] || die "Lance avec sudo"
+[[ -f /etc/mcs/deploy.env ]] || die "Lance d'abord bootstrap.sh"
+# shellcheck disable=SC1091
+source /etc/mcs/deploy.env
+
+ORIG_ARGS=("$@")
+PULL=true
+steps=()
+while (( $# )); do
+  case "$1" in
+    --no-pull)  PULL=false; shift ;;
+    --no-build) export MCS_SKIP_BUILD=1; shift ;;
+    -h|--help)  sed -n '3,13p' "$0"; exit 0 ;;
+    *) steps+=("$1"); shift ;;
+  esac
+done
+
+if [[ "$PULL" == "true" && -z "${MCS_PULLED:-}" ]]; then
+  git_auth=()
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    git_auth=(-c "http.extraHeader=Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)")
+  fi
+  echo "==> Récupération de la dernière version ($MCS_REPO@$MCS_BRANCH)"
+  git "${git_auth[@]}" -C "$INSTALL_DIR" pull --ff-only -q
+  echo "    $(git -C "$INSTALL_DIR" log -1 --format='%h  %s  (%cr)')"
+  # Relance la version fraîchement récupérée de ce script
+  exec env MCS_PULLED=1 bash "$INSTALL_DIR/deploy/mcs-deploy" "${ORIG_ARGS[@]}"
+fi
+
+exec env MCS_SRC_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/deploy/install-vps.sh" "${steps[@]}"
