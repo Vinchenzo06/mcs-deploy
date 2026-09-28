@@ -286,7 +286,7 @@ public class ApiClient {
 
     public CompletableFuture<JsonNode> setVisibility(long serverId, long playerId, boolean isPublic) {
         return call("POST", "/api/v1/servers/" + serverId + "/visibility",
-                Map.of("playerId", playerId, "public", isPublic), Duration.ofSeconds(10));
+                Map.of("playerId", playerId, "isPublic", isPublic), Duration.ofSeconds(10));
     }
 
     public CompletableFuture<JsonNode> console(long serverId, long playerId, String command) {

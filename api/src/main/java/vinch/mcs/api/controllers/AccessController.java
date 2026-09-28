@@ -1,6 +1,5 @@
 package vinch.mcs.api.controllers;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -29,6 +28,18 @@ public class AccessController {
     private final AccessService accessService;
     private final ServerService serverService;
     private final ServerRepository serverRepository;
+
+    // Corps des requêtes : des records, pas JsonNode (Spring Boot 4 utilise Jackson 3,
+    // qui ne sait pas construire le JsonNode de Jackson 2 importé ailleurs dans l'API)
+    public record InviteBody(Long playerId, String username, String level) {}
+
+    public record VisibilityBody(Long playerId, Boolean isPublic) {}
+
+    public record ConsoleBody(Long playerId, String command) {}
+
+    public record MoveBody(Long playerId, String username) {}
+
+    public record ConnectedBody(String server, String uuid) {}
 
     private interface Action {
         Object run() throws Exception;
@@ -98,14 +109,14 @@ public class AccessController {
 
     /** Body : {playerId, username, level} ; level = membre | gerant | technicien */
     @PostMapping("/servers/{id}/members")
-    public ResponseEntity<?> invite(@PathVariable Long id, @RequestBody JsonNode body) {
+    public ResponseEntity<?> invite(@PathVariable Long id, @RequestBody InviteBody body) {
         return handle(() -> {
-            PermissionLevel level = PermissionLevel.parse(body.path("level").asText("membre"));
+            PermissionLevel level = PermissionLevel.parse(body.level() == null ? "membre" : body.level());
             if (level == null) {
                 throw new RuntimeException("Rôle inconnu : choisis membre, gerant ou technicien.");
             }
-            boolean created = accessService.invite(accessService.player(body.path("playerId").asLong()),
-                    server(id), body.path("username").asText(), level);
+            boolean created = accessService.invite(accessService.player(body.playerId()),
+                    server(id), body.username(), level);
             return Map.of("success", true, "created", created, "level", level.label());
         });
     }
@@ -119,28 +130,28 @@ public class AccessController {
         });
     }
 
-    /** Body : {playerId, public} */
+    /** Body : {playerId, isPublic} */
     @PostMapping("/servers/{id}/visibility")
-    public ResponseEntity<?> visibility(@PathVariable Long id, @RequestBody JsonNode body) {
+    public ResponseEntity<?> visibility(@PathVariable Long id, @RequestBody VisibilityBody body) {
         return handle(() -> {
-            accessService.setPublic(accessService.player(body.path("playerId").asLong()), server(id),
-                    body.path("public").asBoolean(false));
+            accessService.setPublic(accessService.player(body.playerId()), server(id),
+                    Boolean.TRUE.equals(body.isPublic()));
             return null;
         });
     }
 
     /** Body : {playerId, command} */
     @PostMapping("/servers/{id}/console")
-    public ResponseEntity<?> console(@PathVariable Long id, @RequestBody JsonNode body) {
+    public ResponseEntity<?> console(@PathVariable Long id, @RequestBody ConsoleBody body) {
         return handle(() -> Map.of("output",
-                serverService.console(id, body.path("playerId").asLong(), body.path("command").asText(""))));
+                serverService.console(id, body.playerId(), body.command() == null ? "" : body.command())));
     }
 
     /** Body : {playerId, username} */
     @PostMapping("/servers/{id}/move")
-    public ResponseEntity<?> move(@PathVariable Long id, @RequestBody JsonNode body) {
+    public ResponseEntity<?> move(@PathVariable Long id, @RequestBody MoveBody body) {
         return handle(() -> {
-            serverService.movePlayer(id, body.path("playerId").asLong(), body.path("username").asText());
+            serverService.movePlayer(id, body.playerId(), body.username());
             return null;
         });
     }
@@ -160,9 +171,9 @@ public class AccessController {
 
     /** Le proxy signale qu'un joueur est arrivé sur un serveur (OP automatique des admins) */
     @PostMapping("/access/connected")
-    public ResponseEntity<?> connected(@RequestBody JsonNode body) {
+    public ResponseEntity<?> connected(@RequestBody ConnectedBody body) {
         try {
-            serverService.onPlayerConnected(body.path("server").asText(), UUID.fromString(body.path("uuid").asText()));
+            serverService.onPlayerConnected(body.server(), UUID.fromString(body.uuid()));
         } catch (Exception e) {
             log.debug("access/connected : {}", e.getMessage());
         }
