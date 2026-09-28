@@ -78,7 +78,7 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 		"-e", "ONLINE_MODE=FALSE",
 		"-e", "TYPE=" + serverType,
 		"-e", "VERSION=" + req.Version,
-		"-e", fmt.Sprintf("MEMORY=%dM", req.RamMb),
+		"-e", fmt.Sprintf("MEMORY=%dM", javaHeapMb(req.RamMb)),
 		"-e", "ENABLE_QUERY=false",
 		"--cpus", fmt.Sprintf("%d", req.CpuCores),
 	}
@@ -127,10 +127,30 @@ const (
 	containerGID = 1000
 )
 
+// javaHeapMb : part de la RAM du serveur donnée au tas Java (-Xms/-Xmx).
+// La RAM choisie par le joueur est la limite TOTALE du conteneur ; la JVM a
+// besoin de mémoire hors du tas (classes, code compilé, threads, tampons réseau,
+// GC), prise dans cette RAM : 20 %, au moins 512 Mo, au plus 3 Go.
+// Même calcul que l'API (ServerService.javaHeapMb).
+func javaHeapMb(ramMb int) int {
+	overhead := ramMb / 5
+	if overhead < 512 {
+		overhead = 512
+	}
+	if overhead > 3072 {
+		overhead = 3072
+	}
+	heap := ramMb - overhead
+	if heap < 256 {
+		heap = 256
+	}
+	return heap
+}
+
 // hardeningArgs : réseau isolé et limites de sécurité pour un conteneur de serveur.
 func hardeningArgs(ramMb int) []string {
-	// RAM du conteneur = tas Java + marge pour la JVM hors tas (mods, threads...)
-	containerMb := ramMb + ramMb/4 + 512
+	// Limite stricte = exactement la RAM choisie : rien n'est ajouté par-dessus
+	containerMb := ramMb
 
 	args := []string{
 		"--network", mcsNetwork,

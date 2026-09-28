@@ -322,7 +322,7 @@ runuser -u postgres -- psql -qtA -d mcs_db -c "SELECT '  node ' || id || '  ' ||
 echo
 echo "=== Capacité des machines (utilisé / prêté ; 10 % du prêté restent en réserve) ==="
 runuser -u postgres -- psql -qtA -d mcs_db -c "
-  SELECT '  node ' || n.id || '  RAM ' || COALESCE(SUM(s.allocated_ram_mb + s.allocated_ram_mb / 4 + 512), 0) || '/' || n.total_ram_mb || ' Mo'
+  SELECT '  node ' || n.id || '  RAM ' || COALESCE(SUM(s.allocated_ram_mb), 0) || '/' || n.total_ram_mb || ' Mo'
       || '  CPU ' || COALESCE(SUM(s.allocated_cpu_cores), 0) || '/' || n.cpu_cores
       || '  disque ' || COALESCE(SUM(s.allocated_storage_mb), 0) || '/' || n.total_storage_mb || ' Mo'
       || '  (libre sur la machine : ' || COALESCE(n.host_disk_free_mb::text, '?') || ' Mo)'

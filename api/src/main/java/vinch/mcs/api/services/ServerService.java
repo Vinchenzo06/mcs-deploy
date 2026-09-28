@@ -39,6 +39,13 @@ public class ServerService {
         Player owner = playerRepository.findById(request.getOwnerPlayerId())
                 .orElseThrow(() -> new RuntimeException("Joueur non trouvé : " + request.getOwnerPlayerId()));
 
+        if (request.getRamMb() < MIN_RAM_MB) {
+            throw new RuntimeException("RAM minimum : " + MIN_RAM_MB + " Mo");
+        }
+        if (request.getCpuCores() < 1) {
+            throw new RuntimeException("CPU minimum : 1 cœur");
+        }
+
         // Vérifier la limite de serveurs du joueur
         long count = serverRepository.countByOwnerId(owner.getId());
         if (count >= owner.getMaxServers()) {
@@ -163,9 +170,26 @@ public class ServerService {
                 .build();
     }
 
-    // Mémoire réelle d'un conteneur : tas Java + 25 % + 512 Mo (même calcul que l'agent)
-    static int containerRamMb(int heapMb) {
-        return heapMb + heapMb / 4 + 512;
+    /** RAM minimale d'un serveur (limite totale du conteneur) */
+    public static final int MIN_RAM_MB = 1024;
+
+    /**
+     * Mémoire réelle d'un conteneur : exactement la RAM choisie par le joueur.
+     * C'est une limite stricte ; la marge dont la JVM a besoin est prise dedans
+     * (voir javaHeapMb), jamais ajoutée par-dessus.
+     */
+    static int containerRamMb(int ramMb) {
+        return ramMb;
+    }
+
+    /**
+     * Part de la RAM d'un serveur donnée au tas Java (-Xmx). Le reste sert à la JVM
+     * hors du tas : classes, code compilé, threads, tampons réseau, GC.
+     * 20 % de la RAM, au moins 512 Mo, au plus 3 Go. Même calcul que l'agent (javaHeapMb).
+     */
+    public static int javaHeapMb(int ramMb) {
+        int overhead = Math.max(512, Math.min(3072, ramMb / 5));
+        return Math.max(256, ramMb - overhead);
     }
 
     // Marge de disque libre à garder sur la machine du volontaire
@@ -190,13 +214,13 @@ public class ServerService {
      * que la part de sa RAM prêtée qu'il occupe (RAM du conteneur, comme pour le
      * placement). La somme des quotas ne peut donc jamais dépasser le disque prêté.
      */
-    static int diskQuotaFor(Node node, int heapMb) {
+    static int diskQuotaFor(Node node, int ramMb) {
         Integer nodeRam = node.getTotalRamMb();
         Integer nodeDisk = node.getTotalStorageMb();
         if (nodeRam == null || nodeRam <= 0 || nodeDisk == null || nodeDisk <= 0) {
             return 5000; // capacité inconnue : ancien comportement
         }
-        long quota = (long) nodeDisk * containerRamMb(heapMb) / nodeRam;
+        long quota = (long) nodeDisk * containerRamMb(ramMb) / nodeRam;
         return (int) Math.max(MIN_DISK_QUOTA_MB, Math.min(quota, nodeDisk));
     }
 
@@ -468,6 +492,8 @@ public class ServerService {
                     m.put("serverType", s.getServerType().name());
                     m.put("minecraftVersion", s.getMinecraftVersion());
                     m.put("port", s.getTunnelPort());
+                    m.put("allocatedRamMb", s.getAllocatedRamMb());
+                    m.put("allocatedCpuCores", s.getAllocatedCpuCores());
                     return m;
                 })
                 .toList();

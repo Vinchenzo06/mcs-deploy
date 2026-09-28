@@ -23,7 +23,7 @@ public class ServerTabCompleter implements TabCompleter {
     );
 
     private static final List<String> COMMON_VERSIONS = List.of(
-            "1.21.4", "1.21.3", "1.21.1", "1.21", "1.20.4", "1.20.1", "1.19.4", "1.18.2"
+            "LATEST", "26.1.2", "1.21.11", "1.21.4", "1.21.1", "1.20.1", "1.19.2", "1.18.2"
     );
 
     // Cache : UUID joueur -> liste de ses serveurs (avec status)
@@ -68,7 +68,9 @@ public class ServerTabCompleter implements TabCompleter {
 
                 case "start":
                     refreshCacheIfNeeded(player);
-                    return filter(getServerNames(player, "STOPPED"), args[1]);
+                    List<String> startable = new ArrayList<>(getServerNames(player, "STOPPED"));
+                    startable.addAll(getServerNames(player, "ERROR"));
+                    return filter(startable, args[1]);
 
                 case "stop":
                     refreshCacheIfNeeded(player);
@@ -82,7 +84,8 @@ public class ServerTabCompleter implements TabCompleter {
         }
 
         if (args.length == 5 && sub.equals("create")) {
-            return filter(List.of("1024", "2048", "4096", "8192"), args[4]);
+            // RAM en Go (2G) ou en Mo (2048)
+            return filter(List.of("2G", "4G", "6G", "8G", "12G", "16G"), args[4]);
         }
 
         if (args.length == 6 && sub.equals("create")) {

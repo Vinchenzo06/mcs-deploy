@@ -105,9 +105,17 @@ au moins 10 % de sa RAM, 10 % de son disque et un cœur (l'agent applique les m�
 limites). Pour changer d'avis plus tard, sur la machine :
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh -o node-setup.sh && sudo bash node-setup.sh --capacity
-``` Un nouveau serveur va sur
-la machine en ligne qui a la place et garde le plus de RAM libre ; s'il n'y en a aucune,
-la création est refusée. La RAM comptée est celle du conteneur (tas Java + 25 % + 512 Mo).
+```
+
+Un nouveau serveur va sur la machine en ligne qui a la place et garde le plus de RAM
+libre ; s'il n'y en a aucune, la création est refusée.
+
+La RAM choisie par le joueur (1 Go minimum) est la **limite totale** de son serveur :
+rien n'est ajouté par-dessus, c'est exactement ce qui est compté sur la machine et dans
+son quota. Java n'en reçoit qu'une partie pour son tas (`-Xmx`) : la JVM a besoin de
+mémoire hors du tas (classes, code compilé, threads, tampons réseau, GC), soit 20 % de
+la RAM, au moins 512 Mo et au plus 3 Go. Exemples : 2 Go → tas 1,5 Go ; 4 Go → tas
+3,2 Go ; 8 Go → tas 6,4 Go.
 
 Chaque serveur reçoit un quota disque **proportionnel à sa RAM** : s'il occupe 10 % de la
 RAM prêtée par sa machine, il reçoit 10 % de son disque prêté (le joueur ne choisit pas son

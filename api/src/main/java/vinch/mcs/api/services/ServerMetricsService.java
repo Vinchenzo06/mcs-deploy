@@ -153,6 +153,11 @@ public class ServerMetricsService {
             out.put("cpuPercent", Math.round(m.cpuPercent() * 10) / 10.0);
             out.put("memUsedMb", m.memUsedMb());
             out.put("memLimitMb", m.memLimitMb());
+            // Serveurs créés avant la 0.7.0 : marge ajoutée par-dessus, le tas = la RAM choisie
+            Integer ram = server.getAllocatedRamMb();
+            if (ram != null) {
+                out.put("javaHeapMb", m.memLimitMb() > ram + 64 ? ram : ServerService.javaHeapMb(ram));
+            }
             out.put("netRxBytes", m.netRxBytes());
             out.put("netTxBytes", m.netTxBytes());
             out.put("pids", m.pids());
