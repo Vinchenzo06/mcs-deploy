@@ -95,6 +95,18 @@ sudo mcs-admin TonPseudo
 | `sudo mcs-lp-export` | État LuckPerms en JSON (groupes, joueurs) |
 | `sudo mcs-rcon "<commande>"` | Commande dans la console du lobby |
 
+## Vie privée des joueurs
+
+- Les serveurs joueurs ne reçoivent jamais l'IP réelle des joueurs : le plugin
+  proxymanager la remplace par une pseudo-IP stable (`10.x.y.z`, dérivée d'une clé
+  secrète du VPS). Un `ban-ip` sur un serveur fonctionne toujours. Si ce masquage ne
+  peut pas s'installer (version de Velocity incompatible), aucun serveur joueur n'est
+  enregistré.
+- Le canal « BungeeCord » de Velocity est désactivé : il permettait à n'importe quel
+  serveur de lire l'IP de tous les joueurs du réseau, de les expulser ou de les
+  déplacer. Le lobby utilise son propre canal `mcs:connect`, accepté uniquement
+  depuis le lobby.
+
 ## HTTPS de l'API
 
 Avec `API_DOMAIN=api.ton-domaine` dans `/etc/mcs/mcs.env` (enregistrement DNS A vers

@@ -395,16 +395,9 @@ public class ServerCommand implements CommandExecutor {
                 });
     }
 
+    // Demande au proxy (plugin proxymanager) d'envoyer le joueur vers ce serveur
     private void sendToServer(Player player, String serverName) {
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-        java.io.DataOutputStream dataOut = new java.io.DataOutputStream(out);
-        try {
-            dataOut.writeUTF("Connect");
-            dataOut.writeUTF(serverName);
-        } catch (Exception e) {
-            plugin.getLogger().warning("Erreur envoi vers " + serverName + " : " + e.getMessage());
-            return;
-        }
-        player.sendPluginMessage(plugin, "BungeeCord", out.toByteArray());
+        player.sendPluginMessage(plugin, "mcs:connect",
+                serverName.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 }

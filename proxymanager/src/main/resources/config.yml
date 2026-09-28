@@ -11,3 +11,9 @@ local-api-port: 8082
 
 # Clé pour sécuriser l'API locale (à mettre dans la config de l'API Spring)
 local-api-key: CHANGE_ME_PLUGIN
+
+# Remplace l'IP réelle des joueurs par une pseudo-IP stable dans les données
+# envoyées aux serveurs (les propriétaires de serveurs ne voient jamais la vraie IP)
+mask-player-ips: true
+# Clé secrète de la pseudo-IP (générée par le kit de déploiement)
+ip-mask-key: ""

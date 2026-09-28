@@ -194,7 +194,7 @@ load_config() {
     source "$SECRETS_FILE"
   fi
   local k
-  for k in DB_PASSWORD LOBBY_API_KEY VELOCITY_PLUGIN_KEY RCON_PASSWORD FORWARDING_SECRET; do
+  for k in DB_PASSWORD LOBBY_API_KEY VELOCITY_PLUGIN_KEY RCON_PASSWORD FORWARDING_SECRET IP_MASK_KEY; do
     save_secret "$k" "${!k:-$(gen_secret)}"
   done
 
@@ -879,7 +879,7 @@ connection-timeout = 5000
 read-timeout = 30000
 haproxy-protocol = false
 tcp-fast-open = false
-bungee-plugin-message-channel = true
+bungee-plugin-message-channel = false
 show-ping-requests = false
 failover-on-unexpected-server-disconnect = true
 announce-proxy-commands = true
@@ -901,6 +901,8 @@ api-url: http://127.0.0.1:8081
 api-key: $LOBBY_API_KEY
 local-api-port: 8082
 local-api-key: $VELOCITY_PLUGIN_KEY
+mask-player-ips: true
+ip-mask-key: $IP_MASK_KEY
 EOF
   chown -R "$MC_USER:$MC_USER" "$VELOCITY_DIR"
 

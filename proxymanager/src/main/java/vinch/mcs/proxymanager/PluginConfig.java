@@ -20,6 +20,10 @@ public class PluginConfig {
     private int localApiPort = 8082;
     private String localApiKey = "CHANGE_ME_PLUGIN";
 
+    // Masquage des IP des joueurs envoyées aux serveurs (voir IpMasker)
+    private boolean maskPlayerIps = true;
+    private String ipMaskKey = "";
+
     public static PluginConfig load(Path dataDirectory) throws IOException {
         Path configFile = dataDirectory.resolve("config.yml");
 
@@ -45,6 +49,8 @@ public class PluginConfig {
                 if (data.containsKey("api-key")) config.setApiKey((String) data.get("api-key"));
                 if (data.containsKey("local-api-port")) config.setLocalApiPort((Integer) data.get("local-api-port"));
                 if (data.containsKey("local-api-key")) config.setLocalApiKey((String) data.get("local-api-key"));
+                if (data.containsKey("mask-player-ips")) config.setMaskPlayerIps(Boolean.TRUE.equals(data.get("mask-player-ips")));
+                if (data.containsKey("ip-mask-key")) config.setIpMaskKey(String.valueOf(data.get("ip-mask-key")));
             }
             return config;
         }

@@ -20,6 +20,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 
 public class ApiServer {
 
@@ -28,12 +29,15 @@ public class ApiServer {
     private final PluginConfig config;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    private final BooleanSupplier playerServersAllowed;
+
     private HttpServer httpServer;
 
-    public ApiServer(ProxyServer proxyServer, Logger logger, PluginConfig config) {
+    public ApiServer(ProxyServer proxyServer, Logger logger, PluginConfig config, BooleanSupplier playerServersAllowed) {
         this.proxyServer = proxyServer;
         this.logger = logger;
         this.config = config;
+        this.playerServersAllowed = playerServersAllowed;
     }
 
     public void start() throws IOException {
@@ -108,6 +112,10 @@ public class ApiServer {
     }
 
     private void handleAdd(HttpExchange exchange) throws IOException {
+        if (!playerServersAllowed.getAsBoolean()) {
+            sendResponse(exchange, 503, "{\"error\":\"Masquage des IP des joueurs inactif : enregistrement refusé\"}");
+            return;
+        }
         String body = readBody(exchange);
         JsonNode json = objectMapper.readTree(body);
 

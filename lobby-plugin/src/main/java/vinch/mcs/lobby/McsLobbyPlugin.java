@@ -33,7 +33,8 @@ public final class McsLobbyPlugin extends JavaPlugin {
             getLogger().warning("LuckPerms non trouvé, utilisation des limites par défaut");
         }
 
-        getServer().getMessenger().registerOutgoingPluginChannel(this, "BungeeCord");
+        // Canal privé vers le proxy (le canal "BungeeCord" est désactivé sur Velocity)
+        getServer().getMessenger().registerOutgoingPluginChannel(this, "mcs:connect");
 
         getCommand("mcs").setExecutor(new ServerCommand(this));
         getCommand("mcs").setTabCompleter(new ServerTabCompleter(this));

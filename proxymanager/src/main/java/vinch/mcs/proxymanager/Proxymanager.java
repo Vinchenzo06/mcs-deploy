@@ -5,6 +5,7 @@ import com.velocitypowered.api.command.CommandManager;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
 import com.velocitypowered.api.event.player.ServerPostConnectEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
@@ -13,6 +14,8 @@ import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.proxy.ServerConnection;
+import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -22,6 +25,7 @@ import com.velocitypowered.api.proxy.server.ServerInfo;
 import java.net.InetSocketAddress;
 import com.fasterxml.jackson.databind.JsonNode;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Optional;
 
@@ -37,9 +41,20 @@ public class Proxymanager {
     private final Logger logger;
     private final Path dataDirectory;
 
+    // Canal privé du lobby pour envoyer un joueur vers un serveur. Il remplace le
+    // canal "BungeeCord", désactivé : celui-ci permettait à n'importe quel serveur
+    // joueur de lire l'IP de tous les joueurs (IPOther), de les expulser
+    // (KickPlayer) ou de les déplacer (ConnectOther).
+    public static final MinecraftChannelIdentifier MCS_CONNECT = MinecraftChannelIdentifier.create("mcs", "connect");
+    private static final String LOBBY_SERVER = "lobby";
+
     private PluginConfig config;
     private ApiClient apiClient;
     private ApiServer apiServer;
+
+    // Faux tant que le masquage des IP (s'il est demandé) n'est pas en place :
+    // aucun serveur joueur n'est alors enregistré (fail-closed)
+    private volatile boolean playerServersAllowed = false;
 
     @Inject
     public Proxymanager(ProxyServer server, Logger logger, @DataDirectory Path dataDirectory) {
@@ -70,9 +85,26 @@ public class Proxymanager {
             return;
         }
 
+        // Masquage des IP des joueurs, avant tout enregistrement de serveur joueur
+        if (config.isMaskPlayerIps()) {
+            if (config.getIpMaskKey() == null || config.getIpMaskKey().length() < 16) {
+                logger.error("ip-mask-key absente ou trop courte : serveurs joueurs désactivés (relance le déploiement)");
+            } else {
+                playerServersAllowed = new IpMasker(logger, config.getIpMaskKey()).install(server);
+                if (!playerServersAllowed) {
+                    logger.error("Masquage des IP impossible : les serveurs joueurs ne seront PAS enregistrés");
+                }
+            }
+        } else {
+            logger.warn("ATTENTION : mask-player-ips=false, l'IP réelle des joueurs est envoyée aux serveurs");
+            playerServersAllowed = true;
+        }
+
+        server.getChannelRegistrar().register(MCS_CONNECT);
+
         // Démarrer l'API locale qui expose Velocity à l'API Spring
         try {
-            this.apiServer = new ApiServer(server, logger, config);
+            this.apiServer = new ApiServer(server, logger, config, () -> playerServersAllowed);
             apiServer.start();
         } catch (Exception e) {
             logger.error("Erreur démarrage API locale : ", e);
@@ -86,6 +118,10 @@ public class Proxymanager {
     }
 
     private void loadServersFromApi() {
+        if (!playerServersAllowed) {
+            logger.error("Serveurs joueurs non restaurés : masquage des IP inactif");
+            return;
+        }
         logger.info("Chargement des serveurs depuis l'API...");
 
         apiClient.getActiveServers().whenComplete((result, error) -> {
@@ -124,6 +160,35 @@ public class Proxymanager {
 
             logger.info("{} serveur(s) restauré(s) depuis l'API", count);
         });
+    }
+
+    /**
+     * Canal mcs:connect : seul le lobby peut demander d'envoyer SON joueur vers un
+     * serveur. Le message n'est jamais transmis au client.
+     */
+    @Subscribe
+    public void onPluginMessage(PluginMessageEvent event) {
+        if (!MCS_CONNECT.equals(event.getIdentifier())) {
+            return;
+        }
+        event.setResult(PluginMessageEvent.ForwardResult.handled());
+
+        if (!(event.getSource() instanceof ServerConnection connection)) {
+            return; // envoyé par un client : ignoré
+        }
+        if (!LOBBY_SERVER.equals(connection.getServerInfo().getName())) {
+            logger.warn("mcs:connect refusé depuis le serveur {}", connection.getServerInfo().getName());
+            return;
+        }
+
+        String target = new String(event.getData(), StandardCharsets.UTF_8).trim();
+        Player player = connection.getPlayer();
+        Optional<RegisteredServer> destination = server.getServer(target);
+        if (destination.isEmpty()) {
+            player.sendMessage(Component.text("Serveur introuvable : " + target).color(NamedTextColor.RED));
+            return;
+        }
+        player.createConnectionRequest(destination.get()).fireAndForget();
     }
 
     @Subscribe
