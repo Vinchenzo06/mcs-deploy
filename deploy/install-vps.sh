@@ -170,7 +170,7 @@ load_config() {
   fi
 
   : "${TIMEZONE:=America/Toronto}" "${USER_AGENT:=mcs-deploy/0.3 (+https://github.com/Vinchenzo06/mcs-deploy)}"
-  : "${PAPER_VERSION:=26.1.2}" "${VELOCITY_VERSION:=latest}" "${FORCE_UPDATE:=false}"
+  : "${PAPER_VERSION:=26.1.2}" "${VELOCITY_VERSION:=4.2.1-SNAPSHOT}" "${FORCE_UPDATE:=false}"
   : "${API_XMX:=384M}" "${VELOCITY_XMX:=512M}" "${LOBBY_XMX:=512M}"
   : "${PORT_START:=25600}" "${PORT_END:=25620}"
   : "${ENABLE_SSH_TUNNEL:=true}" "${SSH_TUNNEL_PORT:=2222}"
@@ -210,11 +210,13 @@ install_helpers() {
   cat > /usr/local/bin/mcs-rcon <<'PYEOF'
 #!/usr/bin/env python3
 """mcs-rcon : envoie des commandes à la console du lobby via RCON.
-Usage : sudo mcs-rcon "lp user Vinchenzo06 info" ["autre commande" ...]"""
+Usage : sudo mcs-rcon [--delay SECONDES] "commande" ["autre commande" ...]
+  --delay : pause entre deux commandes (utile pour LuckPerms, qui est asynchrone)"""
 import os
 import socket
 import struct
 import sys
+import time
 
 
 def load_secret(key):
@@ -250,14 +252,23 @@ def send(sock, req_id, ptype, body):
 
 
 def main():
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+    delay = 0.0
+    if args and args[0] in ("-d", "--delay"):
+        if len(args) < 2:
+            sys.exit(__doc__)
+        delay = float(args[1])
+        args = args[2:]
+    if not args:
         sys.exit(__doc__)
     port = int(os.environ.get("RCON_PORT", "25575"))
     with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
         resp_id, _ = send(sock, 1, 3, load_secret("RCON_PASSWORD"))
         if resp_id == -1:
             sys.exit("RCON : mot de passe refusé")
-        for cmd in sys.argv[1:]:
+        for i, cmd in enumerate(args):
+            if i and delay:
+                time.sleep(delay)
             _, out = send(sock, 2, 2, cmd)
             if out.strip():
                 print(out.strip())
@@ -287,12 +298,52 @@ runuser -u postgres -- psql -qtA -d mcs_db -c "SELECT '  node ' || id || '  onli
 SHEOF
   chmod 755 /usr/local/bin/mcs-status
 
-  # mcs-admin : donner le groupe admin LuckPerms à un joueur
+  # mcs-lp-export : état LuckPerms du lobby en JSON (les commandes lp via RCON
+  # sont asynchrones et ne renvoient pas leur résultat, l'export si)
+  cat > /usr/local/bin/mcs-lp-export <<'SHEOF'
+#!/usr/bin/env bash
+# sudo mcs-lp-export > luckperms.json
+set -uo pipefail
+lp_dir=/opt/minecraft/lobby/plugins/LuckPerms
+name="mcs-export-$$-$RANDOM"
+file="$lp_dir/$name.json.gz"
+tmp=$(mktemp)
+trap 'rm -f "$file" "$tmp"' EXIT
+mcs-rcon "lp export $name" >/dev/null || exit 1
+for ((i = 0; i < 60; i++)); do
+  if [[ -s "$file" ]] && zcat "$file" >"$tmp" 2>/dev/null && jq -e . "$tmp" >/dev/null 2>&1; then
+    cat "$tmp"
+    exit 0
+  fi
+  sleep 0.5
+done
+echo "Export LuckPerms introuvable après 30 s" >&2
+exit 1
+SHEOF
+  chmod 755 /usr/local/bin/mcs-lp-export
+
+  # mcs-admin : donner le groupe admin LuckPerms à un joueur, puis vérifier
   cat > /usr/local/bin/mcs-admin <<'SHEOF'
 #!/usr/bin/env bash
 # sudo mcs-admin <pseudo>   (le joueur doit s'être connecté au moins une fois)
+set -uo pipefail
 [[ -n "${1:-}" ]] || { echo "Usage : sudo mcs-admin <pseudo>"; exit 1; }
-exec mcs-rcon "lp user $1 parent set admin" "lp user $1 info"
+user=$1
+mcs-rcon "lp user $user parent set admin" >/dev/null || exit 1
+sleep 2
+if ! json=$(mcs-lp-export); then
+  echo "! Commande envoyée, mais vérification impossible (export LuckPerms)"
+  exit 0
+fi
+if jq -e --arg u "${user,,}" '
+     .users // {} | to_entries[] | .value
+     | select((.username // "" | ascii_downcase) == $u)
+     | .nodes // [] | .[] | select(.key == "group.admin")' <<<"$json" >/dev/null; then
+  echo "✔ $user est dans le groupe admin"
+else
+  echo "✘ $user n'est pas admin. S'est-il déjà connecté au serveur ? (pseudo exact ?)"
+  exit 1
+fi
 SHEOF
   chmod 755 /usr/local/bin/mcs-admin
 
@@ -671,8 +722,13 @@ EOF
 
 step_firewall() {
   step "Pare-feu (ufw)"
-  ufw allow OpenSSH >/dev/null
-  ufw allow 22/tcp >/dev/null
+  # Port(s) SSH réellement utilisés par ce VPS, pour ne jamais se bloquer dehors
+  local ssh_ports p
+  ssh_ports=$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2 }' | sort -u | tr '\n' ' ')
+  [[ -n "${ssh_ports// /}" ]] || ssh_ports=22
+  for p in $ssh_ports; do
+    ufw allow "$p/tcp" comment 'SSH du VPS' >/dev/null
+  done
   ufw allow 25565/tcp comment 'Minecraft (Velocity)' >/dev/null
   ufw allow 2333/tcp comment 'rathole (volontaires)' >/dev/null
   ufw allow 8081/tcp comment 'mcs-api (agents WebSocket)' >/dev/null
@@ -680,7 +736,7 @@ step_firewall() {
     ufw allow "$SSH_TUNNEL_PORT/tcp" comment 'tunnel SSH machine volontaire' >/dev/null
   fi
   ufw --force enable >/dev/null
-  ok "Ouverts : 22, 25565, 2333, 8081$([[ "$ENABLE_SSH_TUNNEL" == "true" ]] && echo ", $SSH_TUNNEL_PORT")"
+  ok "Ouverts : SSH ${ssh_ports% }, 25565, 2333, 8081$([[ "$ENABLE_SSH_TUNNEL" == "true" ]] && echo ", $SSH_TUNNEL_PORT")"
 }
 
 bootstrap_luckperms() {
@@ -698,10 +754,26 @@ bootstrap_luckperms() {
   cmds+=("lp group admin permission set mcs.admin true"
          "lp group admin permission set luckperms.* true")
 
-  if mcs-rcon "${cmds[@]}" >/dev/null; then
-    ok "Groupes LuckPerms et quotas appliqués"
+  if ! mcs-rcon --delay 1 "${cmds[@]}" >/dev/null; then
+    warn "RCON indisponible : groupes LuckPerms non créés (relance : sudo mcs-deploy bootstrap)"
+    return
+  fi
+
+  # LuckPerms est asynchrone : on vérifie le résultat réel via un export
+  sleep 2
+  local json missing=()
+  if ! json=$(mcs-lp-export); then
+    warn "Commandes envoyées, mais vérification impossible (export LuckPerms)"
+    return
+  fi
+  for g in default vip premium admin; do
+    jq -e --arg g "$g" '.groups[$g].nodes // [] | map(.key) | any(startswith("meta.total-ram."))' \
+      <<<"$json" >/dev/null 2>&1 || missing+=("$g")
+  done
+  if (( ${#missing[@]} )); then
+    warn "Groupes LuckPerms incomplets : ${missing[*]} (relance : sudo mcs-deploy bootstrap)"
   else
-    warn "RCON indisponible : groupes LuckPerms non créés (relance : install-vps.sh bootstrap)"
+    ok "Groupes LuckPerms et quotas vérifiés (default, vip, premium, admin)"
   fi
 }
 

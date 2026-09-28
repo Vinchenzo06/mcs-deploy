@@ -12,5 +12,11 @@ agent/mcs-agent
 agent/*.exe
 agent/config.yaml
 
+# Maven shade (fichier généré)
+dependency-reduced-pom.xml
+
+# Patches appliqués localement
+*.patch
+
 # Config et secrets locaux
 *.env

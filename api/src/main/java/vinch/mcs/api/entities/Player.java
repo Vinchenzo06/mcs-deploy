@@ -29,6 +29,7 @@ public class Player {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
+    @Builder.Default
     private PlayerRole role = PlayerRole.PLAYER;
 
     @Column(name = "max_servers", nullable = false)

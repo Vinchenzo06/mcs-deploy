@@ -67,7 +67,8 @@ sudo mcs-admin TonPseudo
 | `sudo mcs-deploy [étapes]` | Récupère GitHub, compile, installe |
 | `sudo mcs-status` | État des services, ports et machines volontaires |
 | `sudo mcs-add-node [--ssh] [nom]` | Code de jumelage pour une nouvelle machine |
-| `sudo mcs-admin <pseudo>` | Groupe admin LuckPerms |
+| `sudo mcs-admin <pseudo>` | Groupe admin LuckPerms (vérifié) |
+| `sudo mcs-lp-export` | État LuckPerms en JSON (groupes, joueurs) |
 | `sudo mcs-rcon "<commande>"` | Commande dans la console du lobby |
 
 ## Réglages

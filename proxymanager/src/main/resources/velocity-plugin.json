@@ -1,6 +1,7 @@
 {
   "id": "proxymanager",
-  "name": "proxymanager",
-  "version": "${version}",
+  "name": "ProxyManager",
+  "version": "${project.version}",
+  "authors": ["Vincent"],
   "main": "vinch.mcs.proxymanager.Proxymanager"
 }
