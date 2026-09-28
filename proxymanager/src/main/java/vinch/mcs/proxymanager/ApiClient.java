@@ -172,7 +172,8 @@ public class ApiClient {
 
     /** Quotas, rôle admin et rang réseau (LuckPerms) -> API */
     public CompletableFuture<JsonNode> updatePlayerLimits(UUID uuid, int maxServers, int totalRamMb, int totalCpuCores,
-                                                        boolean admin, String rank, String prefix) {
+                                                        boolean admin, String rank, String prefix,
+                                                        String nameColor) {
         java.util.Map<String, Object> body = new java.util.HashMap<>();
         body.put("uuid", uuid.toString());
         body.put("maxServers", maxServers);
@@ -181,6 +182,7 @@ public class ApiClient {
         body.put("admin", admin);
         body.put("rank", rank == null ? "" : rank);
         body.put("prefix", prefix == null ? "" : prefix);
+        body.put("nameColor", nameColor == null ? "" : nameColor);
         return call("POST", "/api/v1/players/limits", body, Duration.ofSeconds(10));
     }
 

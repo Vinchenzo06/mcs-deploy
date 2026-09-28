@@ -38,12 +38,12 @@ public class LuckPermsHelper {
      */
     public CompletableFuture<UserMeta> loadUserMeta(UUID uuid) {
         if (!enabled) {
-            return CompletableFuture.completedFuture(new UserMeta(1, 1024, 1, false, "default", ""));
+            return CompletableFuture.completedFuture(new UserMeta(1, 1024, 1, false, "default", "", ""));
         }
 
         return api.getUserManager().loadUser(uuid).thenApply(user -> {
             if (user == null) {
-                return new UserMeta(1, 1024, 1, false, "default", "");
+                return new UserMeta(1, 1024, 1, false, "default", "", "");
             }
 
             CachedMetaData meta = user.getCachedData().getMetaData();
@@ -65,7 +65,10 @@ public class LuckPermsHelper {
                 prefixJson = net.kyori.adventure.text.serializer.gson.GsonComponentSerializer.gson().serialize(c);
             }
 
-            return new UserMeta(maxServers, totalRam, totalCpu, admin, user.getPrimaryGroup(), prefixJson);
+            String nameColor = meta.getMetaValue("name-color");
+
+            return new UserMeta(maxServers, totalRam, totalCpu, admin, user.getPrimaryGroup(), prefixJson,
+                    nameColor == null ? "" : nameColor);
         });
     }
 
@@ -79,5 +82,5 @@ public class LuckPermsHelper {
     }
 
     public record UserMeta(int maxServers, int totalRamMb, int totalCpuCores, boolean admin, String rank,
-                           String prefixJson) {}
+                           String prefixJson, String nameColor) {}
 }

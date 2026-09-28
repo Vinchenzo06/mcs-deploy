@@ -61,7 +61,7 @@ public final class McsLobbyPlugin extends JavaPlugin {
                 })
                 .thenCompose(meta -> apiClient.updatePlayerLimits(
                         uuid, meta.maxServers(), meta.totalRamMb(), meta.totalCpuCores(), meta.admin(),
-                        meta.rank(), meta.prefixJson()))
+                        meta.rank(), meta.prefixJson(), meta.nameColor()))
                 .handle((result, error) -> {
                     if (error != null) {
                         getLogger().warning("Synchronisation des limites de " + name + " : " + error.getMessage());
@@ -92,10 +92,34 @@ public final class McsLobbyPlugin extends JavaPlugin {
             team = board.registerNewTeam(name);
         }
         String json = meta.prefixJson();
-        team.prefix(json == null || json.isEmpty()
+        net.kyori.adventure.text.Component prefix = json == null || json.isEmpty()
                 ? net.kyori.adventure.text.Component.empty()
-                : net.kyori.adventure.text.serializer.gson.GsonComponentSerializer.gson().deserialize(json));
+                : net.kyori.adventure.text.serializer.gson.GsonComponentSerializer.gson().deserialize(json);
+        net.kyori.adventure.text.format.NamedTextColor color = nameColor(meta.nameColor());
+        team.prefix(prefix);
+        team.color(color);
         team.addEntry(player.getName());
+        // Paper n'utilise pas l'équipe dans le chat : le titre passe par le nom affiché
+        player.displayName(prefix.append(net.kyori.adventure.text.Component.text(player.getName(), color)));
+    }
+
+    /** "green", "&a", "GOLD"... -> couleur ; gris par défaut (le blanc fatigue) */
+    static net.kyori.adventure.text.format.NamedTextColor nameColor(String value) {
+        if (value == null || value.isBlank()) {
+            return net.kyori.adventure.text.format.NamedTextColor.GRAY;
+        }
+        String v = value.trim().toLowerCase(java.util.Locale.ROOT);
+        if (v.length() == 2 && (v.charAt(0) == '&' || v.charAt(0) == '§')) {
+            v = switch (v.charAt(1)) {
+                case '0' -> "black"; case '1' -> "dark_blue"; case '2' -> "dark_green"; case '3' -> "dark_aqua";
+                case '4' -> "dark_red"; case '5' -> "dark_purple"; case '6' -> "gold"; case '7' -> "gray";
+                case '8' -> "dark_gray"; case '9' -> "blue"; case 'a' -> "green"; case 'b' -> "aqua";
+                case 'c' -> "red"; case 'd' -> "light_purple"; case 'e' -> "yellow"; case 'f' -> "white";
+                default -> v;
+            };
+        }
+        net.kyori.adventure.text.format.NamedTextColor c = net.kyori.adventure.text.format.NamedTextColor.NAMES.value(v);
+        return c == null ? net.kyori.adventure.text.format.NamedTextColor.GRAY : c;
     }
 
     @Override

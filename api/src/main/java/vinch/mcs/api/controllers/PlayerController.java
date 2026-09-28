@@ -61,7 +61,8 @@ public class PlayerController {
                     request.getTotalCpuCores(),
                     request.getAdmin(),
                     request.getRank(),
-                    request.getPrefix()
+                    request.getPrefix(),
+                    request.getNameColor()
             );
             return ResponseEntity.ok(Map.of(
                     "success", true,

@@ -1295,6 +1295,11 @@ bootstrap_luckperms() {
   cmds+=("lp creategroup host")
   lp_has host "weight." || cmds+=("lp group host setweight 50")
   lp_has host "prefix." || cmds+=("lp group host meta setprefix 50 \"&bʜᴏsᴛ \"")
+  # Couleur du pseudo par rang (chat, Tab, au-dessus de la tête) ; gris par défaut
+  local -A name_color=([default]=gray [vip]=green [premium]=gold [host]=aqua [admin]=red)
+  for g in default vip premium host admin; do
+    lp_has "$g" "meta.name-color." || cmds+=("lp group $g meta set name-color ${name_color[$g]}")
+  done
   cmds+=("lp group admin permission set mcs.admin true"
          "lp group admin permission set luckperms.* true")
 

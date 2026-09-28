@@ -26,4 +26,5 @@ public class UpdatePlayerLimitsRequest {
     // Groupe LuckPerms principal et préfixe (composant texte JSON), facultatifs
     private String rank;
     private String prefix;
+    private String nameColor;
 }

@@ -204,7 +204,8 @@ public class ApiClient {
     }
 
     public CompletableFuture<JsonNode> updatePlayerLimits(UUID uuid, int maxServers, int totalRamMb, int totalCpuCores,
-                                                        boolean admin, String rank, String prefixJson) {
+                                                        boolean admin, String rank, String prefixJson,
+                                                        String nameColor) {
         try {
             Map<String, Object> body = Map.of(
                     "uuid", uuid.toString(),
@@ -213,7 +214,8 @@ public class ApiClient {
                     "totalCpuCores", totalCpuCores,
                     "admin", admin,
                     "rank", rank == null ? "" : rank,
-                    "prefix", prefixJson == null ? "" : prefixJson
+                    "prefix", prefixJson == null ? "" : prefixJson,
+                    "nameColor", nameColor == null ? "" : nameColor
             );
 
             String json = objectMapper.writeValueAsString(body);

@@ -47,7 +47,7 @@ public class PlayerSync {
         }
         return source.load(player.getUniqueId())
                 .thenCompose(m -> apiClient.updatePlayerLimits(player.getUniqueId(), m.maxServers(), m.totalRamMb(),
-                        m.totalCpuCores(), m.admin(), m.rank(), m.prefixJson()))
+                        m.totalCpuCores(), m.admin(), m.rank(), m.prefixJson(), m.nameColor()))
                 .handle((r, error) -> {
                     if (error != null) {
                         logger.warn("Synchronisation LuckPerms de {} : {}", player.getUsername(), error.getMessage());

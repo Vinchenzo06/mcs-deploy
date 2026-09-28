@@ -65,6 +65,10 @@ public class Player {
     @Column(name = "network_prefix", length = 1024)
     private String networkPrefix;
 
+    // Couleur du pseudo (nom de couleur Minecraft : gray, green, gold...)
+    @Column(name = "name_color", length = 16)
+    private String nameColor;
+
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) createdAt = LocalDateTime.now();

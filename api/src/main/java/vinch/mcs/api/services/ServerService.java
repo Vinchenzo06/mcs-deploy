@@ -568,6 +568,7 @@ public class ServerService {
                 prefix = safeTextComponent(p.getNetworkPrefix());
             }
             commands.add("team add " + team);
+            commands.add("team modify " + team + " color " + teamColor(p.getNameColor()));
             commands.add("team modify " + team + " prefix " + prefix);
             commands.add("team join " + team + " " + name);
         }
@@ -599,6 +600,26 @@ public class ServerService {
             r = "default";
         }
         return "mcs_" + order + r.substring(0, Math.min(10, r.length()));
+    }
+
+    private static final Set<String> TEAM_COLORS = Set.of("black", "dark_blue", "dark_green", "dark_aqua",
+            "dark_red", "dark_purple", "gold", "gray", "dark_gray", "blue", "green", "aqua", "red",
+            "light_purple", "yellow", "white");
+
+    /** Couleur d'équipe valide ("&a", "green", "GREEN"...) ; gris par défaut (le blanc fatigue) */
+    public static String teamColor(String color) {
+        if (color == null) {
+            return "gray";
+        }
+        String c = color.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
+        String legacy = switch (c) {
+            case "&0" -> "black"; case "&1" -> "dark_blue"; case "&2" -> "dark_green"; case "&3" -> "dark_aqua";
+            case "&4" -> "dark_red"; case "&5" -> "dark_purple"; case "&6" -> "gold"; case "&7" -> "gray";
+            case "&8" -> "dark_gray"; case "&9" -> "blue"; case "&a" -> "green"; case "&b" -> "aqua";
+            case "&c" -> "red"; case "&d" -> "light_purple"; case "&e" -> "yellow"; case "&f" -> "white";
+            default -> c;
+        };
+        return TEAM_COLORS.contains(legacy) ? legacy : "gray";
     }
 
     /** Titre du créateur du serveur, discret (petites capitales) : "ᴏᴡɴᴇʀ" */
