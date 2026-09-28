@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"runtime"
 	"sync"
 	"time"
 
@@ -31,9 +30,11 @@ type Message struct {
 }
 
 type RegisterMessage struct {
-	Type         string `json:"type"`
-	NodeToken    string `json:"node_token"`
-	AgentVersion string `json:"agent_version"`
+	Type         string   `json:"type"`
+	NodeToken    string   `json:"node_token"`
+	AgentVersion string   `json:"agent_version"`
+	Capacity     Capacity `json:"capacity"`
+	Host         HostInfo `json:"host"`
 }
 
 type HeartbeatMessage struct {
@@ -50,11 +51,17 @@ func runConnection(config *Config, stopChan chan struct{}, events <-chan serverE
 
 	log.Println("WebSocket connecté")
 
+	host := hostInfo(config.Docker.DataPath)
+	host.DataUsedMB = dataUsedMB(config.Docker.DataPath)
+	capacity := effectiveCapacity(config.Capacity, host)
 	register := RegisterMessage{
 		Type:         "register",
 		NodeToken:    config.Node.Token,
 		AgentVersion: config.Node.AgentVersion,
+		Capacity:     capacity,
+		Host:         host,
 	}
+	log.Printf("Capacité prêtée : %d Mo de RAM, %d cœur(s), %d Mo de disque", capacity.RAMMB, capacity.CPUCores, capacity.DiskMB)
 
 	if err := writeJSON(conn, register); err != nil {
 		return err
@@ -136,7 +143,7 @@ func runConnection(config *Config, stopChan chan struct{}, events <-chan serverE
 		case <-done:
 			return nil
 		case <-heartbeatTicker.C:
-			if err := sendHeartbeat(conn); err != nil {
+			if err := sendHeartbeat(conn, config.Docker.DataPath); err != nil {
 				return err
 			}
 		case ev := <-events:
@@ -163,22 +170,16 @@ func runConnection(config *Config, stopChan chan struct{}, events <-chan serverE
 	}
 }
 
-func sendHeartbeat(conn *websocket.Conn) error {
-	var memStats runtime.MemStats
-	runtime.ReadMemStats(&memStats)
-
+func sendHeartbeat(conn *websocket.Conn, dataPath string) error {
+	host := hostInfo(dataPath)
 	heartbeat := HeartbeatMessage{
 		Type: "heartbeat",
 		Stats: map[string]interface{}{
-			"ram_used_mb":     int(memStats.Alloc / 1024 / 1024),
-			"storage_used_mb": 0,
+			"ram_used_mb":      host.RAMTotalMB - host.RAMAvailMB,
+			"ram_available_mb": host.RAMAvailMB,
+			"disk_free_mb":     host.DiskFreeMB,
+			"disk_total_mb":    host.DiskTotalMB,
 		},
 	}
-
-	if err := writeJSON(conn, heartbeat); err != nil {
-		return err
-	}
-
-	log.Println("Heartbeat envoyé")
-	return nil
+	return writeJSON(conn, heartbeat)
 }

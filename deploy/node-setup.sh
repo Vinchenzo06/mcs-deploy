@@ -9,6 +9,9 @@
 #  Mettre à jour seulement l'agent (machine déjà jumelée) :
 #    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh | sudo bash -s -- --update-agent
 #
+#  Changer la part de la machine prêtée à MCS (RAM, CPU, disque) :
+#    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh | sudo bash -s -- --capacity
+#
 #  Tout ce qui est propre à cette machine (port SSH, nom...) est détecté ici :
 #  le VPS n'a pas besoin de le connaître. L'agent est téléchargé depuis la
 #  release GitHub "agent-latest", compilée automatiquement (GitHub Actions).
@@ -34,6 +37,12 @@ ARG="${1:-}"
 [[ -n "$ARG" ]] || die "Code de jumelage manquant (obtiens-le avec 'sudo mcs-add-node' sur le VPS)"
 UPDATE_ONLY=false
 [[ "$ARG" == "--update-agent" ]] && UPDATE_ONLY=true
+CAPACITY_ONLY=false
+[[ "$ARG" == "--capacity" ]] && CAPACITY_ONLY=true
+
+# Terminal disponible pour poser des questions ? (non si l'installation est
+# automatisée). Tester avant : "read -p ... 2>/dev/null" masquerait la question.
+has_tty() { ( : </dev/tty ) 2>/dev/null; }
 
 # ================================================================ étapes ====
 
@@ -135,12 +144,174 @@ show_agent_log() {
   journalctl -u mcs-agent -n 8 --no-pager || true
 }
 
+# ==================================================== capacité prêtée ====
+# Le volontaire choisit la part de sa machine prêtée à MCS. Il doit toujours lui
+# rester au moins 10 % de sa RAM et de son disque, et au moins un cœur CPU.
+# L'agent applique les mêmes limites (même si config.yaml est modifié à la main).
+
+CAP_RAM=; CAP_CPU=; CAP_DISK=
+MIN_RAM_MB=2048    # le plus petit serveur prend ~1,2 Go ; 2 Go laissent un peu de marge
+MIN_DISK_MB=5120   # quota disque par défaut d'un serveur
+
+# "8G", "8 Go", "1,5G", "512M", "8192" (Mo) -> Mo ; vide si le format est inconnu
+to_mb() {
+  local v=${1// /}
+  v=${v,,}
+  if [[ "$v" =~ ^([0-9]+([.,][0-9]+)?)(g|go|gb|gio|gib)$ ]]; then
+    awk -v n="${BASH_REMATCH[1]/,/.}" 'BEGIN { printf "%d", n * 1024 }'
+  elif [[ "$v" =~ ^([0-9]+)(m|mo|mb|mio|mib)?$ ]]; then
+    echo "${BASH_REMATCH[1]}"
+  fi
+}
+
+# 16384 -> "16 Go (16384 Mo)"
+fmt_mb() {
+  awk -v m="$1" 'BEGIN {
+    if (m >= 1024) { g = m / 1024; if (g == int(g)) printf "%d Go (%d Mo)", g, m; else printf "%.1f Go (%d Mo)", g, m }
+    else printf "%d Mo", m }'
+}
+
+# Pose une question, recommence tant que la réponse n'est pas valable.
+# Sans terminal (installation automatisée), la valeur proposée est gardée.
+ask_amount() {  # libellé, proposé, min, max, unité ("mb" ou "cores")
+  local label=$1 def=$2 min=$3 max=$4 unit=$5 answer value shown
+  if [[ "$unit" == "mb" ]]; then shown=$(fmt_mb "$def"); else shown="$def"; fi
+  while true; do
+    if ! has_tty || ! read -rp "    → $label [$shown] : " answer </dev/tty; then
+      echo "$def"; return
+    fi
+    if [[ -z "$answer" ]]; then
+      echo "$def"; return
+    fi
+    if [[ "$unit" == "mb" ]]; then
+      value=$(to_mb "$answer")
+      [[ -n "$value" ]] || { echo "      ! Format non reconnu : écris par exemple 8G (= 8 Go) ou 8192 (Mo)" >&2; continue; }
+    else
+      value=$answer
+      [[ "$value" =~ ^[0-9]+$ ]] || { echo "      ! Écris un nombre entier de cœurs" >&2; continue; }
+    fi
+    if (( value < min )); then
+      if [[ "$unit" == "mb" ]]; then echo "      ! Minimum : $(fmt_mb "$min")" >&2; else echo "      ! Minimum : $min" >&2; fi
+      continue
+    fi
+    if (( value > max )); then
+      if [[ "$unit" == "mb" ]]; then echo "      ! Maximum : $(fmt_mb "$max")" >&2; else echo "      ! Maximum : $max" >&2; fi
+      continue
+    fi
+    echo "$value"; return
+  done
+}
+
+# Capacité déjà choisie (config.yaml existant), reprise comme proposition
+load_capacity() {
+  [[ -f "$AGENT_CFG" ]] || return 0
+  CAP_RAM=$(awk '$1 == "ram_mb:" { print $2 }' "$AGENT_CFG" || true)
+  CAP_CPU=$(awk '$1 == "cpu_cores:" { print $2 }' "$AGENT_CFG" || true)
+  CAP_DISK=$(awk '$1 == "disk_mb:" { print $2 }' "$AGENT_CFG" || true)
+}
+
+choose_capacity() {  # dossier des données des serveurs
+  local data_path=$1 ram_total ram_avail cores disk_total disk_free data_used
+  local ram_max cpu_max disk_pool disk_max
+  mkdir -p "$data_path"
+  ram_total=$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo)
+  ram_avail=$(awk '/^MemAvailable:/ { print int($2 / 1024) }' /proc/meminfo)
+  cores=$(nproc)
+  read -r disk_total disk_free < <(df -Pm "$data_path" | awk 'NR == 2 { print $2, $4 }')
+  data_used=$(du -sm "$data_path" 2>/dev/null | awk '{ print $1 }')
+  data_used=${data_used:-0}
+
+  # Limites : il reste toujours au moins 10 % de RAM et de disque, et un cœur
+  ram_max=$(( ram_total * 90 / 100 ))
+  cpu_max=$(( cores > 1 ? cores - 1 : 1 ))
+  disk_pool=$(( disk_free + data_used ))                 # espace utilisable par MCS
+  disk_max=$(( disk_pool - disk_total / 10 ))            # en gardant 10 % du disque libre
+  (( ram_max >= MIN_RAM_MB )) || die "Pas assez de RAM : $(fmt_mb "$ram_total") au total, il en faut au moins $(fmt_mb $(( MIN_RAM_MB * 10 / 9 + 1 )))"
+  (( disk_max >= MIN_DISK_MB )) || die "Pas assez de disque libre dans $data_path : $(fmt_mb "$disk_free") libres (il faut garder 10 % du disque)"
+
+  # Propositions : la moitié, sans dépasser les limites (ou le choix précédent)
+  [[ "$CAP_RAM" =~ ^[0-9]+$ ]] || CAP_RAM=$(( ram_total / 2 ))
+  [[ "$CAP_CPU" =~ ^[0-9]+$ ]] || CAP_CPU=$(( cores / 2 > 0 ? cores / 2 : 1 ))
+  [[ "$CAP_DISK" =~ ^[0-9]+$ ]] || CAP_DISK=$(( disk_pool / 2 ))
+  (( CAP_RAM > ram_max )) && CAP_RAM=$ram_max;   (( CAP_RAM < MIN_RAM_MB )) && CAP_RAM=$MIN_RAM_MB
+  (( CAP_CPU > cpu_max )) && CAP_CPU=$cpu_max;   (( CAP_CPU < 1 )) && CAP_CPU=1
+  (( CAP_DISK > disk_max )) && CAP_DISK=$disk_max; (( CAP_DISK < MIN_DISK_MB )) && CAP_DISK=$MIN_DISK_MB
+
+  step "Ressources prêtées à MCS"
+  echo "    Tu choisis la part de ta machine que les serveurs pourront utiliser."
+  echo "    Rappel : 1 Go = 1024 Mo. Tu peux répondre en Go (ex. 8G) ou en Mo (ex. 8192)."
+  echo "    Entrée = garder la valeur proposée entre crochets."
+
+  echo
+  echo "    RAM : $(fmt_mb "$ram_total") au total, $(fmt_mb "$ram_avail") libres en ce moment."
+  echo "          Maximum possible : $(fmt_mb "$ram_max") (il doit te rester au moins 10 %)."
+  echo "          Conseil : garde de quoi utiliser ta machine normalement (système, navigateur, jeux...)."
+  CAP_RAM=$(ask_amount "RAM prêtée" "$CAP_RAM" "$MIN_RAM_MB" "$ram_max" mb)
+
+  echo
+  echo "    Processeur : $cores cœur(s) (threads)."
+  echo "          Maximum possible : $cpu_max (il doit te rester au moins un cœur)."
+  CAP_CPU=$(ask_amount "Cœurs prêtés" "$CAP_CPU" 1 "$cpu_max" cores)
+
+  echo
+  echo "    Disque ($data_path) : $(fmt_mb "$disk_total") au total, $(fmt_mb "$disk_free") libres$( (( data_used > 1 )) && echo ", dont $(fmt_mb "$data_used") déjà utilisés par MCS")."
+  echo "          Maximum possible : $(fmt_mb "$disk_max") (il doit rester au moins 10 % du disque libre)."
+  echo "          Chaque serveur réserve 5 Go par défaut."
+  CAP_DISK=$(ask_amount "Disque prêté" "$CAP_DISK" "$MIN_DISK_MB" "$disk_max" mb)
+
+  echo
+  ok "Prêté à MCS : $(fmt_mb "$CAP_RAM") de RAM, $CAP_CPU cœur(s), $(fmt_mb "$CAP_DISK") de disque"
+}
+
+# Remplace (ou ajoute) la section capacity de config.yaml
+write_capacity() {
+  local tmp
+  tmp=$(mktemp)
+  awk '/^# Part de la machine prêtée à MCS/ { next }
+       /^capacity:/ { skip = 1; next }
+       skip && /^[[:space:]]/ { next }
+       { skip = 0; print }' "$AGENT_CFG" > "$tmp"
+  cat >> "$tmp" <<EOF
+
+# Part de la machine prêtée à MCS (pour la changer : node-setup.sh --capacity)
+capacity:
+  ram_mb: $CAP_RAM
+  cpu_cores: $CAP_CPU
+  disk_mb: $CAP_DISK
+EOF
+  install -m 600 "$tmp" "$AGENT_CFG"
+  rm -f "$tmp"
+}
+
+agent_data_path() {
+  local p
+  p=$(awk '$1 == "data_path:" { gsub(/"/, "", $2); print $2 }' "$AGENT_CFG" 2>/dev/null || true)
+  echo "${p:-/opt/mcs-data/servers}"
+}
+
+# ========================================== changement de capacité seul ====
+if [[ "$CAPACITY_ONLY" == "true" ]]; then
+  [[ -f "$AGENT_CFG" ]] || die "Aucune config d'agent ($AGENT_CFG) : jumelle d'abord la machine avec un code"
+  load_capacity
+  choose_capacity "$(agent_data_path)"
+  write_capacity
+  systemctl restart mcs-agent
+  show_agent_log
+  echo
+  ok "Capacité mise à jour"
+  exit 0
+fi
+
 # ============================================== mise à jour de l'agent seule ====
 if [[ "$UPDATE_ONLY" == "true" ]]; then
   [[ -f "$AGENT_CFG" ]] || die "Aucune config d'agent ($AGENT_CFG) : jumelle d'abord la machine avec un code"
   prerequisites
   step "Mise à jour de l'agent MCS"
   install_agent_binary
+  if ! grep -q '^capacity:' "$AGENT_CFG"; then
+    choose_capacity "$(agent_data_path)"
+    write_capacity
+  fi
   write_agent_unit
   systemctl restart mcs-agent
   show_agent_log
@@ -286,10 +457,12 @@ install_agent_binary
 
 DATA_PATH=/opt/mcs-data/servers
 if [[ -f "$AGENT_CFG" ]]; then
-  old=$(awk '$1 == "data_path:" { gsub(/"/, "", $2); print $2 }' "$AGENT_CFG" || true)
-  [[ -n "$old" ]] && DATA_PATH=$old
+  DATA_PATH=$(agent_data_path)
+  load_capacity
   cp "$AGENT_CFG" "$AGENT_CFG.bak.$(date +%s)"
 fi
+choose_capacity "$DATA_PATH"
+step "Agent MCS (configuration)"
 cat > "$AGENT_CFG" <<EOF
 # Généré par node-setup.sh (VPS $VPS_IP, node $NODE_ID)
 api:
@@ -307,9 +480,14 @@ docker:
 network:
   # Les serveurs sortent sur Internet par le tunnel WireGuard du VPS
   egress: vps
+
+# Part de la machine prêtée à MCS (pour la changer : node-setup.sh --capacity)
+capacity:
+  ram_mb: $CAP_RAM
+  cpu_cores: $CAP_CPU
+  disk_mb: $CAP_DISK
 EOF
 chmod 600 "$AGENT_CFG"
-mkdir -p "$DATA_PATH"
 write_agent_unit
 ok "config.yaml écrit (API : $API_URL, données : $DATA_PATH)"
 
@@ -320,7 +498,7 @@ if [[ "$PREVIOUS_NODE_ID" != "$NODE_ID" && -n "$(docker ps -aq --filter label=mc
   echo "    Ces conteneurs appartiennent à une ancienne base de données et"
   echo "    entreront en conflit avec les nouveaux serveurs :"
   docker ps -a --filter label=mcs.managed=true --format '      {{.Names}}  ({{.Status}})'
-  if read -rp "    Les supprimer, avec le contenu de $DATA_PATH ? [o/N] " rep </dev/tty 2>/dev/null \
+  if has_tty && read -rp "    Les supprimer, avec le contenu de $DATA_PATH ? [o/N] " rep </dev/tty \
      && [[ "$rep" =~ ^[oOyY]$ ]]; then
     docker ps -aq --filter label=mcs.managed=true | xargs -r docker rm -f >/dev/null
     if [[ -n "$DATA_PATH" && -d "$DATA_PATH" ]]; then

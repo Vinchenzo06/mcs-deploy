@@ -63,6 +63,19 @@ public class Node {
     @Builder.Default
     private Integer cpuCores = 1;
 
+    // Ressources réelles de la machine (remontées par l'agent)
+    @Column(name = "host_ram_mb")
+    private Integer hostRamMb;
+
+    @Column(name = "host_cpu_cores")
+    private Integer hostCpuCores;
+
+    @Column(name = "host_disk_total_mb")
+    private Integer hostDiskTotalMb;
+
+    @Column(name = "host_disk_free_mb")
+    private Integer hostDiskFreeMb;
+
     // Plage de ports réservée à cette machine (tunnels rathole dédiés)
     @Column(name = "port_start")
     private Integer portStart;

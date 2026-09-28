@@ -90,10 +90,28 @@ sudo mcs-admin TonPseudo
 | `sudo mcs-status` | État des services, ports et machines volontaires |
 | `sudo mcs-add-node [--ssh] [nom]` | Code de jumelage pour une nouvelle machine |
 | `sudo mcs-add-node --renew <id>` | Nouveau code pour une machine existante |
+| `sudo mcs-disk-quota [<nom> <Mo>]` | Quotas disque des serveurs |
 | `sudo mcs-remove-node <id>` | Révoque une machine (jeton refusé, tunnels supprimés) |
 | `sudo mcs-admin <pseudo>` | Groupe admin LuckPerms (vérifié) |
 | `sudo mcs-lp-export` | État LuckPerms en JSON (groupes, joueurs) |
 | `sudo mcs-rcon "<commande>"` | Commande dans la console du lobby |
+
+## Capacité des machines et quotas disque
+
+Chaque volontaire choisit, au jumelage, la part de sa machine qu'il prête (RAM, cœurs
+CPU, disque ; proposé : la moitié). Le script affiche ce qui est disponible, accepte les
+réponses en Go (`8G`) ou en Mo (`8192`), et garantit qu'il reste toujours au volontaire
+au moins 10 % de sa RAM, 10 % de son disque et un cœur (l'agent applique les mêmes
+limites). Pour changer d'avis plus tard, sur la machine :
+```bash
+curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh | sudo bash -s -- --capacity
+``` Un nouveau serveur va sur
+la machine en ligne qui a la place et garde le plus de RAM libre ; s'il n'y en a aucune,
+la création est refusée. La RAM comptée est celle du conteneur (tas Java + 25 % + 512 Mo).
+
+Chaque serveur a un quota disque (5 Go par défaut), mesuré toutes les 10 minutes : au-delà,
+il ne peut plus démarrer ; au-delà de 125 %, il est arrêté proprement. Voir ou changer les
+quotas sur le VPS : `sudo mcs-disk-quota [<nom> <Mo>]`. Vue d'ensemble : `sudo mcs-status`.
 
 ## Cohérence machines ↔ API
 

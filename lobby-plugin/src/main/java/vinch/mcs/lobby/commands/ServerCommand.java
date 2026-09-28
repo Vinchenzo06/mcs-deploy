@@ -325,8 +325,10 @@ public class ServerCommand implements CommandExecutor {
                     s.path("allocatedRamMb").asInt())).color(NamedTextColor.AQUA));
         }
         if (s.hasNonNull("diskUsedMb")) {
-            player.sendMessage(Component.text(String.format("Disque : %d / %d Mo",
-                    s.path("diskUsedMb").asLong(), s.path("allocatedStorageMb").asInt())).color(NamedTextColor.AQUA));
+            boolean over = s.path("diskQuotaExceeded").asBoolean(false);
+            player.sendMessage(Component.text(String.format("Disque : %d / %d Mo%s",
+                    s.path("diskUsedMb").asLong(), s.path("allocatedStorageMb").asInt(),
+                    over ? " — QUOTA DÉPASSÉ" : "")).color(over ? NamedTextColor.RED : NamedTextColor.AQUA));
         }
         if (s.has("metricsAgeSeconds")) {
             player.sendMessage(Component.text("(mesures d'il y a " + s.path("metricsAgeSeconds").asLong() + " s)")

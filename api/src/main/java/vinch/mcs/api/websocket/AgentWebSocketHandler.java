@@ -211,6 +211,20 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
         if (json.has("agent_version")) {
             node.setAgentVersion(json.get("agent_version").asText());
         }
+        // Capacité prêtée par le volontaire et ressources réelles de la machine
+        JsonNode capacity = json.path("capacity");
+        if (capacity.path("ram_mb").asLong(0) > 0) {
+            node.setTotalRamMb((int) capacity.get("ram_mb").asLong());
+            node.setCpuCores((int) capacity.path("cpu_cores").asLong(1));
+            node.setTotalStorageMb((int) capacity.path("disk_mb").asLong(0));
+        }
+        JsonNode host = json.path("host");
+        if (host.isObject()) {
+            node.setHostRamMb((int) host.path("ram_total_mb").asLong(0));
+            node.setHostCpuCores((int) host.path("cpu_cores").asLong(0));
+            node.setHostDiskTotalMb((int) host.path("disk_total_mb").asLong(0));
+            node.setHostDiskFreeMb((int) host.path("disk_free_mb").asLong(0));
+        }
         nodeRepository.save(node);
 
         log.info("Node {} authentifié et connecté (volontaire {})", node.getId(), node.getVolunteer().getId());
@@ -239,6 +253,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
             JsonNode stats = json.get("stats");
             if (stats.has("ram_used_mb")) node.setUsedRamMb(stats.get("ram_used_mb").asInt());
             if (stats.has("storage_used_mb")) node.setUsedStorageMb(stats.get("storage_used_mb").asInt());
+            if (stats.has("disk_free_mb")) node.setHostDiskFreeMb(stats.get("disk_free_mb").asInt());
         }
 
         nodeRepository.save(node);

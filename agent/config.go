@@ -20,7 +20,9 @@ type Config struct {
 	Docker struct {
 		DataPath string `yaml:"data_path"`
 	} `yaml:"docker"`
-	Network struct {
+	// Part de la machine prêtée à MCS (0 = moitié de la ressource)
+	Capacity Capacity `yaml:"capacity"`
+	Network  struct {
 		// "vps" : les serveurs sortent sur Internet par le tunnel WireGuard du VPS
 		Egress string `yaml:"egress"`
 	} `yaml:"network"`

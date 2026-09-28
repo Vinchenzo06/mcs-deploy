@@ -73,8 +73,8 @@ public class ServerService {
             throw new RuntimeException("Tu as déjà un serveur nommé '" + request.getName() + "'");
         }
 
-        // Choisir le node
-        Node node = chooseNode(request.getForceNodeId());
+        // Choisir le node : assez de place pour ce serveur (RAM, CPU, disque)
+        Node node = chooseNode(request.getForceNodeId(), request);
 
         // Allouer un port libre
         int port = allocatePort(node);
@@ -157,7 +157,36 @@ public class ServerService {
                 .build();
     }
 
-    private Node chooseNode(Long forceNodeId) {
+    // Mémoire réelle d'un conteneur : tas Java + 25 % + 512 Mo (même calcul que l'agent)
+    static int containerRamMb(int heapMb) {
+        return heapMb + heapMb / 4 + 512;
+    }
+
+    // Marge de disque libre à garder sur la machine du volontaire
+    private static final int DISK_FREE_MARGIN_MB = 2048;
+
+    /** Place encore libre sur une machine pour un nouveau serveur, ou null si elle ne peut pas l'accueillir */
+    private Integer freeRamAfter(Node node, CreateServerRequest request) {
+        if (node.getTotalRamMb() == null || node.getTotalRamMb() <= 0) {
+            return null; // capacité inconnue (agent trop ancien) : on n'y place rien
+        }
+        List<Server> onNode = serverRepository.findByNodeId(node.getId());
+        int ram = 0, cpu = 0, disk = 0;
+        for (Server s : onNode) {
+            ram += containerRamMb(s.getAllocatedRamMb());
+            cpu += s.getAllocatedCpuCores();
+            disk += s.getAllocatedStorageMb();
+        }
+        int freeRam = node.getTotalRamMb() - ram - containerRamMb(request.getRamMb());
+        boolean cpuOk = cpu + request.getCpuCores() <= node.getCpuCores();
+        boolean diskOk = node.getTotalStorageMb() == null || node.getTotalStorageMb() <= 0
+                || disk + request.getStorageMb() <= node.getTotalStorageMb();
+        boolean hostDiskOk = node.getHostDiskFreeMb() == null
+                || node.getHostDiskFreeMb() - request.getStorageMb() >= DISK_FREE_MARGIN_MB;
+        return (freeRam >= 0 && cpuOk && diskOk && hostDiskOk) ? freeRam : null;
+    }
+
+    private Node chooseNode(Long forceNodeId, CreateServerRequest request) {
         if (forceNodeId != null) {
             Node forced = nodeRepository.findById(forceNodeId)
                     .orElseThrow(() -> new RuntimeException("Node forcée non trouvée : " + forceNodeId));
@@ -167,12 +196,29 @@ public class ServerService {
             return forced;
         }
 
-        return nodeRepository.findAll().stream()
+        // Parmi les machines en ligne qui ont la place, celle qui garde le plus de RAM libre
+        List<Node> online = nodeRepository.findAll().stream()
                 .filter(Node::getIsOnline)
                 .filter(n -> !n.getIsRevoked())
                 .filter(n -> n.getPortStart() != null && n.getPortEnd() != null)
-                .findFirst()
-                .orElseThrow(() -> new RuntimeException("Aucune node disponible"));
+                .toList();
+        if (online.isEmpty()) {
+            throw new RuntimeException("Aucune node disponible");
+        }
+        Node best = null;
+        int bestFree = -1;
+        for (Node n : online) {
+            Integer free = freeRamAfter(n, request);
+            if (free != null && free > bestFree) {
+                best = n;
+                bestFree = free;
+            }
+        }
+        if (best == null) {
+            throw new RuntimeException("Aucune machine n'a assez de place pour ce serveur (RAM, CPU ou disque) : "
+                    + "essaie avec moins de RAM ou de CPU, ou plus tard");
+        }
+        return best;
     }
 
     // Premier port libre dans la plage de la machine. Les ports sont vérifiés
@@ -237,6 +283,16 @@ public class ServerService {
         log.info("Serveur {} supprimé de la base", serverId);
     }
 
+    // Un résultat d'agent "success": false est un échec, pas une réussite
+    private static void requireSuccess(JsonNode result) {
+        if (result == null) {
+            throw new RuntimeException("pas de réponse de la machine (délai dépassé)");
+        }
+        if (result.has("success") && !result.get("success").asBoolean()) {
+            throw new RuntimeException(result.path("message").asText(result.path("error").asText("erreur inconnue")));
+        }
+    }
+
     public void deleteServerByName(String name, boolean deleteData, Long requestedByPlayerId) throws Exception {
         // Trouver le serveur par owner + name
         Server server = serverRepository.findByOwnerIdAndName(requestedByPlayerId, name)
@@ -257,6 +313,11 @@ public class ServerService {
             throw new RuntimeException("Le serveur est déjà en marche");
         }
 
+        String quota = metricsService.diskQuotaProblem(server);
+        if (quota != null) {
+            throw new RuntimeException(quota);
+        }
+
         log.info("Démarrage du serveur {} (name={})", serverId, server.getName());
 
         Map<String, Object> data = new HashMap<>();
@@ -268,7 +329,7 @@ public class ServerService {
         try {
             CompletableFuture<JsonNode> future = agentWebSocketHandler.sendCommand(
                     server.getNode().getId(), "start_server", data);
-            future.get();
+            requireSuccess(future.get());
 
             server.setStatus(ServerStatus.RUNNING);
             server.setLastStartedAt(LocalDateTime.now());
@@ -319,7 +380,7 @@ public class ServerService {
         try {
             CompletableFuture<JsonNode> future = agentWebSocketHandler.sendCommand(
                     server.getNode().getId(), "stop_server", data);
-            future.get();
+            requireSuccess(future.get());
 
             server.setStatus(ServerStatus.STOPPED);
             server.setLastStoppedAt(LocalDateTime.now());

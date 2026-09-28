@@ -319,6 +319,16 @@ fi
 echo
 echo "=== Nodes ==="
 runuser -u postgres -- psql -qtA -d mcs_db -c "SELECT '  node ' || id || '  ' || COALESCE(hostname, '?') || '  ports=' || COALESCE(port_start || '-' || port_end, 'aucune') || '  online=' || is_online || '  heartbeat=' || COALESCE(to_char(last_heartbeat_at, 'YYYY-MM-DD HH24:MI'), 'jamais') || CASE WHEN is_revoked THEN '  (révoqué)' ELSE '' END FROM nodes ORDER BY id" 2>/dev/null
+echo
+echo "=== Capacité des machines (utilisé / prêté) ==="
+runuser -u postgres -- psql -qtA -d mcs_db -c "
+  SELECT '  node ' || n.id || '  RAM ' || COALESCE(SUM(s.allocated_ram_mb + s.allocated_ram_mb / 4 + 512), 0) || '/' || n.total_ram_mb || ' Mo'
+      || '  CPU ' || COALESCE(SUM(s.allocated_cpu_cores), 0) || '/' || n.cpu_cores
+      || '  disque ' || COALESCE(SUM(s.allocated_storage_mb), 0) || '/' || n.total_storage_mb || ' Mo'
+      || '  (libre sur la machine : ' || COALESCE(n.host_disk_free_mb::text, '?') || ' Mo)'
+      || '  serveurs : ' || COUNT(s.id)
+  FROM nodes n LEFT JOIN servers s ON s.node_id = n.id
+  WHERE NOT n.is_revoked GROUP BY n.id ORDER BY n.id" 2>/dev/null
 SHEOF
   chmod 755 /usr/local/bin/mcs-status
 
@@ -590,6 +600,29 @@ echo
 echo "Ce code contient des secrets propres à cette machine : ne le donne qu'à son propriétaire."
 SHEOF
   chmod 755 /usr/local/bin/mcs-add-node
+
+  # mcs-disk-quota : changer le quota disque d'un serveur
+  cat > /usr/local/bin/mcs-disk-quota <<'SHEOF'
+#!/usr/bin/env bash
+# sudo mcs-disk-quota                  liste les serveurs et leur quota
+# sudo mcs-disk-quota <nom> <Mo>       change le quota (nom = nom du serveur, ou nom Velocity)
+set -euo pipefail
+[[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
+psql=(runuser -u postgres -- psql -qtA -d mcs_db -v ON_ERROR_STOP=1)
+if (( $# == 0 )); then
+  "${psql[@]}" -c "SELECT '  ' || s.velocity_name || '  (' || p.minecraft_username || ')  quota ' || s.allocated_storage_mb || ' Mo'
+    FROM servers s JOIN players p ON p.id = s.owner_id ORDER BY s.velocity_name"
+  exit 0
+fi
+[[ $# -eq 2 && "$2" =~ ^[0-9]+$ ]] || { echo "Usage : sudo mcs-disk-quota <nom> <Mo>"; exit 1; }
+name=$1
+[[ "$name" =~ ^[a-z0-9-]+$ ]] || { echo "Nom invalide"; exit 1; }
+rows=$("${psql[@]}" -c "SELECT count(*) FROM servers WHERE velocity_name = '$name' OR name = '$name'")
+[[ "$rows" == "1" ]] || { echo "$rows serveur(s) correspondent à '$name' : utilise le nom Velocity (sudo mcs-disk-quota)"; exit 1; }
+"${psql[@]}" -c "UPDATE servers SET allocated_storage_mb = $2 WHERE velocity_name = '$name' OR name = '$name'" >/dev/null
+echo "✔ Quota disque de $name : $2 Mo"
+SHEOF
+  chmod 755 /usr/local/bin/mcs-disk-quota
 
   # mcs-remove-node : révoquer une machine (jeton refusé, tunnels supprimés)
   cat > /usr/local/bin/mcs-remove-node <<'SHEOF'

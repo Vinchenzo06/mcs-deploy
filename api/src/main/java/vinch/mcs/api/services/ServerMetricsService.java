@@ -6,21 +6,28 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 import vinch.mcs.api.entities.Server;
+import vinch.mcs.api.entities.ServerStatus;
 import vinch.mcs.api.repositories.ServerRepository;
 import vinch.mcs.api.websocket.AgentStatsEvent;
+import vinch.mcs.api.websocket.AgentWebSocketHandler;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
  * Dernières mesures connues de chaque serveur, gardées en mémoire (pas
  * d'écriture en base toutes les 30 secondes). Perdues au redémarrage de l'API :
  * les agents les renvoient dans les 30 secondes.
+ *
+ * Quota disque : au-delà de l'espace alloué, un serveur ne peut plus démarrer ;
+ * au-delà de 125 %, il est arrêté proprement (protection du disque du volontaire).
+ * Mesure toutes les 10 minutes : c'est un quota "souple", pas une limite dure.
  */
 @Service
 @RequiredArgsConstructor
@@ -31,8 +38,11 @@ public class ServerMetricsService {
                           long netRxBytes, long netTxBytes, long pids, Long diskUsedMb, Instant updatedAt) {
     }
 
+    private static final double DISK_STOP_RATIO = 1.25;
+
     private final ServerRepository serverRepository;
     private final VelocityClient velocityClient;
+    private final AgentWebSocketHandler agentWebSocketHandler;
 
     private final Map<Long, Metrics> metrics = new ConcurrentHashMap<>();
     private final Map<Long, String> health = new ConcurrentHashMap<>();
@@ -40,15 +50,16 @@ public class ServerMetricsService {
     @EventListener
     public void onStats(AgentStatsEvent event) {
         // Une machine ne peut renseigner que ses propres serveurs
-        Set<Long> own = serverRepository.findByNodeId(event.nodeId()).stream()
-                .map(Server::getId).collect(Collectors.toSet());
+        Map<Long, Server> own = serverRepository.findByNodeId(event.nodeId()).stream()
+                .collect(Collectors.toMap(Server::getId, Function.identity()));
         if (event.servers() == null || !event.servers().isArray()) {
             return;
         }
         Instant now = Instant.now();
         for (JsonNode s : event.servers()) {
             long id = s.path("server_id").asLong(-1);
-            if (!own.contains(id)) {
+            Server server = own.get(id);
+            if (server == null) {
                 continue;
             }
             Metrics previous = metrics.get(id);
@@ -64,7 +75,43 @@ public class ServerMetricsService {
                     s.path("pids").asLong(0),
                     disk,
                     now));
+
+            if (disk != null && server.getAllocatedStorageMb() != null && server.getAllocatedStorageMb() > 0
+                    && disk > server.getAllocatedStorageMb() * DISK_STOP_RATIO
+                    && server.getStatus() == ServerStatus.RUNNING) {
+                stopForDiskQuota(event.nodeId(), server, disk);
+            }
         }
+    }
+
+    private void stopForDiskQuota(Long nodeId, Server server, long diskMb) {
+        log.warn("Serveur {} ({}) : {} Mo utilisés pour un quota de {} Mo -> arrêt",
+                server.getId(), server.getVelocityName(), diskMb, server.getAllocatedStorageMb());
+        server.setStatus(ServerStatus.STOPPING);
+        serverRepository.save(server);
+        try {
+            velocityClient.unregisterServer(server.getVelocityName());
+        } catch (Exception e) {
+            log.debug("Désenregistrement Velocity : {}", e.getMessage());
+        }
+        Long id = server.getId();
+        agentWebSocketHandler.sendCommand(nodeId, "stop_server", Map.<String, Object>of("server_id", id))
+                .whenComplete((result, error) -> serverRepository.findById(id).ifPresent(s -> {
+                    s.setStatus(error == null ? ServerStatus.STOPPED : ServerStatus.ERROR);
+                    s.setLastStoppedAt(LocalDateTime.now());
+                    serverRepository.save(s);
+                }));
+    }
+
+    /** Message d'erreur si le serveur dépasse son quota disque (ne peut pas démarrer), sinon null */
+    public String diskQuotaProblem(Server server) {
+        Metrics m = metrics.get(server.getId());
+        Integer quota = server.getAllocatedStorageMb();
+        if (m == null || m.diskUsedMb() == null || quota == null || quota <= 0 || m.diskUsedMb() <= quota) {
+            return null;
+        }
+        return String.format("Quota disque dépassé (%d / %d Mo) : le serveur ne peut pas démarrer. "
+                + "Demande à un admin d'augmenter son quota.", m.diskUsedMb(), quota);
     }
 
     public void recordHealth(Long serverId, String event) {
@@ -108,6 +155,7 @@ public class ServerMetricsService {
             out.put("netTxBytes", m.netTxBytes());
             out.put("pids", m.pids());
             out.put("diskUsedMb", m.diskUsedMb());
+            out.put("diskQuotaExceeded", diskQuotaProblem(server) != null);
             out.put("metricsAgeSeconds", Duration.between(m.updatedAt(), Instant.now()).toSeconds());
         }
         return out;
