@@ -230,6 +230,19 @@ public class ApiClient {
                 java.util.Map.of("playerId", playerId, "command", command), Duration.ofSeconds(30));
     }
 
+    /** Machines et leur hôte (admins seulement, vérifié par l'API) */
+    public CompletableFuture<JsonNode> getHosts(long playerId) {
+        return call("GET", "/api/v1/hosts?playerId=" + playerId, null, Duration.ofSeconds(10));
+    }
+
+    /** username null : plus d'hôte */
+    public CompletableFuture<JsonNode> setHost(long machineId, long playerId, String username) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("playerId", playerId);
+        body.put("username", username);
+        return call("POST", "/api/v1/hosts/" + machineId, body, Duration.ofSeconds(10));
+    }
+
     public CompletableFuture<JsonNode> move(long serverId, long playerId, String username) {
         return call("POST", "/api/v1/servers/" + serverId + "/move",
                 java.util.Map.of("playerId", playerId, "username", username), Duration.ofSeconds(15));

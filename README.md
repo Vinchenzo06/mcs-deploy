@@ -200,7 +200,10 @@ contourner, et refusé si l'API ne répond pas.
   admins le sont automatiquement.
 - `/mcs move <joueur> <serveur>` (hébergeur, admins) : envoie un joueur connecté sur le
   serveur avec un laissez-passer d'une minute, à usage unique. Il ne peut pas revenir seul.
-- L'hébergeur d'une machine se définit sur le VPS : `sudo mcs-node-owner <id> <pseudo>`
+- L'**hôte** d'une machine est choisi **uniquement par un admin** : en jeu `/mcs host list`,
+  `/mcs host set <machine> <joueur>`, `/mcs host remove <machine>` (ou sur le VPS
+  `sudo mcs-node-owner <id> <pseudo>`). Le volontaire ne peut pas se déclarer hôte ni nommer
+  quelqu'un d'autre. Ses droits ne valent que pour les serveurs de SA machine
   (le joueur doit s'être connecté une fois). Il reçoit le groupe LuckPerms `host` (titre
   `ʜᴏsᴛ`), retiré quand il ne possède plus de machine.
 - Les fichiers (rôle technicien, hébergeur) arriveront avec le panneau web.

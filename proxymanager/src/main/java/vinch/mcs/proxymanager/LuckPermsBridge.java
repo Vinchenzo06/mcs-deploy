@@ -6,6 +6,7 @@ import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
 import net.luckperms.api.cacheddata.CachedMetaData;
+import net.luckperms.api.node.types.InheritanceNode;
 
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -34,6 +35,18 @@ public class LuckPermsBridge implements RankSource {
                     user.getPrimaryGroup(),
                     toJson(meta.getPrefix()),
                     meta.getMetaValue("name-color") == null ? "" : meta.getMetaValue("name-color"));
+        });
+    }
+
+    @Override
+    public CompletableFuture<Void> setGroup(UUID uuid, String group, boolean member) {
+        return luckPerms.getUserManager().modifyUser(uuid, user -> {
+            InheritanceNode node = InheritanceNode.builder(group).build();
+            if (member) {
+                user.data().add(node);
+            } else {
+                user.data().remove(node);
+            }
         });
     }
 

@@ -112,6 +112,7 @@ public class McsCommand implements SimpleCommand {
             case "public", "private" -> handleVisibility(player, args);
             case "console" -> handleConsole(player, args);
             case "display" -> handleDisplay(player, args);
+            case "host" -> handleHost(player, args);
             case "move" -> handleMove(player, args);
             default -> sendUsage(player);
         }
@@ -378,6 +379,9 @@ public class McsCommand implements SimpleCommand {
                 "Exécute une commande sur le serveur, ex. : whitelist add Bob"));
         player.sendMessage(helpLine("/mcs move <joueur> <serveur>", "/mcs move ", "Amener un joueur",
                 "Hébergeur de la machine et admins : envoie un joueur\nsur le serveur, une seule fois (sans lui donner d'accès)"));
+        player.sendMessage(helpLine("/mcs host [list|set|remove]", "/mcs host ", "Hôtes (admins)",
+                "Admins : choisir le joueur hôte de chaque machine.\n"
+                        + "Il gère les serveurs de SA machine seulement (titre ʜᴏsᴛ)."));
         player.sendMessage(helpLine("/mcs delete <serveur>", "/mcs delete ", "Supprimer",
                 "Supprime le serveur et son monde, définitivement\n(une confirmation est demandée)"));
         player.sendMessage(helpLine("/mcs quota", "/mcs quota", "Tes limites",
@@ -932,6 +936,108 @@ public class McsCommand implements SimpleCommand {
                 r -> success(player, text("Rôles réseau sur ").append(serverName(t.ref())).append(text(enabled
                         ? " : affichés (préfixe [Admin], [VIP]... à l'arrivée des joueurs)."
                         : " : masqués, les équipes du serveur sont libres.")))));
+    }
+
+    // ============================================================ hôtes (admins) ====
+
+    private void handleHost(Player player, String[] args) {
+        String sub = args.length < 2 ? "list" : args[1].toLowerCase(Locale.ROOT);
+        switch (sub) {
+            case "list" -> apiClient.getPlayerByUuid(player.getUniqueId())
+                    .thenCompose(info -> apiClient.getHosts(info.get("id").asLong()))
+                    .whenComplete((r, error) -> run(() -> {
+                        if (error != null) {
+                            reportError(player, error, null);
+                            return;
+                        }
+                        sendHosts(player, r.path("machines"));
+                    }));
+            case "set", "remove" -> {
+                boolean set = sub.equals("set");
+                if ((set && args.length != 4) || (!set && args.length != 3)) {
+                    usage(player, set ? "/mcs host set <machine> <joueur>" : "/mcs host remove <machine>",
+                            set ? "/mcs host set " : "/mcs host remove ");
+                    return;
+                }
+                long machine;
+                try {
+                    machine = Long.parseLong(args[2].replace("#", ""));
+                } catch (NumberFormatException e) {
+                    failure(player, text("Numéro de machine invalide : " + args[2] + " (voir /mcs host list)."));
+                    return;
+                }
+                String target = set ? args[3] : null;
+                if (set && !validPlayerName(player, target)) {
+                    return;
+                }
+                apiClient.getPlayerByUuid(player.getUniqueId())
+                        .thenCompose(info -> apiClient.setHost(machine, info.get("id").asLong(), target))
+                        .whenComplete((r, error) -> run(() -> {
+                            if (error != null) {
+                                reportError(player, error, null);
+                                return;
+                            }
+                            applyHostGroups(player, r);
+                        }));
+            }
+            default -> usage(player, "/mcs host [list|set|remove]", "/mcs host ");
+        }
+    }
+
+    private void sendHosts(Player player, JsonNode machines) {
+        player.sendMessage(Component.empty());
+        player.sendMessage(header("Hôtes des machines"));
+        if (machines.size() == 0) {
+            player.sendMessage(Component.text(" Aucune machine.", NamedTextColor.GRAY));
+        }
+        for (JsonNode m : machines) {
+            long id = m.path("machine").asLong();
+            boolean online = m.path("online").asBoolean(false);
+            String host = m.path("host").isNull() || m.path("host").isMissingNode() ? null : m.path("host").asText();
+            Component line = Component.text(" #" + id + " ", NamedTextColor.WHITE, TextDecoration.BOLD)
+                    .append(Component.text(m.path("hostname").asText("?"), NamedTextColor.GRAY))
+                    .append(Component.text(online ? "  ● en ligne" : "  ○ hors ligne",
+                            online ? NamedTextColor.GREEN : NamedTextColor.DARK_GRAY))
+                    .append(Component.text("  hôte : ", NamedTextColor.GRAY))
+                    .append(host == null ? Component.text("aucun", NamedTextColor.DARK_GRAY)
+                            : Component.text(host, NamedTextColor.AQUA))
+                    .append(text("  "))
+                    .append(suggestButton(host == null ? "Choisir" : "Changer", NamedTextColor.GREEN,
+                            "/mcs host set " + id + " ", "Écris le pseudo du propriétaire de cette machine"));
+            if (host != null) {
+                line = line.append(text(" ")).append(button("Retirer", NamedTextColor.RED,
+                        "/mcs host remove " + id, "Plus d'hôte pour la machine #" + id));
+            }
+            player.sendMessage(line);
+        }
+        player.sendMessage(Component.text(" L'hôte gère seulement les serveurs de sa machine.", NamedTextColor.DARK_GRAY));
+    }
+
+    /** Groupe LuckPerms "host" (titre) : donné au nouvel hôte, retiré à l'ancien s'il n'a plus de machine */
+    private void applyHostGroups(Player player, JsonNode r) {
+        long machine = r.path("machine").asLong();
+        String host = r.hasNonNull("host") ? r.get("host").asText() : null;
+        if (host != null) {
+            success(player, text(host + " est l'hôte de la machine #" + machine + " ("
+                    + r.path("hostname").asText("?") + ")."));
+        } else {
+            success(player, text("La machine #" + machine + " n'a plus d'hôte."));
+        }
+        java.util.List<java.util.concurrent.CompletableFuture<Boolean>> changes = new java.util.ArrayList<>();
+        if (r.hasNonNull("hostUuid")) {
+            changes.add(playerSync.setHostGroup(server, java.util.UUID.fromString(r.get("hostUuid").asText()), true));
+        }
+        if (r.hasNonNull("previousUuid") && !r.path("previousStillHost").asBoolean(false)) {
+            changes.add(playerSync.setHostGroup(server, java.util.UUID.fromString(r.get("previousUuid").asText()), false));
+            player.sendMessage(Component.text("   " + r.path("previous").asText() + " n'est plus hôte.", NamedTextColor.GRAY));
+        }
+        java.util.concurrent.CompletableFuture.allOf(changes.toArray(new java.util.concurrent.CompletableFuture[0]))
+                .whenComplete((v, error) -> run(() -> {
+                    boolean ok = error == null && changes.stream().allMatch(f -> Boolean.TRUE.equals(f.getNow(false)));
+                    if (!ok) {
+                        notice(player, text("Titre ʜᴏsᴛ à mettre à la main : lp user <pseudo> parent add|remove host"));
+                    }
+                }));
     }
 
     // ============================================================ console / move ====

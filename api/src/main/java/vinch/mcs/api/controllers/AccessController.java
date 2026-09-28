@@ -39,6 +39,8 @@ public class AccessController {
 
     public record DisplayBody(Long playerId, Boolean enabled) {}
 
+    public record HostBody(Long playerId, String username) {}
+
     public record MoveBody(Long playerId, String username) {}
 
     public record ConnectedBody(String server, String uuid) {}
@@ -165,6 +167,19 @@ public class AccessController {
             serverService.movePlayer(id, body.playerId(), body.username());
             return null;
         });
+    }
+
+    // ------------------------------------------------------------ hôtes (admins) ----
+
+    @GetMapping("/hosts")
+    public ResponseEntity<?> hosts(@RequestParam Long playerId) {
+        return handle(() -> Map.of("machines", accessService.listHosts(accessService.player(playerId))));
+    }
+
+    /** Body : {playerId (admin qui demande), username (null ou vide : plus d'hôte)} */
+    @PostMapping("/hosts/{machineId}")
+    public ResponseEntity<?> setHost(@PathVariable Long machineId, @RequestBody HostBody body) {
+        return handle(() -> accessService.setHost(accessService.player(body.playerId()), machineId, body.username()));
     }
 
     // ------------------------------------------------------------ proxy ----

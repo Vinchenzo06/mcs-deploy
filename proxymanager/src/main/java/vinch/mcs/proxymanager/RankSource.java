@@ -8,6 +8,9 @@ public interface RankSource {
 
     CompletableFuture<Meta> load(UUID uuid);
 
+    /** Ajoute ou retire un groupe LuckPerms (ex. "host") */
+    CompletableFuture<Void> setGroup(UUID uuid, String group, boolean member);
+
     /**
      * prefixJson : préfixe du groupe en composant texte JSON ("" si aucun) ;
      * nameColor : méta "name-color" (couleur du pseudo, ex. "green"), "" si aucune

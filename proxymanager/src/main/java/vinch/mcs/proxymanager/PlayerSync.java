@@ -40,6 +40,21 @@ public class PlayerSync {
         return source != null;
     }
 
+    /**
+     * Groupe LuckPerms "host" (titre ʜᴏsᴛ) d'un joueur, puis resynchronisation s'il
+     * est en ligne. Renvoie false si LuckPerms n'est pas sur le proxy.
+     */
+    public CompletableFuture<Boolean> setHostGroup(com.velocitypowered.api.proxy.ProxyServer server,
+                                                   java.util.UUID uuid, boolean member) {
+        if (source == null) {
+            return CompletableFuture.completedFuture(false);
+        }
+        return source.setGroup(uuid, "host", member)
+                .thenCompose(v -> server.getPlayer(uuid).map(this::sync)
+                        .orElse(CompletableFuture.completedFuture(null)))
+                .thenApply(v -> true);
+    }
+
     /** Ne échoue jamais : en cas de problème, les dernières valeurs connues restent */
     public CompletableFuture<Void> sync(Player player) {
         if (source == null) {

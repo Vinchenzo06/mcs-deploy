@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vinch.mcs.api.entities.*;
+import vinch.mcs.api.repositories.NodeRepository;
 import vinch.mcs.api.repositories.PlayerRepository;
 import vinch.mcs.api.repositories.ServerCollaboratorRepository;
 import vinch.mcs.api.repositories.ServerRepository;
@@ -43,6 +44,7 @@ public class AccessService {
     private final ServerRepository serverRepository;
     private final PlayerRepository playerRepository;
     private final ServerCollaboratorRepository collaboratorRepository;
+    private final NodeRepository nodeRepository;
 
     // Laissez-passer à usage unique donnés par /mcs move : "serverId:uuid" -> expiration
     private final Map<String, Instant> passes = new ConcurrentHashMap<>();
@@ -257,6 +259,72 @@ public class AccessService {
         passes.values().removeIf(exp -> exp.isBefore(now));
         Instant exp = passes.remove(serverId + ":" + uuid);
         return exp != null && exp.isAfter(now);
+    }
+
+    // ------------------------------------------------------------ hôtes ----
+    //
+    // L'hôte d'une machine est choisi par un admin du réseau (jamais par le
+    // volontaire lui-même). Ses droits ne valent que pour les serveurs de SA
+    // machine (isHost compare le propriétaire du node du serveur).
+
+    private static void requireAdmin(Player p) {
+        if (!isAdmin(p)) {
+            throw new RuntimeException("Réservé aux admins du réseau.");
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listHosts(Player requester) {
+        requireAdmin(requester);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Node n : nodeRepository.findAll()) {
+            if (Boolean.TRUE.equals(n.getIsRevoked())) {
+                continue;
+            }
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("machine", n.getId());
+            m.put("hostname", n.getHostname() == null ? "?" : n.getHostname());
+            m.put("online", Boolean.TRUE.equals(n.getIsOnline()));
+            m.put("host", n.getOwnerPlayer() == null ? null : n.getOwnerPlayer().getMinecraftUsername());
+            out.add(m);
+        }
+        out.sort(Comparator.comparing(m -> (Long) m.get("machine")));
+        return out;
+    }
+
+    /**
+     * Change l'hôte d'une machine (username null : plus d'hôte). Renvoie les UUID
+     * utiles au proxy pour mettre à jour le groupe LuckPerms "host" (titre).
+     */
+    @Transactional
+    public Map<String, Object> setHost(Player requester, Long machineId, String username) {
+        requireAdmin(requester);
+        Node node = nodeRepository.findById(machineId)
+                .orElseThrow(() -> new RuntimeException("Machine " + machineId + " introuvable."));
+        if (Boolean.TRUE.equals(node.getIsRevoked())) {
+            throw new RuntimeException("La machine " + machineId + " est révoquée.");
+        }
+        Player previous = node.getOwnerPlayer();
+        Player target = username == null || username.isBlank() ? null : playerByName(username);
+        node.setOwnerPlayer(target);
+        nodeRepository.save(node);
+
+        Map<String, Object> out = new HashMap<>();
+        out.put("machine", node.getId());
+        out.put("hostname", node.getHostname() == null ? "?" : node.getHostname());
+        if (target != null) {
+            out.put("host", target.getMinecraftUsername());
+            out.put("hostUuid", target.getMinecraftUuid().toString());
+        }
+        if (previous != null && (target == null || !previous.getId().equals(target.getId()))) {
+            out.put("previous", previous.getMinecraftUsername());
+            out.put("previousUuid", previous.getMinecraftUuid().toString());
+            out.put("previousStillHost", nodeRepository.countOwnedBy(previous.getId()) > 0);
+        }
+        log.info("{} : hôte de la machine {} = {} (avant : {})", requester.getMinecraftUsername(), node.getId(),
+                target == null ? "aucun" : target.getMinecraftUsername(),
+                previous == null ? "aucun" : previous.getMinecraftUsername());
+        return out;
     }
 
     // ------------------------------------------------------------ membres ----

@@ -22,4 +22,8 @@ public interface NodeRepository extends JpaRepository<Node, Long> {
     // Fin de la dernière plage attribuée (les plages révoquées ne sont jamais réutilisées)
     @Query("SELECT MAX(n.portEnd) FROM Node n")
     Integer findMaxPortEnd();
+
+    // Machines (non révoquées) dont ce joueur est l'hôte
+    @Query("SELECT COUNT(n) FROM Node n WHERE n.ownerPlayer.id = :playerId AND n.isRevoked = false")
+    long countOwnedBy(Long playerId);
 }
