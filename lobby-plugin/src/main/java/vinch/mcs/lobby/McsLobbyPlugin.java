@@ -55,6 +55,10 @@ public final class McsLobbyPlugin extends JavaPlugin {
             return CompletableFuture.completedFuture(null);
         }
         return luckPermsHelper.loadUserMeta(uuid)
+                .thenApply(meta -> {
+                    getServer().getScheduler().runTask(this, () -> applyLobbyTitle(uuid, meta));
+                    return meta;
+                })
                 .thenCompose(meta -> apiClient.updatePlayerLimits(
                         uuid, meta.maxServers(), meta.totalRamMb(), meta.totalCpuCores(), meta.admin(),
                         meta.rank(), meta.prefixJson()))
@@ -64,6 +68,34 @@ public final class McsLobbyPlugin extends JavaPlugin {
                     }
                     return (Void) null;
                 });
+    }
+
+    /**
+     * Titre réseau dans le lobby (chat, Tab, au-dessus de la tête), comme sur les
+     * serveurs de jeu : équipe "mcs_<ordre><rang>" avec le préfixe LuckPerms.
+     */
+    private void applyLobbyTitle(UUID uuid, LuckPermsHelper.UserMeta meta) {
+        org.bukkit.entity.Player player = getServer().getPlayer(uuid);
+        if (player == null || getServer().getScoreboardManager() == null) {
+            return;
+        }
+        String rank = meta.rank() == null ? "" : meta.rank().toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9_]", "");
+        if (rank.isEmpty()) {
+            rank = "default";
+        }
+        int order = meta.admin() ? 1 : "default".equals(rank) ? 9 : 5;
+        String name = "mcs_" + order + rank.substring(0, Math.min(10, rank.length()));
+
+        org.bukkit.scoreboard.Scoreboard board = getServer().getScoreboardManager().getMainScoreboard();
+        org.bukkit.scoreboard.Team team = board.getTeam(name);
+        if (team == null) {
+            team = board.registerNewTeam(name);
+        }
+        String json = meta.prefixJson();
+        team.prefix(json == null || json.isEmpty()
+                ? net.kyori.adventure.text.Component.empty()
+                : net.kyori.adventure.text.serializer.gson.GsonComponentSerializer.gson().deserialize(json));
+        team.addEntry(player.getName());
     }
 
     @Override

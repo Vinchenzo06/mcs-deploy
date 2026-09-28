@@ -201,7 +201,8 @@ contourner, et refusé si l'API ne répond pas.
 - `/mcs move <joueur> <serveur>` (hébergeur, admins) : envoie un joueur connecté sur le
   serveur avec un laissez-passer d'une minute, à usage unique. Il ne peut pas revenir seul.
 - L'hébergeur d'une machine se définit sur le VPS : `sudo mcs-node-owner <id> <pseudo>`
-  (le joueur doit s'être connecté une fois).
+  (le joueur doit s'être connecté une fois). Il reçoit le groupe LuckPerms `host` (titre
+  `ʜᴏsᴛ`), retiré quand il ne possède plus de machine.
 - Les fichiers (rôle technicien, hébergeur) arriveront avec le panneau web.
 
 ### Sur les serveurs de jeu (sans plugin imposé)
@@ -210,8 +211,8 @@ contourner, et refusé si l'API ne répond pas.
   serveurs de jeu (Velocity la traite avant le serveur).
 - En arrivant sur un serveur, par sa console : le **créateur** et les **admins** sont OP ;
   un **titre** discret s'affiche (petites capitales, dans le chat, le Tab et au-dessus de la
-  tête) grâce aux équipes vanilla `mcs_<ordre><titre>` : `ᴀᴅᴍɪɴ` passe avant `ᴄʀᴇᴀᴛᴇᴜʀ`, qui
-  passe avant le rang réseau (`ᴘʀᴇᴍɪᴜᴍ`, `ᴠɪᴘ`). Le Tab est trié dans cet ordre. Les commandes de
+  tête) grâce aux équipes vanilla `mcs_<ordre><titre>` : `ᴀᴅᴍɪɴ` passe avant `ᴏᴡɴᴇʀ` (créateur du
+  serveur), qui passe avant le rang réseau (`ʜᴏsᴛ`, `ᴘʀᴇᴍɪᴜᴍ`, `ᴠɪᴘ`). Même titre dans le lobby. Le Tab est trié dans cet ordre. Les commandes de
   MCS ne s'affichent pas aux OP (`broadcast-rcon-to-ops=false`). Paper, Fabric, Forge, Vanilla.
 - Le propriétaire garde la main sur son serveur (son propre LuckPerms, ses rôles...). S'il
   utilise ses propres équipes : `/mcs display <serveur> off`.

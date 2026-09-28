@@ -92,6 +92,35 @@ LPEOF
   )
 }
 
+# Écrit aussi la base partagée dans le config.yml de LuckPerms (s'il existe déjà),
+# au cas où les variables d'environnement ne seraient pas lues. Renvoie 0 si le
+# fichier a changé (un redémarrage est alors nécessaire).
+configure_luckperms_file() {
+  local file=$1
+  [[ -f "$file" ]] || return 1
+  python3 - "$file" "$LP_DB_PASSWORD" <<'PYLP'
+import re, sys
+path, password = sys.argv[1], sys.argv[2]
+text = open(path, encoding="utf-8").read()
+new = re.sub(r"(?m)^storage-method:.*$", "storage-method: postgresql", text)
+new = re.sub(r"(?m)^messaging-service:.*$", "messaging-service: auto", new)
+m = re.search(r"(?m)^data:\s*$", new)
+if m:
+    start = m.end()
+    nxt = re.search(r"(?m)^\S", new[start:])
+    end = start + nxt.start() if nxt else len(new)
+    block = new[start:end]
+    for key, value in (("address", "127.0.0.1:5432"), ("database", "luckperms"),
+                       ("username", "luckperms"), ("password", "'" + password + "'")):
+        block = re.sub(r"(?m)^(\s+)" + key + r":.*$", lambda g: g.group(1) + key + ": " + value, block, count=1)
+    new = new[:start] + block + new[end:]
+if new != text:
+    open(path, "w", encoding="utf-8").write(new)
+    sys.exit(0)
+sys.exit(1)
+PYLP
+}
+
 # Télécharge LuckPerms pour une plateforme (bukkit | velocity) s'il manque
 install_luckperms() {
   local platform=$1 dir=$2 var=$3
@@ -659,8 +688,23 @@ fi
 [[ $# -eq 2 && "$1" =~ ^[0-9]+$ ]] || { echo "Usage : sudo mcs-node-owner <id> <pseudo> | --none"; exit 1; }
 id=$1
 [[ "$("${psql[@]}" -c "SELECT count(*) FROM nodes WHERE id = $id")" == "1" ]] || { echo "Machine $id inconnue"; exit 1; }
+# Groupe LuckPerms "host" : titre ʜᴏsᴛ sur le réseau tant qu'il possède une machine
+lp_host() {
+  mcs-rcon "lp user $1 parent $2 host" >/dev/null 2>&1 \
+    || echo "! Groupe host non mis à jour pour $1 (lobby éteint ?) : sudo mcs-rcon \"lp user $1 parent $2 host\""
+}
+old_owner=$("${psql[@]}" -c "SELECT p.minecraft_username FROM nodes n JOIN players p ON p.id = n.owner_player_id WHERE n.id = $id")
+release_old_owner() {
+  [[ -n "$old_owner" ]] || return 0
+  local left
+  left=$("${psql[@]}" -c "SELECT count(*) FROM nodes n JOIN players p ON p.id = n.owner_player_id
+    WHERE lower(p.minecraft_username) = lower('$old_owner') AND NOT n.is_revoked")
+  [[ "$left" == "0" ]] && lp_host "$old_owner" remove
+  return 0
+}
 if [[ "$2" == "--none" ]]; then
   "${psql[@]}" -c "UPDATE nodes SET owner_player_id = NULL WHERE id = $id" >/dev/null
+  release_old_owner
   echo "✔ Machine $id : plus de propriétaire"
   exit 0
 fi
@@ -668,7 +712,9 @@ fi
 pid=$("${psql[@]}" -c "SELECT id FROM players WHERE lower(minecraft_username) = lower('$2') ORDER BY last_seen_at DESC LIMIT 1")
 [[ -n "$pid" ]] || { echo "Joueur $2 inconnu : il doit se connecter au moins une fois au réseau"; exit 1; }
 "${psql[@]}" -c "UPDATE nodes SET owner_player_id = $pid WHERE id = $id" >/dev/null
-echo "✔ Machine $id : propriétaire $2"
+release_old_owner
+lp_host "$2" add
+echo "✔ Machine $id : propriétaire $2 (groupe LuckPerms host)"
 SHEOF
   chmod 755 /usr/local/bin/mcs-node-owner
 
@@ -1042,8 +1088,21 @@ SuccessExitStatus=143
 [Install]
 WantedBy=multi-user.target
 EOF
+  configure_luckperms_file "$VELOCITY_DIR/plugins/luckperms/config.yml" || true
   restart_service minecraft-velocity
   wait_port 25565 90 || die "Velocity ne démarre pas. Logs : journalctl -u minecraft-velocity -n 100"
+  # Premier démarrage avec LuckPerms : son config.yml vient d'être créé
+  if configure_luckperms_file "$VELOCITY_DIR/plugins/luckperms/config.yml"; then
+    chown "$MC_USER:$MC_USER" "$VELOCITY_DIR/plugins/luckperms/config.yml"
+    systemctl restart minecraft-velocity
+    wait_port 25565 90 || die "Velocity ne redémarre pas. Logs : journalctl -u minecraft-velocity -n 100"
+  fi
+  sleep 3
+  if journalctl -u minecraft-velocity -n 400 --no-pager 2>/dev/null | grep -qi "storage provider.*postgre"; then
+    ok "LuckPerms du proxy sur PostgreSQL (partagé avec le lobby)"
+  elif compgen -G "$VELOCITY_DIR/plugins/LuckPerms-*.jar" >/dev/null; then
+    warn "LuckPerms du proxy ne semble pas utiliser PostgreSQL : 'journalctl -u minecraft-velocity | grep -i storage'"
+  fi
   wait_port 8082 30 || warn "L'API locale du proxymanager (:8082) ne répond pas, vérifie ses logs"
   ok "Velocity en écoute sur :25565 (API plugin sur :8082)"
 }
@@ -1118,6 +1177,7 @@ step_lobby() {
 api-url: http://127.0.0.1:8081
 api-key: $LOBBY_API_KEY
 EOF
+  configure_luckperms_file "$LOBBY_DIR/plugins/LuckPerms/config.yml" || true
   chown -R "$MC_USER:$MC_USER" "$LOBBY_DIR"
 
   write_unit minecraft-lobby <<EOF
@@ -1230,6 +1290,11 @@ bootstrap_luckperms() {
     lp_has "$g" "meta.total-ram." || cmds+=("lp group $g meta set total-ram $ram")
     lp_has "$g" "meta.total-cpu." || cmds+=("lp group $g meta set total-cpu $cpu")
   done
+  # host : joueurs qui prêtent une machine (mis par mcs-node-owner). Pas de quotas
+  # propres : ils viennent de leur autre groupe (default, vip...)
+  cmds+=("lp creategroup host")
+  lp_has host "weight." || cmds+=("lp group host setweight 50")
+  lp_has host "prefix." || cmds+=("lp group host meta setprefix 50 \"&bʜᴏsᴛ \"")
   cmds+=("lp group admin permission set mcs.admin true"
          "lp group admin permission set luckperms.* true")
 
