@@ -44,8 +44,14 @@ curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/
 ```
 
 Les serveurs joueurs tournent isolés : réseau Docker dédié, sans accès aux autres
-serveurs, à la machine ni au réseau local du volontaire (Internet reste accessible),
-utilisateur non-root, limites de RAM et de processus.
+serveurs, à la machine ni au réseau local du volontaire, utilisateur non-root,
+limites de RAM et de processus. Ils sortent sur Internet **par le VPS** (tunnel
+WireGuard `wg-mcs`) : l'IP du volontaire n'est jamais visible. Si le tunnel tombe,
+ils n'ont plus Internet (coupe-circuit) au lieu de sortir par la connexion du volontaire.
+Le courriel sortant (SMTP) est bloqué.
+
+Nouveau code pour une machine déjà jumelée (code divulgué, mise à niveau) :
+`sudo mcs-add-node --renew <id>` (mêmes ports, ses serveurs sont conservés).
 
 Chaque machine reçoit sa propre plage de ports et son propre jeton rathole :
 elle ne peut pas intercepter les serveurs d'une autre. Pour retirer une machine :
@@ -83,6 +89,7 @@ sudo mcs-admin TonPseudo
 | `sudo mcs-deploy [étapes]` | Récupère GitHub, compile, installe |
 | `sudo mcs-status` | État des services, ports et machines volontaires |
 | `sudo mcs-add-node [--ssh] [nom]` | Code de jumelage pour une nouvelle machine |
+| `sudo mcs-add-node --renew <id>` | Nouveau code pour une machine existante |
 | `sudo mcs-remove-node <id>` | Révoque une machine (jeton refusé, tunnels supprimés) |
 | `sudo mcs-admin <pseudo>` | Groupe admin LuckPerms (vérifié) |
 | `sudo mcs-lp-export` | État LuckPerms en JSON (groupes, joueurs) |

@@ -12,7 +12,7 @@
 #
 #  Config (optionnelle) : /etc/mcs/mcs.env    Secrets : /etc/mcs/secrets.env
 #
-#  Étapes : system java postgres rathole api velocity lobby firewall bootstrap summary
+#  Étapes : system java postgres rathole egress api velocity lobby firewall bootstrap summary
 #
 #  Machines volontaires : chacune a sa plage de ports (attribuée par l'API) et
 #  son propre jeton rathole, décrits dans /etc/mcs/nodes/<id>.env.
@@ -39,7 +39,7 @@ MAVEN_VERSION=3.9.11
 MAVEN_HOME=/opt/maven
 M2_REPO=/var/cache/mcs/m2
 
-ALL_STEPS=(system java postgres rathole api velocity lobby firewall bootstrap summary)
+ALL_STEPS=(system java postgres rathole egress api velocity lobby firewall bootstrap summary)
 
 # ================================================================ helpers ====
 C_STEP='\033[1;36m'; C_OK='\033[1;32m'; C_WARN='\033[1;33m'; C_ERR='\033[1;31m'; C_OFF='\033[0m'
@@ -176,7 +176,7 @@ load_config() {
   : "${PAPER_VERSION:=26.1.2}" "${VELOCITY_VERSION:=4.2.1-SNAPSHOT}" "${FORCE_UPDATE:=false}"
   : "${API_XMX:=384M}" "${VELOCITY_XMX:=512M}" "${LOBBY_XMX:=512M}"
   : "${PORT_START:=25600}" "${PORT_END:=29999}" "${NODE_PORTS:=20}"
-  : "${ENABLE_SSH_TUNNEL:=true}" "${SSH_TUNNEL_PORT:=2222}"
+  : "${ENABLE_SSH_TUNNEL:=true}" "${SSH_TUNNEL_PORT:=2222}" "${WG_PORT:=51820}"
   : "${SRC_API:=api}" "${SRC_PROXY:=proxymanager}" "${SRC_LOBBY:=lobby-plugin}"
   : "${QUOTA_DEFAULT:=1 6144 2}" "${QUOTA_VIP:=2 12288 4}"
   : "${QUOTA_PREMIUM:=2 16384 5}" "${QUOTA_ADMIN:=16 32768 32}"
@@ -202,6 +202,7 @@ load_config() {
 VPS_IP=$VPS_IP
 ENABLE_SSH_TUNNEL=$ENABLE_SSH_TUNNEL
 SSH_TUNNEL_PORT=$SSH_TUNNEL_PORT
+WG_PORT=$WG_PORT
 EOF
 }
 
@@ -286,12 +287,23 @@ PYEOF
   cat > /usr/local/bin/mcs-status <<'SHEOF'
 #!/usr/bin/env bash
 echo "=== Services ==="
-for s in postgresql rathole-server mcs-api minecraft-velocity minecraft-lobby; do
+for s in postgresql rathole-server wg-quick@wg-mcs mcs-api minecraft-velocity minecraft-lobby; do
   printf "  %-20s %s\n" "$s" "$(systemctl is-active "$s")"
 done
 echo
 echo "=== Ports en écoute ==="
 ss -ltnp | grep -E ':(25565|25566|8081|8082|2333|2222)\b' | awk '{print "  " $4 "  " $6}'
+echo
+echo "=== Sortie Internet des serveurs (WireGuard) ==="
+if command -v wg >/dev/null && wg show wg-mcs >/dev/null 2>&1; then
+  now=$(date +%s)
+  wg show wg-mcs dump | tail -n +2 | while IFS=$'\t' read -r _pub _psk _ep ips hs rx tx _ka; do
+    if [[ "$hs" == "0" ]]; then age="jamais"; else age="il y a $(( now - hs )) s"; fi
+    printf "  %-16s échange %-14s reçu %s o  envoyé %s o\n" "$ips" "$age" "$rx" "$tx"
+  done
+else
+  echo "  tunnel wg-mcs inactif"
+fi
 echo
 echo "=== Nodes ==="
 runuser -u postgres -- psql -qtA -d mcs_db -c "SELECT '  node ' || id || '  ' || COALESCE(hostname, '?') || '  ports=' || COALESCE(port_start || '-' || port_end, 'aucune') || '  online=' || is_online || '  heartbeat=' || COALESCE(to_char(last_heartbeat_at, 'YYYY-MM-DD HH24:MI'), 'jamais') || CASE WHEN is_revoked THEN '  (révoqué)' ELSE '' END FROM nodes ORDER BY id" 2>/dev/null
@@ -398,24 +410,78 @@ fi
 SHEOF
   chmod 755 /usr/local/bin/mcs-rathole-sync
 
-  # mcs-add-node : créer un node (plage de ports + jeton rathole dédiés) et
-  # produire le code de jumelage
+  # mcs-wg-sync : régénère la config WireGuard du VPS (sortie Internet des serveurs)
+  cat > /usr/local/bin/mcs-wg-sync <<'SHEOF'
+#!/usr/bin/env bash
+# sudo mcs-wg-sync
+#   Régénère /etc/wireguard/wg-mcs.conf à partir de /etc/mcs/nodes/*.env et
+#   l'applique sans couper les tunnels existants (wg syncconf).
+#   Les serveurs joueurs sortent sur Internet par ce tunnel : c'est l'IP du VPS
+#   qui est visible, jamais celle du volontaire.
+set -euo pipefail
+[[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
+# shellcheck disable=SC1091
+source /etc/mcs/runtime.env
+nodes_dir=/etc/mcs/nodes
+conf=/etc/wireguard/wg-mcs.conf
+[[ -f /etc/mcs/wg/vps.key ]] || { echo "Clé WireGuard du VPS absente : lance 'sudo mcs-deploy egress'"; exit 1; }
+pubif=$(ip -4 route show default | awk '{ for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')
+[[ -n "$pubif" ]] || { echo "Interface réseau publique introuvable"; exit 1; }
+mkdir -p /etc/wireguard
+chmod 700 /etc/wireguard
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+{
+  echo "# Généré par mcs-wg-sync depuis $nodes_dir - ne pas modifier à la main"
+  echo "[Interface]"
+  echo "Address = 10.99.0.1/16"
+  echo "ListenPort = ${WG_PORT:-51820}"
+  echo "PrivateKey = $(cat /etc/mcs/wg/vps.key)"
+  echo "PostUp = iptables -w -t nat -A POSTROUTING -s 10.99.0.0/16 -o $pubif -j MASQUERADE"
+  echo "PostDown = iptables -w -t nat -D POSTROUTING -s 10.99.0.0/16 -o $pubif -j MASQUERADE"
+  shopt -s nullglob
+  for f in "$nodes_dir"/*.env; do
+    (
+      # shellcheck disable=SC1090
+      source "$f"
+      [[ -n "${WG_PUBLIC:-}" && -n "${WG_IP:-}" ]] || exit 0
+      printf '\n# machine %s (%s)\n[Peer]\nPublicKey = %s\nAllowedIPs = %s/32\n' \
+        "$NODE_ID" "${NODE_NAME:-}" "$WG_PUBLIC" "$WG_IP"
+    )
+  done
+} > "$tmp"
+install -m 600 "$tmp" "$conf"
+if ip link show wg-mcs >/dev/null 2>&1; then
+  wg syncconf wg-mcs <(wg-quick strip wg-mcs)
+else
+  systemctl enable --now wg-quick@wg-mcs >/dev/null 2>&1
+fi
+SHEOF
+  chmod 755 /usr/local/bin/mcs-wg-sync
+
+  # mcs-add-node : créer un node (plage de ports, jeton rathole, clés WireGuard
+  # dédiés) et produire le code de jumelage. --renew <id> : nouveau code pour une
+  # machine existante (mêmes ports, nouveaux jetons et clés).
   cat > /usr/local/bin/mcs-add-node <<'SHEOF'
 #!/usr/bin/env bash
 # sudo mcs-add-node [--ssh] [nom]
 #   Crée un node dans l'API et affiche la commande à lancer sur la machine volontaire.
 #   --ssh : cette machine sera aussi joignable en SSH via le VPS (une seule machine à la fois)
+# sudo mcs-add-node --renew <id> [--ssh]
+#   Nouveau code pour une machine déjà jumelée (code perdu ou divulgué, mise à niveau) :
+#   ses anciens jetons et clés deviennent invalides, ses ports et ses serveurs sont conservés.
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
-ssh_tunnel=false
+ssh_flag=false
+renew_id=
 name=volontaire
-for a in "$@"; do
-  case "$a" in
-    --ssh) ssh_tunnel=true ;;
-    *) name=$a ;;
+while (( $# )); do
+  case "$1" in
+    --ssh) ssh_flag=true; shift ;;
+    --renew) renew_id=${2:-}; shift 2 || { echo "Usage : sudo mcs-add-node --renew <id>"; exit 1; } ;;
+    *) name=$1; shift ;;
   esac
 done
-[[ "$name" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || { echo "Nom invalide (lettres, chiffres, - et _, 32 max)"; exit 1; }
 # shellcheck disable=SC1091
 source /etc/mcs/secrets.env
 # shellcheck disable=SC1091
@@ -425,15 +491,30 @@ if [[ -f /etc/mcs/deploy.env ]]; then
   source /etc/mcs/deploy.env
 fi
 : "${MCS_REPO:=Vinchenzo06/mcs-deploy}" "${MCS_BRANCH:=main}"
-[[ "$ENABLE_SSH_TUNNEL" == "true" ]] || ssh_tunnel=false
 nodes_dir=/etc/mcs/nodes
+command -v wg >/dev/null && [[ -f /etc/mcs/wg/vps.pub ]] \
+  || { echo "WireGuard n'est pas configuré sur le VPS : lance 'sudo mcs-deploy egress'"; exit 1; }
+api() {
+  curl -fsS -X POST "http://127.0.0.1:8081/api/v1/admin/nodes$1" \
+    -H "X-API-Key: $LOBBY_API_KEY" -H "Content-Type: application/json" "${@:2}"
+}
 
-vid=$(runuser -u postgres -- psql -qtA -d mcs_db -c "SELECT id FROM volunteers ORDER BY id LIMIT 1")
-[[ -n "$vid" ]] || { echo "Aucun volontaire en base"; exit 1; }
-resp=$(curl -fsS -X POST "http://127.0.0.1:8081/api/v1/admin/nodes" \
-  -H "X-API-Key: $LOBBY_API_KEY" -H "Content-Type: application/json" \
-  -d "$(jq -n --argjson v "$vid" --arg h "$name" '{volunteerId: $v, region: "default", hostname: $h}')") \
-  || { echo "L'API a refusé la création du node (est-elle démarrée ?)"; exit 1; }
+if [[ -n "$renew_id" ]]; then
+  [[ "$renew_id" =~ ^[0-9]+$ ]] || { echo "Usage : sudo mcs-add-node --renew <id>"; exit 1; }
+  [[ -f "$nodes_dir/$renew_id.env" ]] || { echo "Machine $renew_id inconnue sur ce VPS ($nodes_dir/$renew_id.env)"; exit 1; }
+  # shellcheck disable=SC1090
+  old_ssh=$(source "$nodes_dir/$renew_id.env"; echo "${SSH:-false}")
+  # shellcheck disable=SC1090
+  name=$(source "$nodes_dir/$renew_id.env"; echo "${NODE_NAME:-volontaire}")
+  [[ "$ssh_flag" == "true" ]] || ssh_flag=$old_ssh
+  resp=$(api "/$renew_id/token") || { echo "L'API a refusé le renouvellement (machine révoquée ?)"; exit 1; }
+else
+  [[ "$name" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || { echo "Nom invalide (lettres, chiffres, - et _, 32 max)"; exit 1; }
+  vid=$(runuser -u postgres -- psql -qtA -d mcs_db -c "SELECT id FROM volunteers ORDER BY id LIMIT 1")
+  [[ -n "$vid" ]] || { echo "Aucun volontaire en base"; exit 1; }
+  resp=$(api "" -d "$(jq -n --argjson v "$vid" --arg h "$name" '{volunteerId: $v, region: "default", hostname: $h}')") \
+    || { echo "L'API a refusé la création du node (est-elle démarrée ?)"; exit 1; }
+fi
 node_id=$(jq -r '.nodeId // empty' <<<"$resp")
 port_start=$(jq -r '.portStart // empty' <<<"$resp")
 port_end=$(jq -r '.portEnd // empty' <<<"$resp")
@@ -441,12 +522,13 @@ node_token=$(jq -r '.nodeToken // empty' <<<"$resp")
 [[ "$node_id" =~ ^[0-9]+$ && "$port_start" =~ ^[0-9]+$ && "$port_end" =~ ^[0-9]+$ && -n "$node_token" ]] \
   || { echo "Réponse inattendue de l'API (API à jour ?) : $resp"; exit 1; }
 
-# Le tunnel SSH public est unique : on le retire de l'ancienne machine
+[[ "$ENABLE_SSH_TUNNEL" == "true" ]] || ssh_flag=false
 mkdir -p "$nodes_dir"
 chmod 700 "$nodes_dir"
-if [[ "$ssh_tunnel" == "true" ]]; then
+# Le tunnel SSH public est unique : on le retire des autres machines
+if [[ "$ssh_flag" == "true" ]]; then
   for f in "$nodes_dir"/*.env; do
-    [[ -e "$f" ]] || continue
+    [[ -e "$f" && "$f" != "$nodes_dir/$node_id.env" ]] || continue
     if grep -q '^SSH=true' "$f"; then
       sed -i 's/^SSH=true/SSH=false/' "$f"
       echo "! Le tunnel SSH est retiré de la machine $(basename "$f" .env)"
@@ -454,7 +536,13 @@ if [[ "$ssh_tunnel" == "true" ]]; then
   done
 fi
 
+# Adresse WireGuard de la machine : 10.99.x.y dérivée de son id (le VPS est 10.99.0.1)
+offset=$(( node_id + 1 ))
+wg_ip="10.99.$(( offset / 256 )).$(( offset % 256 ))"
+wg_private=$(wg genkey)
+wg_public=$(wg pubkey <<<"$wg_private")
 rathole_token=$(openssl rand -hex 32)
+
 umask 077
 cat > "$nodes_dir/$node_id.env" <<EOF
 NODE_ID=$node_id
@@ -462,16 +550,26 @@ NODE_NAME=$name
 RATHOLE_TOKEN=$rathole_token
 PORT_START=$port_start
 PORT_END=$port_end
-SSH=$ssh_tunnel
+SSH=$ssh_flag
+WG_IP=$wg_ip
+WG_PUBLIC=$wg_public
 EOF
 mcs-rathole-sync
+mcs-wg-sync
 
 code=$(jq -cn --arg vps "$VPS_IP" --argjson id "$node_id" --arg rt "$rathole_token" --arg nt "$node_token" \
-  --argjson ps "$port_start" --argjson pe "$port_end" --argjson ssh "$ssh_tunnel" --argjson sp "$SSH_TUNNEL_PORT" \
-  '{v: 2, vps: $vps, node_id: $id, rathole_token: $rt, node_token: $nt, ports: [$ps, $pe], ssh: $ssh, ssh_public_port: $sp}' | base64 -w0)
+  --argjson ps "$port_start" --argjson pe "$port_end" --argjson ssh "$ssh_flag" --argjson sp "$SSH_TUNNEL_PORT" \
+  --arg wk "$wg_private" --arg wip "$wg_ip" --arg wvp "$(cat /etc/mcs/wg/vps.pub)" --argjson wport "${WG_PORT:-51820}" \
+  '{v: 3, vps: $vps, node_id: $id, rathole_token: $rt, node_token: $nt, ports: [$ps, $pe],
+    ssh: $ssh, ssh_public_port: $sp, wg_private: $wk, wg_ip: $wip, wg_vps_public: $wvp, wg_port: $wport}' | base64 -w0)
 
 echo
-echo "Node $node_id créé ($name), ports $port_start-$port_end. Sur la machine volontaire, lance :"
+if [[ -n "$renew_id" ]]; then
+  echo "Nouveau code pour la machine $node_id ($name), ports $port_start-$port_end."
+  echo "Ses anciens jetons ne fonctionnent plus. Sur la machine, lance :"
+else
+  echo "Node $node_id créé ($name), ports $port_start-$port_end. Sur la machine volontaire, lance :"
+fi
 echo
 echo "curl -fsSL https://raw.githubusercontent.com/$MCS_REPO/$MCS_BRANCH/deploy/node-setup.sh | sudo bash -s -- $code"
 echo
@@ -495,6 +593,9 @@ if ! curl -fsS -o /dev/null -X POST "http://127.0.0.1:8081/api/v1/admin/nodes/$i
 fi
 rm -f "/etc/mcs/nodes/$id.env"
 mcs-rathole-sync
+if [[ -f /etc/wireguard/wg-mcs.conf ]]; then
+  mcs-wg-sync
+fi
 echo "✔ Machine $id révoquée : jeton refusé, tunnels supprimés."
 echo "  Ses serveurs restent en base : supprime-les avec /mcs delete."
 SHEOF
@@ -592,6 +693,22 @@ EOF
   local n
   n=$(find /etc/mcs/nodes -name '*.env' 2>/dev/null | wc -l)
   ok "Rathole actif (contrôle :2333, $n machine(s) configurée(s))"
+}
+
+step_egress() {
+  step "Sortie Internet des serveurs (WireGuard)"
+  apt-get install -y -qq wireguard-tools >/dev/null
+  install -d -m 700 "$ETC_DIR/wg"
+  if [[ ! -s "$ETC_DIR/wg/vps.key" ]]; then
+    (umask 077; wg genkey > "$ETC_DIR/wg/vps.key")
+  fi
+  wg pubkey < "$ETC_DIR/wg/vps.key" > "$ETC_DIR/wg/vps.pub"
+  printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/90-mcs-egress.conf
+  sysctl -q -p /etc/sysctl.d/90-mcs-egress.conf
+  install_helpers
+  mcs-wg-sync
+  ip link show wg-mcs >/dev/null 2>&1 || die "Tunnel wg-mcs absent. Logs : journalctl -u wg-quick@wg-mcs -n 50"
+  ok "WireGuard actif (UDP $WG_PORT, réseau 10.99.0.0/16, sortie NAT par le VPS)"
 }
 
 step_api() {
@@ -834,8 +951,29 @@ step_firewall() {
   if [[ "$ENABLE_SSH_TUNNEL" == "true" ]]; then
     ufw allow "$SSH_TUNNEL_PORT/tcp" comment 'tunnel SSH machine volontaire' >/dev/null
   fi
+
+  # Sortie Internet des serveurs joueurs (tunnel WireGuard des machines)
+  local pubif port
+  pubif=$(ip -4 route show default | awk '{ for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')
+  ufw allow "$WG_PORT/udp" comment 'WireGuard (sortie des serveurs)' >/dev/null
+  if [[ -n "$pubif" ]]; then
+    # Interdictions insérées en tête, donc toujours avant l'autorisation générale :
+    # pas de courriel (spam = plainte contre le VPS), pas de réseaux privés
+    # (réseau interne de l'hébergeur, métadonnées, autres machines du tunnel)
+    local net
+    for port in 25 465 587 2525; do
+      ufw route insert 1 deny in on wg-mcs out on "$pubif" proto tcp to any port "$port" \
+        comment 'pas de SMTP depuis les serveurs' >/dev/null
+    done
+    for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16; do
+      ufw route insert 1 deny in on wg-mcs to "$net" comment 'pas de réseau privé depuis les serveurs' >/dev/null
+    done
+    ufw route allow in on wg-mcs out on "$pubif" comment 'sortie Internet des serveurs' >/dev/null
+  else
+    warn "Interface publique introuvable : sortie des serveurs non autorisée dans ufw"
+  fi
   ufw --force enable >/dev/null
-  ok "Ouverts : SSH ${ssh_ports% }, 25565, 2333, 8081$([[ "$ENABLE_SSH_TUNNEL" == "true" ]] && echo ", $SSH_TUNNEL_PORT")"
+  ok "Ouverts : SSH ${ssh_ports% }, 25565, 2333, 8081, $WG_PORT/udp$([[ "$ENABLE_SSH_TUNNEL" == "true" ]] && echo ", $SSH_TUNNEL_PORT") ; transit wg-mcs → Internet (sauf SMTP)"
 }
 
 bootstrap_luckperms() {

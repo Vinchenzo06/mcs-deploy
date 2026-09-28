@@ -20,6 +20,10 @@ type Config struct {
 	Docker struct {
 		DataPath string `yaml:"data_path"`
 	} `yaml:"docker"`
+	Network struct {
+		// "vps" : les serveurs sortent sur Internet par le tunnel WireGuard du VPS
+		Egress string `yaml:"egress"`
+	} `yaml:"network"`
 }
 
 func loadConfig(path string) (*Config, error) {

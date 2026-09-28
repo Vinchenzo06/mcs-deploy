@@ -11,7 +11,7 @@ import (
 )
 
 // Version de l'agent (fait foi, indépendamment du fichier de config)
-const AgentVersion = "0.2.0"
+const AgentVersion = "0.3.0"
 
 // Vérifie régulièrement que l'isolation réseau est toujours en place
 // (un redémarrage de Docker ou un rechargement du pare-feu peut l'effacer).
@@ -32,6 +32,7 @@ func watchIsolation(stop <-chan struct{}) {
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "Chemin du fichier de config")
+	early := flag.Bool("early", false, "Pose les protections réseau (pare-feu, coupe-circuit) puis quitte : lancé au démarrage, avant Docker")
 	flag.Parse()
 
 	config, err := loadConfig(*configPath)
@@ -39,10 +40,26 @@ func main() {
 		log.Fatalf("Erreur de chargement de la config : %v", err)
 	}
 
+	if *early {
+		egressMode = config.Network.Egress
+		if err := applyEarlyProtections(); err != nil {
+			log.Fatalf("Protections réseau : %v", err)
+		}
+		log.Printf("Protections réseau posées (pare-feu MCS, coupe-circuit de sortie : %v)", egressMode == "vps")
+		return
+	}
+
 	config.Node.AgentVersion = AgentVersion
 	log.Printf("MCS Agent v%s démarrage...", AgentVersion)
 	log.Printf("Connexion à l'API : %s", config.API.URL)
 	log.Printf("Dossier de données : %s", config.Docker.DataPath)
+
+	egressMode = config.Network.Egress
+	if egressMode == "vps" {
+		log.Printf("Sortie Internet des serveurs : via le VPS (tunnel %s, coupe-circuit actif)", egressIface)
+	} else {
+		log.Printf("ATTENTION : sortie Internet des serveurs directe (IP de cette machine visible). Re-jumelle la machine pour passer par le VPS.")
+	}
 
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)

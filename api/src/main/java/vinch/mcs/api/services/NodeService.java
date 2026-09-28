@@ -42,10 +42,7 @@ public class NodeService {
         Volunteer volunteer = volunteerRepository.findById(request.getVolunteerId())
                 .orElseThrow(() -> new RuntimeException("Volontaire non trouvé : " + request.getVolunteerId()));
 
-        // Génère un token aléatoire de 32 bytes en base64
-        byte[] tokenBytes = new byte[32];
-        RANDOM.nextBytes(tokenBytes);
-        String token = Base64.getEncoder().withoutPadding().encodeToString(tokenBytes);
+        String token = generateToken();
 
         // Hash du token pour stockage
         String tokenHash = hashToken(token);
@@ -85,6 +82,41 @@ public class NodeService {
                 .portStart(portStart)
                 .portEnd(portEnd)
                 .build();
+    }
+
+    // Nouveau jeton pour une machine existante (code de jumelage perdu ou divulgué) :
+    // l'ancien jeton est immédiatement invalide. Plage de ports conservée.
+    @Transactional
+    public CreateNodeResponse rotateToken(Long nodeId) {
+        Node node = nodeRepository.findById(nodeId)
+                .orElseThrow(() -> new RuntimeException("Node introuvable : " + nodeId));
+        if (node.getIsRevoked()) {
+            throw new RuntimeException("Node révoqué : crée une nouvelle machine avec mcs-add-node");
+        }
+        if (node.getPortStart() == null) {
+            throw new RuntimeException("Node sans plage de ports : crée une nouvelle machine avec mcs-add-node");
+        }
+
+        String token = generateToken();
+        node.setNodeTokenHash(hashToken(token));
+        node.setIsOnline(false);
+        nodeRepository.save(node);
+        log.info("Nouveau jeton émis pour le node {}", nodeId);
+
+        return CreateNodeResponse.builder()
+                .nodeId(node.getId())
+                .nodeToken(token)
+                .region(node.getRegion())
+                .portStart(node.getPortStart())
+                .portEnd(node.getPortEnd())
+                .build();
+    }
+
+    // Jeton aléatoire de 32 octets en base64 (seul son hash est stocké)
+    private static String generateToken() {
+        byte[] tokenBytes = new byte[32];
+        RANDOM.nextBytes(tokenBytes);
+        return Base64.getEncoder().withoutPadding().encodeToString(tokenBytes);
     }
 
     @Transactional

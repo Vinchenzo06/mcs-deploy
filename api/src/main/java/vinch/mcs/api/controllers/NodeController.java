@@ -24,6 +24,18 @@ public class NodeController {
         return ResponseEntity.ok(nodeService.createNode(request));
     }
 
+    // Nouveau jeton pour une machine existante (re-jumelage) : l'ancien est refusé
+    @PostMapping("/{nodeId}/token")
+    public ResponseEntity<?> rotateToken(@PathVariable Long nodeId) {
+        try {
+            CreateNodeResponse response = nodeService.rotateToken(nodeId);
+            agentWebSocketHandler.disconnectNode(nodeId);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", String.valueOf(e.getMessage())));
+        }
+    }
+
     // Révoque une machine : son jeton est refusé et sa connexion coupée
     @PostMapping("/{nodeId}/revoke")
     public ResponseEntity<?> revokeNode(@PathVariable Long nodeId) {

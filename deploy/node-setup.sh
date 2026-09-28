@@ -12,6 +12,9 @@
 #  Tout ce qui est propre à cette machine (port SSH, nom...) est détecté ici :
 #  le VPS n'a pas besoin de le connaître. L'agent est téléchargé depuis la
 #  release GitHub "agent-latest", compilée automatiquement (GitHub Actions).
+#
+#  Les serveurs joueurs sortent sur Internet par un tunnel WireGuard vers le VPS
+#  (wg-mcs) : l'IP de cette machine n'est jamais visible depuis les serveurs.
 # =============================================================================
 set -euo pipefail
 
@@ -40,12 +43,13 @@ prerequisites() {
   for bin in jq curl unzip iptables; do
     command -v "$bin" >/dev/null || missing+=("$bin")
   done
+  command -v wg-quick >/dev/null || missing+=(wireguard-tools)
   if (( ${#missing[@]} )); then
     command -v apt-get >/dev/null || die "Installe d'abord : ${missing[*]}"
     apt-get update -qq
     apt-get install -y -qq "${missing[@]}" >/dev/null
   fi
-  ok "jq, curl, unzip, iptables"
+  ok "jq, curl, unzip, iptables, wireguard-tools"
 
   if ! command -v docker >/dev/null; then
     command -v apt-get >/dev/null || die "Docker est requis : installe-le d'abord"
@@ -90,6 +94,22 @@ install_agent_binary() {
 }
 
 write_agent_unit() {
+  # Protections réseau posées au démarrage AVANT Docker : les conteneurs qui
+  # redémarrent seuls ne sont jamais, même quelques secondes, sans isolation.
+  cat > /etc/systemd/system/mcs-netguard.service <<EOF
+[Unit]
+Description=MCS - Protections réseau des serveurs (avant Docker)
+Before=docker.service
+After=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=$AGENT_BIN -config $AGENT_CFG -early
+
+[Install]
+WantedBy=multi-user.target
+EOF
   cat > /etc/systemd/system/mcs-agent.service <<EOF
 [Unit]
 Description=MCS - Agent (serveurs Minecraft de cette machine)
@@ -107,7 +127,7 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
-  systemctl enable mcs-agent >/dev/null 2>&1
+  systemctl enable mcs-netguard mcs-agent >/dev/null 2>&1
 }
 
 show_agent_log() {
@@ -136,7 +156,7 @@ prerequisites
 json=$(printf '%s' "$ARG" | base64 -d 2>/dev/null) || die "Code invalide"
 jq -e . >/dev/null 2>&1 <<<"$json" || die "Code invalide"
 field() { jq -r "$1 // empty" <<<"$json"; }
-[[ "$(field .v)" == "2" ]] || die "Code d'une ancienne version : génère-en un nouveau avec 'sudo mcs-add-node' sur le VPS (à jour)"
+[[ "$(field .v)" == "3" ]] || die "Code d'une ancienne version : génère-en un nouveau sur le VPS (à jour) avec 'sudo mcs-add-node' (ou 'sudo mcs-add-node --renew <id>' pour cette machine)"
 NODE_ID=$(field .node_id)
 VPS_IP=$(field .vps)
 RATHOLE_TOKEN=$(field .rathole_token)
@@ -145,8 +165,17 @@ PORT_START=$(field '.ports[0]')
 PORT_END=$(field '.ports[1]')
 SSH_TUNNEL=$(field .ssh)
 SSH_PUBLIC_PORT=$(field .ssh_public_port)
+WG_PRIVATE=$(field .wg_private)
+WG_IP=$(field .wg_ip)
+WG_VPS_PUBLIC=$(field .wg_vps_public)
+WG_PORT=$(field .wg_port)
 [[ "$NODE_ID" =~ ^[0-9]+$ && -n "$VPS_IP" && -n "$RATHOLE_TOKEN" && -n "$NODE_TOKEN" \
-   && "$PORT_START" =~ ^[0-9]+$ && "$PORT_END" =~ ^[0-9]+$ ]] || die "Code incomplet"
+   && "$PORT_START" =~ ^[0-9]+$ && "$PORT_END" =~ ^[0-9]+$ \
+   && -n "$WG_PRIVATE" && -n "$WG_IP" && -n "$WG_VPS_PUBLIC" && "$WG_PORT" =~ ^[0-9]+$ ]] || die "Code incomplet"
+
+# Machine déjà jumelée sous ce même numéro ? (renouvellement : ses serveurs sont conservés)
+PREVIOUS_NODE_ID=$(grep -oE 'client\.services\.n[0-9]+-' /etc/rathole/client.toml 2>/dev/null \
+  | head -1 | grep -oE '[0-9]+' || true)
 
 # --------------------------------------------------------- détection locale ----
 step "Détection de la machine"
@@ -204,6 +233,50 @@ EOF
 fi
 ok "client.toml écrit (ports $PORT_START-$PORT_END$([[ "$SSH_TUNNEL" == "true" ]] && echo ", SSH $SSH_PORT"))"
 
+# --------------------------------------------------------------- wireguard ----
+step "Sortie Internet des serveurs (WireGuard vers le VPS)"
+ip link add wg-mcs-test type wireguard 2>/dev/null && ip link del wg-mcs-test \
+  || die "Le noyau de cette machine ne prend pas en charge WireGuard"
+mkdir -p /etc/wireguard
+chmod 700 /etc/wireguard
+cat > /etc/wireguard/wg-mcs.conf <<EOF
+# Généré par node-setup.sh (VPS $VPS_IP, node $NODE_ID)
+# Seuls les serveurs joueurs (pont mcs-br0) passent par ce tunnel : l'agent
+# route leur trafic vers la table 51820. "Table = off" : le reste de la
+# machine n'est pas touché.
+[Interface]
+PrivateKey = $WG_PRIVATE
+Address = $WG_IP/32
+MTU = 1420
+Table = off
+PostUp = ip -4 route replace default dev %i table 51820
+PostUp = sysctl -qw net.ipv4.conf.%i.rp_filter=2
+PostUp = iptables -w -t mangle -A FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+PostUp = iptables -w -t mangle -A FORWARD -i %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+PostDown = iptables -w -t mangle -D FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+PostDown = iptables -w -t mangle -D FORWARD -i %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+
+[Peer]
+PublicKey = $WG_VPS_PUBLIC
+Endpoint = $VPS_IP:$WG_PORT
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+EOF
+chmod 600 /etc/wireguard/wg-mcs.conf
+systemctl enable wg-quick@wg-mcs >/dev/null 2>&1
+systemctl restart wg-quick@wg-mcs || die "Tunnel WireGuard impossible à démarrer : journalctl -u wg-quick@wg-mcs -n 30"
+hs=0
+for _ in $(seq 1 15); do
+  hs=$(wg show wg-mcs latest-handshakes | awk '{ print $2; exit }')
+  [[ "${hs:-0}" != "0" ]] && break
+  sleep 1
+done
+if [[ "${hs:-0}" == "0" ]]; then
+  warn "Aucun échange avec le VPS pour l'instant (port UDP $WG_PORT bloqué ?). Vérifie : sudo wg show wg-mcs"
+else
+  ok "Tunnel wg-mcs actif ($WG_IP ↔ $VPS_IP:$WG_PORT)"
+fi
+
 # ------------------------------------------------------------------- agent ----
 step "Agent MCS"
 install_agent_binary
@@ -227,6 +300,10 @@ heartbeat:
 
 docker:
   data_path: $DATA_PATH
+
+network:
+  # Les serveurs sortent sur Internet par le tunnel WireGuard du VPS
+  egress: vps
 EOF
 chmod 600 "$AGENT_CFG"
 mkdir -p "$DATA_PATH"
@@ -234,7 +311,8 @@ write_agent_unit
 ok "config.yaml écrit (données : $DATA_PATH)"
 
 # -------------------------------------------------- conteneurs orphelins ----
-if [[ -n "$(docker ps -aq --filter label=mcs.managed=true)" ]]; then
+# Seulement si cette machine change de numéro : un renouvellement garde ses serveurs
+if [[ "$PREVIOUS_NODE_ID" != "$NODE_ID" && -n "$(docker ps -aq --filter label=mcs.managed=true)" ]]; then
   step "Anciens serveurs MCS"
   echo "    Ces conteneurs appartiennent à une ancienne base de données et"
   echo "    entreront en conflit avec les nouveaux serveurs :"
@@ -260,7 +338,7 @@ systemctl restart mcs-agent
 show_agent_log
 
 echo
-ok "Machine connectée au VPS $VPS_IP (node $NODE_ID, ports $PORT_START-$PORT_END)"
+ok "Machine connectée au VPS $VPS_IP (node $NODE_ID, ports $PORT_START-$PORT_END, sortie via le VPS)"
 if [[ "$SSH_TUNNEL" == "true" ]]; then
   echo "    SSH depuis l'extérieur : ssh -p $SSH_PUBLIC_PORT ${SUDO_USER:-<utilisateur>}@$VPS_IP"
 fi

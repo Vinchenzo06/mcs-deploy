@@ -62,6 +62,10 @@ func ensureIsolation() error {
 		isolationReady.Store(false)
 		return fmt.Errorf("réseau Docker %s : %w", mcsNetwork, err)
 	}
+	if err := ensureEgress(); err != nil {
+		isolationReady.Store(false)
+		return fmt.Errorf("routage de sortie : %w", err)
+	}
 	if !firewallHealthy() {
 		if err := applyFirewall(); err != nil {
 			isolationReady.Store(false)
@@ -70,6 +74,23 @@ func ensureIsolation() error {
 		log.Printf("Isolation réseau appliquée (réseau %s, pont %s)", mcsNetwork, mcsBridge)
 	}
 	isolationReady.Store(true)
+	return nil
+}
+
+// applyEarlyProtections : au démarrage de la machine, avant Docker et donc avant
+// que les conteneurs (restart unless-stopped) ne redémarrent. Le réseau Docker
+// n'existe pas encore, mais les règles ne dépendent que du nom du pont.
+func applyEarlyProtections() error {
+	isolationMu.Lock()
+	defer isolationMu.Unlock()
+	if err := ensureEgress(); err != nil {
+		return fmt.Errorf("routage de sortie : %w", err)
+	}
+	if !firewallHealthy() {
+		if err := applyFirewall(); err != nil {
+			return fmt.Errorf("pare-feu : %w", err)
+		}
+	}
 	return nil
 }
 

@@ -45,6 +45,11 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 		}
 	}
 
+	// Sortie via le VPS : sans tunnel actif, le serveur ne pourrait rien télécharger
+	if err := egressTunnelUp(); err != nil {
+		return fmt.Errorf("création refusée : %w", err)
+	}
+
 	serverPath := serverDataPath(dataPath, req.ServerID)
 
 	// Créer le dossier de données, propriété de l'utilisateur du conteneur
