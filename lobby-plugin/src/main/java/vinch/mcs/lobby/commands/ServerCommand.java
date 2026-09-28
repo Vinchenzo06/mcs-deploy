@@ -46,6 +46,7 @@ public class ServerCommand implements CommandExecutor {
             case "stop" -> handleStop(player, args);
             case "restart" -> handleRestart(player, args);
             case "quota" -> handleQuota(player);
+            case "info" -> handleInfo(player, args);
             default -> sendUsage(player);
         }
 
@@ -65,6 +66,7 @@ public class ServerCommand implements CommandExecutor {
         player.sendMessage(Component.text("  /mcs stop <nom>").color(NamedTextColor.AQUA));
         player.sendMessage(Component.text("  /mcs restart <nom>").color(NamedTextColor.AQUA));
         player.sendMessage(Component.text("  /mcs quota").color(NamedTextColor.AQUA));
+        player.sendMessage(Component.text("  /mcs info <nom>").color(NamedTextColor.AQUA));
     }
 
     private void handleCreate(Player player, String[] args) {
@@ -274,6 +276,62 @@ public class ServerCommand implements CommandExecutor {
                         sendToServer(player, velocityName);
                     });
                 });
+    }
+
+    private void handleInfo(Player player, String[] args) {
+        if (args.length != 2) {
+            player.sendMessage(Component.text("Usage : /mcs info <nom>").color(NamedTextColor.RED));
+            return;
+        }
+        String name = args[1].toLowerCase();
+
+        plugin.getApiClient().getPlayerByUuid(player.getUniqueId())
+                .thenCompose(playerInfo -> plugin.getApiClient()
+                        .getServerByOwnerAndName(playerInfo.get("id").asLong(), name))
+                .thenCompose(server -> plugin.getApiClient().getServerStats(server.get("id").asLong()))
+                .whenComplete((stats, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (error != null) {
+                        String msg = String.valueOf(error.getMessage());
+                        if (msg.contains("404") || msg.contains("introuvable")) {
+                            player.sendMessage(Component.text("❌ Serveur introuvable.").color(NamedTextColor.RED));
+                        } else {
+                            player.sendMessage(Component.text("❌ Erreur : " + msg).color(NamedTextColor.RED));
+                        }
+                        return;
+                    }
+                    sendInfo(player, stats);
+                }));
+    }
+
+    private void sendInfo(Player player, JsonNode s) {
+        String status = s.path("status").asText("?");
+        NamedTextColor color = switch (status) {
+            case "RUNNING" -> NamedTextColor.GREEN;
+            case "STARTING", "CREATING", "STOPPING" -> NamedTextColor.YELLOW;
+            case "ERROR" -> NamedTextColor.RED;
+            default -> NamedTextColor.GRAY;
+        };
+        player.sendMessage(Component.text("=== " + s.path("name").asText() + " ===").color(NamedTextColor.GOLD));
+        player.sendMessage(Component.text("État : ").color(NamedTextColor.GRAY)
+                .append(Component.text(status + " (" + s.path("health").asText("?") + ")").color(color)));
+        player.sendMessage(Component.text("Type : " + s.path("serverType").asText("?") + " "
+                + s.path("minecraftVersion").asText("")).color(NamedTextColor.GRAY));
+        player.sendMessage(Component.text("Joueurs : " + s.path("players").asInt(0)).color(NamedTextColor.AQUA));
+        if (s.has("memUsedMb")) {
+            player.sendMessage(Component.text(String.format("CPU : %.1f %% (%d vcore(s) alloué(s))",
+                    s.path("cpuPercent").asDouble(), s.path("allocatedCpuCores").asInt())).color(NamedTextColor.AQUA));
+            player.sendMessage(Component.text(String.format("RAM : %d / %d Mo (tas Java : %d Mo)",
+                    s.path("memUsedMb").asLong(), s.path("memLimitMb").asLong(),
+                    s.path("allocatedRamMb").asInt())).color(NamedTextColor.AQUA));
+        }
+        if (s.hasNonNull("diskUsedMb")) {
+            player.sendMessage(Component.text(String.format("Disque : %d / %d Mo",
+                    s.path("diskUsedMb").asLong(), s.path("allocatedStorageMb").asInt())).color(NamedTextColor.AQUA));
+        }
+        if (s.has("metricsAgeSeconds")) {
+            player.sendMessage(Component.text("(mesures d'il y a " + s.path("metricsAgeSeconds").asLong() + " s)")
+                    .color(NamedTextColor.DARK_GRAY));
+        }
     }
 
     private void handleStart(Player player, String[] args) {

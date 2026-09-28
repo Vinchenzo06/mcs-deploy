@@ -9,6 +9,7 @@ import vinch.mcs.api.entities.Server;
 import vinch.mcs.api.entities.ServerStatus;
 import vinch.mcs.api.repositories.ServerRepository;
 import vinch.mcs.api.websocket.AgentInventoryEvent;
+import vinch.mcs.api.websocket.AgentServerEvent;
 import vinch.mcs.api.websocket.AgentWebSocketHandler;
 
 import java.time.LocalDateTime;
@@ -39,6 +40,64 @@ public class ReconciliationService {
     private final ServerRepository serverRepository;
     private final AgentWebSocketHandler agentWebSocketHandler;
     private final VelocityClient velocityClient;
+    private final ServerMetricsService metricsService;
+
+    /**
+     * Événements en direct. Les opérations lancées par l'API (création, arrêt)
+     * gardent la main sur le statut : seuls les changements survenus hors de son
+     * contrôle (plantage, redémarrage automatique, action manuelle) sont appliqués.
+     */
+    @EventListener
+    @Transactional
+    public void onServerEvent(AgentServerEvent event) {
+        Server server = serverRepository.findById(event.serverId()).orElse(null);
+        if (server == null) {
+            return; // orphelin : l'inventaire s'en occupe
+        }
+        if (server.getNode() == null || !server.getNode().getId().equals(event.nodeId())) {
+            log.warn("Événement ignoré : le serveur {} n'est pas sur la machine {}", event.serverId(), event.nodeId());
+            return;
+        }
+        metricsService.recordHealth(server.getId(), event.event());
+
+        ServerStatus status = server.getStatus();
+        if (status == ServerStatus.CREATING || status == ServerStatus.STOPPING) {
+            return;
+        }
+
+        switch (event.event()) {
+            case "start" -> {
+                // Redémarrage hors de l'API (automatique après plantage, ou manuel)
+                if (status == ServerStatus.STOPPED || status == ServerStatus.ERROR) {
+                    server.setStatus(ServerStatus.STARTING);
+                    serverRepository.save(server);
+                }
+            }
+            case "healthy" -> {
+                // Minecraft répond : le serveur est réellement joignable
+                if (status != ServerStatus.RUNNING) {
+                    log.info("Serveur {} ({}) prêt -> RUNNING", server.getId(), server.getVelocityName());
+                    server.setStatus(ServerStatus.RUNNING);
+                    server.setLastStartedAt(LocalDateTime.now());
+                    serverRepository.save(server);
+                    register(server);
+                }
+            }
+            case "die" -> {
+                if (status == ServerStatus.RUNNING || status == ServerStatus.STARTING) {
+                    log.warn("Serveur {} ({}) arrêté hors de l'API (code {}) -> STOPPED",
+                            server.getId(), server.getVelocityName(), event.exitCode());
+                    server.setStatus(ServerStatus.STOPPED);
+                    server.setLastStoppedAt(LocalDateTime.now());
+                    serverRepository.save(server);
+                    unregister(server);
+                }
+            }
+            case "unhealthy" -> log.warn("Serveur {} ({}) ne répond plus (healthcheck)",
+                    server.getId(), server.getVelocityName());
+            default -> { }
+        }
+    }
 
     @EventListener
     @Transactional

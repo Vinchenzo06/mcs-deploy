@@ -166,6 +166,18 @@ public class ApiClient {
     /**
      * Récupère un serveur par owner + nom
      */
+    /** État et mesures d'un serveur (CPU, RAM, disque, joueurs...) */
+    public CompletableFuture<JsonNode> getServerStats(long serverId) {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(config.getApiUrl() + "/api/v1/servers/" + serverId + "/stats"))
+                .header("X-API-Key", config.getApiKey())
+                .timeout(Duration.ofSeconds(10))
+                .GET()
+                .build();
+
+        return sendAsync(request);
+    }
+
     public CompletableFuture<JsonNode> getServerByOwnerAndName(Long ownerId, String name) {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(config.getApiUrl() + "/api/v1/servers/by-owner-name?ownerId=" + ownerId + "&name=" + name))

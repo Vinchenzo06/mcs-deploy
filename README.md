@@ -97,7 +97,14 @@ sudo mcs-admin TonPseudo
 
 ## Cohérence machines ↔ API
 
-À chaque connexion (puis toutes les 5 minutes), l'agent envoie l'inventaire de ses
+**En direct** : l'agent suit les événements Docker et prévient l'API à la seconde
+près quand un serveur démarre, devient joignable (healthcheck de l'image : Minecraft
+répond), plante ou s'arrête. Un serveur n'est ouvert dans Velocity que lorsqu'il est
+réellement joignable. Toutes les 30 s, l'agent envoie aussi les mesures (CPU, RAM,
+réseau ; disque toutes les 10 min), visibles avec `/mcs info <nom>` et sur la route
+`GET /api/v1/servers/{id}/stats` (future base du panneau web).
+
+En filet de sécurité, à chaque connexion (puis toutes les 5 minutes), l'agent envoie l'inventaire de ses
 conteneurs. L'API corrige les statuts (serveur arrêté ou redémarré hors de son
 contrôle, conteneur disparu → `ERROR`) et met en **quarantaine** les conteneurs
 qu'elle ne connaît pas : arrêtés, renommés `mcs-orphan-<id>-<date>`, **données

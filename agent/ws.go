@@ -41,7 +41,7 @@ type HeartbeatMessage struct {
 	Stats map[string]interface{} `json:"stats"`
 }
 
-func runConnection(config *Config, stopChan chan struct{}) error {
+func runConnection(config *Config, stopChan chan struct{}, events <-chan serverEvent) error {
 	conn, _, err := websocket.DefaultDialer.Dial(config.API.URL, nil)
 	if err != nil {
 		return err
@@ -107,6 +107,16 @@ func runConnection(config *Config, stopChan chan struct{}) error {
 		}
 	}()
 
+	// Événements accumulés pendant la déconnexion : périmés, l'inventaire complet
+	// envoyé juste après les remplace
+	for drained := false; !drained; {
+		select {
+		case <-events:
+		default:
+			drained = true
+		}
+	}
+
 	// Inventaire complet à la connexion : l'API réconcilie tous les statuts
 	if err := sendInventory(conn, true); err != nil {
 		log.Printf("Inventaire : %v", err)
@@ -116,6 +126,10 @@ func runConnection(config *Config, stopChan chan struct{}) error {
 	defer heartbeatTicker.Stop()
 	inventoryTicker := time.NewTicker(inventoryInterval)
 	defer inventoryTicker.Stop()
+	statsTicker := time.NewTicker(statsInterval)
+	defer statsTicker.Stop()
+
+	go sendStats(conn, config.Docker.DataPath)
 
 	for {
 		select {
@@ -125,6 +139,16 @@ func runConnection(config *Config, stopChan chan struct{}) error {
 			if err := sendHeartbeat(conn); err != nil {
 				return err
 			}
+		case ev := <-events:
+			msg := map[string]interface{}{"type": "server_event", "server_id": ev.ServerID, "event": ev.Event}
+			if ev.ExitCode != nil {
+				msg["exit_code"] = *ev.ExitCode
+			}
+			if err := writeJSON(conn, msg); err != nil {
+				return err
+			}
+		case <-statsTicker.C:
+			go sendStats(conn, config.Docker.DataPath)
 		case <-inventoryTicker.C:
 			if err := sendInventory(conn, false); err != nil {
 				log.Printf("Inventaire : %v", err)

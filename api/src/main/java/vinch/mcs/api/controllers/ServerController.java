@@ -7,6 +7,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import vinch.mcs.api.dto.CreateServerRequest;
 import vinch.mcs.api.dto.CreateServerResponse;
+import vinch.mcs.api.repositories.ServerRepository;
+import vinch.mcs.api.services.ServerMetricsService;
 import vinch.mcs.api.services.ServerService;
 
 import java.util.Map;
@@ -18,6 +20,16 @@ import java.util.Map;
 public class ServerController {
 
     private final ServerService serverService;
+    private final ServerMetricsService metricsService;
+    private final ServerRepository serverRepository;
+
+    // État et mesures d'un serveur (panneau, /mcs info)
+    @GetMapping("/{serverId}/stats")
+    public ResponseEntity<?> getServerStats(@PathVariable Long serverId) {
+        return serverRepository.findById(serverId)
+                .<ResponseEntity<?>>map(server -> ResponseEntity.ok(metricsService.describe(server)))
+                .orElseGet(() -> ResponseEntity.status(404).body(Map.of("error", "Serveur introuvable")));
+    }
 
     @PostMapping
     public ResponseEntity<?> createServer(@Valid @RequestBody CreateServerRequest request) {

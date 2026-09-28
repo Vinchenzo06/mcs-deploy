@@ -59,6 +59,8 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
                 case "heartbeat" -> handleHeartbeat(session, json);
                 case "command_result" -> handleCommandResult(json);
                 case "inventory" -> handleInventory(session, json);
+                case "server_event" -> handleServerEvent(session, json);
+                case "server_stats" -> handleServerStats(session, json);
                 default -> {
                     if (sessionToNode.containsKey(session.getId())) {
                         log.debug("Message reçu de node {} : type={}", sessionToNode.get(session.getId()), type);
@@ -94,6 +96,31 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
         boolean fullSync = json.path("full_sync").asBoolean(false);
         log.debug("Inventaire de la machine {} : {} conteneur(s) (complet={})", nodeId, containers.size(), fullSync);
         eventPublisher.publishEvent(new AgentInventoryEvent(nodeId, containers, fullSync));
+    }
+
+    // Événement Docker en direct (démarrage, arrêt, santé) d'un serveur
+    private void handleServerEvent(WebSocketSession session, JsonNode json) throws Exception {
+        Long nodeId = sessionToNode.get(session.getId());
+        if (nodeId == null) {
+            sendError(session, "not_authenticated");
+            return;
+        }
+        if (!json.hasNonNull("server_id") || !json.hasNonNull("event")) {
+            return;
+        }
+        Integer exitCode = json.hasNonNull("exit_code") ? json.get("exit_code").asInt() : null;
+        eventPublisher.publishEvent(new AgentServerEvent(
+                nodeId, json.get("server_id").asLong(), json.get("event").asText(), exitCode));
+    }
+
+    // Mesures périodiques des serveurs de la machine
+    private void handleServerStats(WebSocketSession session, JsonNode json) throws Exception {
+        Long nodeId = sessionToNode.get(session.getId());
+        if (nodeId == null) {
+            sendError(session, "not_authenticated");
+            return;
+        }
+        eventPublisher.publishEvent(new AgentStatsEvent(nodeId, json.get("servers")));
     }
 
     private void handleCommandResult(JsonNode json) {

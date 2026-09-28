@@ -27,6 +27,7 @@ public class ServerService {
     private final PlayerRepository playerRepository;
     private final AgentWebSocketHandler agentWebSocketHandler;
     private final VelocityClient velocityClient;
+    private final ServerMetricsService metricsService;
 
     @Transactional
     public CreateServerResponse createServer(CreateServerRequest request) throws Exception {
@@ -232,6 +233,7 @@ public class ServerService {
 
         // 3. VRAIE suppression en base
         serverRepository.delete(server);
+        metricsService.forget(serverId);
         log.info("Serveur {} supprimé de la base", serverId);
     }
 

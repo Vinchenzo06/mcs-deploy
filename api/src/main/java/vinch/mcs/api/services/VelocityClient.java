@@ -56,6 +56,30 @@ public class VelocityClient {
     /**
      * Retire un serveur de Velocity
      */
+    /** Nombre de joueurs connectés par serveur (nom Velocity -> joueurs) ; vide si Velocity ne répond pas */
+    public Map<String, Integer> getPlayerCounts() {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(velocityUrl + "/servers"))
+                    .header("X-Plugin-Key", pluginKey)
+                    .timeout(Duration.ofSeconds(3))
+                    .GET()
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                return Map.of();
+            }
+            Map<String, Integer> counts = new java.util.HashMap<>();
+            for (var s : objectMapper.readTree(response.body()).path("servers")) {
+                counts.put(s.path("name").asText(), s.path("players").asInt(0));
+            }
+            return counts;
+        } catch (Exception e) {
+            log.debug("Nombre de joueurs indisponible : {}", e.getMessage());
+            return Map.of();
+        }
+    }
+
     public void unregisterServer(String name) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(velocityUrl + "/servers/" + name))

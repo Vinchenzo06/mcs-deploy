@@ -11,7 +11,7 @@ import (
 )
 
 // Version de l'agent (fait foi, indépendamment du fichier de config)
-const AgentVersion = "0.4.0"
+const AgentVersion = "0.5.0"
 
 // Vérifie régulièrement que l'isolation réseau est toujours en place
 // (un redémarrage de Docker ou un rechargement du pare-feu peut l'effacer).
@@ -77,13 +77,17 @@ func main() {
 	}
 	go watchIsolation(stopChan)
 
+	// Événements Docker (démarrage, arrêt, santé) transmis à l'API en direct
+	events := make(chan serverEvent, 256)
+	go watchDockerEvents(events, stopChan)
+
 	for {
 		select {
 		case <-stopChan:
 			log.Println("Agent arrêté")
 			return
 		default:
-			err := runConnection(config, stopChan)
+			err := runConnection(config, stopChan, events)
 			if err != nil {
 				delay := 5 * time.Second
 				if errors.Is(err, errAuth) {

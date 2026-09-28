@@ -15,7 +15,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ServerTabCompleter implements TabCompleter {
 
     private static final List<String> SUBCOMMANDS = List.of(
-            "create", "list", "delete", "join", "start", "stop", "restart", "quota"
+            "create", "list", "delete", "join", "start", "stop", "restart", "quota", "info"
     );
 
     private static final List<String> TYPES = List.of(
@@ -62,6 +62,7 @@ public class ServerTabCompleter implements TabCompleter {
                 case "delete":
                 case "join":
                 case "restart":
+                case "info":
                     refreshCacheIfNeeded(player);
                     return filter(getServerNames(player, null), args[1]);
 
