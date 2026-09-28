@@ -121,6 +121,17 @@ sys.exit(1)
 PYLP
 }
 
+# LuckPerms de ce service a-t-il ouvert la base PostgreSQL depuis ce moment ?
+# (attend jusqu'à 20 s que la ligne apparaisse dans le journal)
+luckperms_on_postgres() {
+  local unit=$1 since=$2 i
+  for ((i = 0; i < 20; i++)); do
+    journalctl -u "$unit" --since "$since" --no-pager 2>/dev/null | grep -qi "storage provider.*postgre" && return 0
+    sleep 1
+  done
+  return 1
+}
+
 # Télécharge LuckPerms pour une plateforme (bukkit | velocity) s'il manque
 install_luckperms() {
   local platform=$1 dir=$2 var=$3
@@ -1089,16 +1100,18 @@ SuccessExitStatus=143
 WantedBy=multi-user.target
 EOF
   configure_luckperms_file "$VELOCITY_DIR/plugins/luckperms/config.yml" || true
+  local velocity_since
+  velocity_since=$(date '+%Y-%m-%d %H:%M:%S')
   restart_service minecraft-velocity
   wait_port 25565 90 || die "Velocity ne démarre pas. Logs : journalctl -u minecraft-velocity -n 100"
   # Premier démarrage avec LuckPerms : son config.yml vient d'être créé
   if configure_luckperms_file "$VELOCITY_DIR/plugins/luckperms/config.yml"; then
     chown "$MC_USER:$MC_USER" "$VELOCITY_DIR/plugins/luckperms/config.yml"
+    velocity_since=$(date '+%Y-%m-%d %H:%M:%S')
     systemctl restart minecraft-velocity
     wait_port 25565 90 || die "Velocity ne redémarre pas. Logs : journalctl -u minecraft-velocity -n 100"
   fi
-  sleep 3
-  if journalctl -u minecraft-velocity -n 400 --no-pager 2>/dev/null | grep -qi "storage provider.*postgre"; then
+  if luckperms_on_postgres minecraft-velocity "$velocity_since"; then
     ok "LuckPerms du proxy sur PostgreSQL (partagé avec le lobby)"
   elif compgen -G "$VELOCITY_DIR/plugins/LuckPerms-*.jar" >/dev/null; then
     warn "LuckPerms du proxy ne semble pas utiliser PostgreSQL : 'journalctl -u minecraft-velocity | grep -i storage'"
@@ -1198,6 +1211,8 @@ SuccessExitStatus=143
 [Install]
 WantedBy=multi-user.target
 EOF
+  local lobby_since
+  lobby_since=$(date '+%Y-%m-%d %H:%M:%S')
   restart_service minecraft-lobby
   echo "    Démarrage du lobby (premier lancement = génération du monde)..."
   wait_port "$RCON_PORT" 240 || die "Le lobby ne démarre pas. Logs : journalctl -u minecraft-lobby -n 100"
@@ -1210,7 +1225,7 @@ EOF
     fi
     touch "$lp_marker"
   fi
-  if journalctl -u minecraft-lobby -n 400 --no-pager 2>/dev/null | grep -qi "storage provider.*postgre"; then
+  if luckperms_on_postgres minecraft-lobby "$lobby_since"; then
     ok "LuckPerms du lobby sur PostgreSQL (partagé avec le proxy)"
   else
     warn "LuckPerms du lobby ne semble pas utiliser PostgreSQL : vérifie 'journalctl -u minecraft-lobby | grep -i storage'"
