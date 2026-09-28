@@ -528,28 +528,114 @@ public class ServerService {
     }
 
     /**
-     * Un joueur vient d'arriver sur un serveur (prévenu par le proxy) : les admins
-     * y sont OP automatiquement. Ne bloque pas le proxy.
+     * Un joueur vient d'arriver sur un serveur (prévenu par le proxy), par la console :
+     *  - le créateur du serveur et les admins y sont OP automatiquement ;
+     *  - son rôle réseau (groupe LuckPerms) s'affiche en préfixe via une équipe
+     *    vanilla "mcs_<rang>" (chat, Tab, au-dessus de la tête), sauf si le
+     *    propriétaire l'a coupé (/mcs display). Marche sur Paper, Fabric, Forge, Vanilla.
+     * Ne bloque pas le proxy.
      */
     public void onPlayerConnected(String velocityName, UUID uuid) {
         Optional<Server> server = serverRepository.findByVelocityName(velocityName);
         Optional<Player> player = playerRepository.findByMinecraftUuid(uuid);
-        if (server.isEmpty() || player.isEmpty() || !AccessService.isAdmin(player.get())) {
+        if (server.isEmpty() || player.isEmpty()) {
             return;
         }
         Server s = server.get();
+        Player p = player.get();
         if (s.getStatus() != ServerStatus.RUNNING || s.getNode() == null) {
             return;
         }
-        String name = player.get().getMinecraftUsername();
+        String name = p.getMinecraftUsername();
+        List<String> commands = new ArrayList<>();
+        if (AccessService.isOwner(p, s) || AccessService.isAdmin(p)) {
+            commands.add("op " + name);
+        }
+        if (!Boolean.FALSE.equals(s.getShowNetworkRank())) {
+            String team = teamName(p.getNetworkRank());
+            String prefix = safeTextComponent(p.getNetworkPrefix());
+            commands.add("team add " + team);
+            commands.add("team modify " + team + " prefix " + prefix);
+            commands.add("team join " + team + " " + name);
+        }
+        if (commands.isEmpty()) {
+            return;
+        }
         Long nodeId = s.getNode().getId();
         Long serverId = s.getId();
         CompletableFuture.runAsync(() -> {
-            try {
-                sendConsole(nodeId, serverId, "op " + name);
-                log.info("Admin {} OP sur {}", name, velocityName);
-            } catch (Exception e) {
-                log.warn("OP de l'admin {} sur {} impossible : {}", name, velocityName, e.getMessage());
+            for (String cmd : commands) {
+                try {
+                    sendConsole(nodeId, serverId, cmd);
+                } catch (Exception e) {
+                    log.warn("Arrivée de {} sur {} : « {} » impossible : {}", name, velocityName, cmd, e.getMessage());
+                    return;
+                }
+            }
+            log.debug("Arrivée de {} sur {} : {}", name, velocityName, commands);
+        });
+    }
+
+    /** Équipe vanilla d'un rang réseau : "mcs_admin", "mcs_vip"... ("mcs_default" sans rang) */
+    static String teamName(String rank) {
+        String r = rank == null ? "" : rank.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_]", "");
+        if (r.isEmpty()) {
+            r = "default";
+        }
+        return "mcs_" + r.substring(0, Math.min(12, r.length()));
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper TEXT_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /**
+     * Préfixe en composant texte JSON, validé et réécrit sur une ligne (il part dans
+     * une commande console). Invalide ou absent : préfixe vide.
+     */
+    static String safeTextComponent(String json) {
+        if (json == null || json.isBlank()) {
+            return "\"\"";
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = TEXT_MAPPER.readTree(json);
+            if (node == null || !(node.isObject() || node.isTextual() || node.isArray())) {
+                return "\"\"";
+            }
+            String compact = TEXT_MAPPER.writeValueAsString(node);
+            return compact.length() > 512 ? "\"\"" : compact;
+        } catch (Exception e) {
+            return "\"\"";
+        }
+    }
+
+    /** Coupe ou remet l'affichage des rôles réseau (propriétaire, admins) */
+    public void setShowNetworkRank(Long serverId, Long requestedByPlayerId, boolean enabled) {
+        Server server = serverRepository.findById(serverId)
+                .orElseThrow(() -> new RuntimeException("Serveur introuvable"));
+        accessService.require(accessService.player(requestedByPlayerId), server, AccessService.Right.VISIBILITY);
+        server.setShowNetworkRank(enabled);
+        serverRepository.save(server);
+        if (enabled || server.getStatus() != ServerStatus.RUNNING || server.getNode() == null) {
+            return;
+        }
+        // Coupé : on retire nos équipes du serveur (les joueurs gardent leur nom normal)
+        Long nodeId = server.getNode().getId();
+        Long id = server.getId();
+        List<String> teams = new ArrayList<>();
+        teams.add(teamName(null));
+        for (String rank : playerRepository.findDistinctNetworkRanks()) {
+            String t = teamName(rank);
+            if (!teams.contains(t)) {
+                teams.add(t);
+            }
+        }
+        CompletableFuture.runAsync(() -> {
+            for (String t : teams) {
+                try {
+                    sendConsole(nodeId, id, "team remove " + t);
+                } catch (Exception e) {
+                    log.debug("team remove {} : {}", t, e.getMessage());
+                }
             }
         });
     }

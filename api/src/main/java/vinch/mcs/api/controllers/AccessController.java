@@ -37,6 +37,8 @@ public class AccessController {
 
     public record ConsoleBody(Long playerId, String command) {}
 
+    public record DisplayBody(Long playerId, Boolean enabled) {}
+
     public record MoveBody(Long playerId, String username) {}
 
     public record ConnectedBody(String server, String uuid) {}
@@ -136,6 +138,15 @@ public class AccessController {
         return handle(() -> {
             accessService.setPublic(accessService.player(body.playerId()), server(id),
                     Boolean.TRUE.equals(body.isPublic()));
+            return null;
+        });
+    }
+
+    /** Body : {playerId, enabled} : rôle réseau affiché en préfixe sur ce serveur */
+    @PostMapping("/servers/{id}/display")
+    public ResponseEntity<?> display(@PathVariable Long id, @RequestBody DisplayBody body) {
+        return handle(() -> {
+            serverService.setShowNetworkRank(id, body.playerId(), !Boolean.FALSE.equals(body.enabled()));
             return null;
         });
     }

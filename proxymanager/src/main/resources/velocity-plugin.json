@@ -3,5 +3,8 @@
   "name": "ProxyManager",
   "version": "${project.version}",
   "authors": ["Vincent"],
-  "main": "vinch.mcs.proxymanager.Proxymanager"
+  "main": "vinch.mcs.proxymanager.Proxymanager",
+  "dependencies": [
+    {"id": "luckperms", "optional": true}
+  ]
 }

@@ -52,6 +52,7 @@ public class Proxymanager {
     private PluginConfig config;
     private ApiClient apiClient;
     private ApiServer apiServer;
+    private PlayerSync playerSync;
 
     // Faux tant que le masquage des IP (s'il est demandé) n'est pas en place :
     // aucun serveur joueur n'est alors enregistré (fail-closed)
@@ -111,6 +112,7 @@ public class Proxymanager {
             logger.error("Erreur démarrage API locale : ", e);
         }
 
+        playerSync = new PlayerSync(server, apiClient, logger);
         registerCommands();
 
         logger.info("ProxyManager démarré avec succès");
@@ -212,6 +214,8 @@ public class Proxymanager {
 
                     logger.debug("Joueur enregistré dans l'API : {} (id={})",
                             player.getUsername(), response.get("id").asLong());
+                    // Quotas, rôle admin et rang réseau (LuckPerms du proxy)
+                    playerSync.sync(player);
                 });
     }
 
@@ -231,6 +235,12 @@ public class Proxymanager {
         commandManager.register(
                 commandManager.metaBuilder("goto").build(),
                 new GotoCommand()
+        );
+
+        // /mcs sur le proxy : disponible sur le lobby et sur tous les serveurs de jeu
+        commandManager.register(
+                commandManager.metaBuilder("mcs").build(),
+                new McsCommand(server, apiClient, playerSync, logger)
         );
     }
 

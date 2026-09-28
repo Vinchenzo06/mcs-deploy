@@ -38,12 +38,12 @@ public class LuckPermsHelper {
      */
     public CompletableFuture<UserMeta> loadUserMeta(UUID uuid) {
         if (!enabled) {
-            return CompletableFuture.completedFuture(new UserMeta(1, 1024, 1, false));
+            return CompletableFuture.completedFuture(new UserMeta(1, 1024, 1, false, "default", ""));
         }
 
         return api.getUserManager().loadUser(uuid).thenApply(user -> {
             if (user == null) {
-                return new UserMeta(1, 1024, 1, false);
+                return new UserMeta(1, 1024, 1, false, "default", "");
             }
 
             CachedMetaData meta = user.getCachedData().getMetaData();
@@ -55,7 +55,17 @@ public class LuckPermsHelper {
             // Admin MCS : permission mcs.admin (donnée au groupe admin par le kit)
             boolean admin = user.getCachedData().getPermissionData().checkPermission("mcs.admin").asBoolean();
 
-            return new UserMeta(maxServers, totalRam, totalCpu, admin);
+            // Rang réseau : groupe principal et son préfixe, en composant texte JSON
+            String prefix = meta.getPrefix();
+            String prefixJson = "";
+            if (prefix != null && !prefix.isBlank()) {
+                net.kyori.adventure.text.Component c = prefix.indexOf('§') >= 0
+                        ? net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer.legacySection().deserialize(prefix)
+                        : net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer.legacyAmpersand().deserialize(prefix);
+                prefixJson = net.kyori.adventure.text.serializer.gson.GsonComponentSerializer.gson().serialize(c);
+            }
+
+            return new UserMeta(maxServers, totalRam, totalCpu, admin, user.getPrimaryGroup(), prefixJson);
         });
     }
 
@@ -68,5 +78,6 @@ public class LuckPermsHelper {
         }
     }
 
-    public record UserMeta(int maxServers, int totalRamMb, int totalCpuCores, boolean admin) {}
+    public record UserMeta(int maxServers, int totalRamMb, int totalCpuCores, boolean admin, String rank,
+                           String prefixJson) {}
 }

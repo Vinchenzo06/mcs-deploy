@@ -37,6 +37,13 @@
             <version>4.2.18.Final</version>
             <scope>provided</scope>
         </dependency>
+        <!-- LuckPerms du proxy (facultatif à l'exécution : voir PlayerSync) -->
+        <dependency>
+            <groupId>net.luckperms</groupId>
+            <artifactId>api</artifactId>
+            <version>5.4</version>
+            <scope>provided</scope>
+        </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>

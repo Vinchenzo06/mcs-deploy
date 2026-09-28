@@ -58,6 +58,13 @@ public class Player {
     @Builder.Default
     private Integer totalCpuCores = 1;
 
+    // Groupe LuckPerms principal (réseau) et son préfixe en composant texte JSON
+    @Column(name = "network_rank", length = 32)
+    private String networkRank;
+
+    @Column(name = "network_prefix", length = 1024)
+    private String networkPrefix;
+
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) createdAt = LocalDateTime.now();

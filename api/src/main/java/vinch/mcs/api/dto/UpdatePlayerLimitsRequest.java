@@ -22,4 +22,8 @@ public class UpdatePlayerLimitsRequest {
 
     // Permission LuckPerms mcs.admin (null : ne change pas le rôle)
     private Boolean admin;
+
+    // Groupe LuckPerms principal et préfixe (composant texte JSON), facultatifs
+    private String rank;
+    private String prefix;
 }

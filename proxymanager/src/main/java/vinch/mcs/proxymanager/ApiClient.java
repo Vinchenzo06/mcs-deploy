@@ -105,4 +105,131 @@ public class ApiClient {
     }
 
     private record PlayerLoginPayload(String uuid, String username) {}
+
+    // ============================================================ /mcs (lot 19) ====
+    // Mêmes routes que l'ancien plugin du lobby. Les erreurs gardent le format
+    // "API erreur (code) : <message de l'API>" (champ "error" de la réponse).
+
+    private CompletableFuture<JsonNode> call(String method, String path, Object body, Duration timeout) {
+        try {
+            HttpRequest.Builder b = HttpRequest.newBuilder()
+                    .uri(URI.create(config.getApiUrl() + path))
+                    .header("X-API-Key", config.getApiKey())
+                    .timeout(timeout);
+            if (body != null) {
+                b.header("Content-Type", "application/json")
+                        .method(method, HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
+            } else {
+                b.method(method, HttpRequest.BodyPublishers.noBody());
+            }
+            return httpClient.sendAsync(b.build(), HttpResponse.BodyHandlers.ofString())
+                    .thenApply(response -> {
+                        JsonNode json;
+                        try {
+                            json = response.body() == null || response.body().isBlank()
+                                    ? objectMapper.createObjectNode() : objectMapper.readTree(response.body());
+                        } catch (Exception e) {
+                            json = objectMapper.createObjectNode();
+                        }
+                        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                            String error = json.has("error") ? json.get("error").asText() : "";
+                            throw new RuntimeException("API erreur (" + response.statusCode() + ") : " + error);
+                        }
+                        return json;
+                    });
+        } catch (Exception e) {
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    private static String enc(String s) {
+        return java.net.URLEncoder.encode(s, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    public CompletableFuture<JsonNode> getPlayerByUuid(UUID uuid) {
+        return call("GET", "/api/v1/players/by-uuid/" + uuid, null, Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> createServer(long ownerPlayerId, String name, String type, String version,
+                                                    int ramMb, int cpuCores) {
+        return call("POST", "/api/v1/servers", java.util.Map.of(
+                "ownerPlayerId", ownerPlayerId, "name", name, "displayName", name, "serverType", type,
+                "minecraftVersion", version, "ramMb", ramMb, "cpuCores", cpuCores, "storageMb", 0),
+                Duration.ofMinutes(5));
+    }
+
+    public CompletableFuture<JsonNode> getPlayerServers(long playerId) {
+        return call("GET", "/api/v1/players/" + playerId + "/servers", null, Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> getServerStats(long serverId) {
+        return call("GET", "/api/v1/servers/" + serverId + "/stats", null, Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> getPlayerQuota(long playerId) {
+        return call("GET", "/api/v1/players/" + playerId + "/quota", null, Duration.ofSeconds(10));
+    }
+
+    /** Quotas, rôle admin et rang réseau (LuckPerms) -> API */
+    public CompletableFuture<JsonNode> updatePlayerLimits(UUID uuid, int maxServers, int totalRamMb, int totalCpuCores,
+                                                        boolean admin, String rank, String prefix) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("uuid", uuid.toString());
+        body.put("maxServers", maxServers);
+        body.put("totalRamMb", totalRamMb);
+        body.put("totalCpuCores", totalCpuCores);
+        body.put("admin", admin);
+        body.put("rank", rank == null ? "" : rank);
+        body.put("prefix", prefix == null ? "" : prefix);
+        return call("POST", "/api/v1/players/limits", body, Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> resolveServer(long playerId, String ref) {
+        return call("GET", "/api/v1/servers/resolve?playerId=" + playerId + "&ref=" + enc(ref), null,
+                Duration.ofSeconds(10));
+    }
+
+    /** action = start | stop | restart | delete, au nom du joueur */
+    public CompletableFuture<JsonNode> serverAction(long serverId, String action, long playerId) {
+        Duration timeout = switch (action) {
+            case "start" -> Duration.ofMinutes(3);
+            case "restart" -> Duration.ofMinutes(5);
+            default -> Duration.ofMinutes(1);
+        };
+        return call("POST", "/api/v1/servers/" + serverId + "/" + action + "?playerId=" + playerId, null, timeout);
+    }
+
+    public CompletableFuture<JsonNode> getMembers(long serverId, long playerId) {
+        return call("GET", "/api/v1/servers/" + serverId + "/members?playerId=" + playerId, null, Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> invite(long serverId, long playerId, String username, String level) {
+        return call("POST", "/api/v1/servers/" + serverId + "/members",
+                java.util.Map.of("playerId", playerId, "username", username, "level", level), Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> removeMember(long serverId, long playerId, String username) {
+        return call("DELETE", "/api/v1/servers/" + serverId + "/members/" + enc(username) + "?playerId=" + playerId,
+                null, Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> setVisibility(long serverId, long playerId, boolean isPublic) {
+        return call("POST", "/api/v1/servers/" + serverId + "/visibility",
+                java.util.Map.of("playerId", playerId, "isPublic", isPublic), Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> setDisplay(long serverId, long playerId, boolean enabled) {
+        return call("POST", "/api/v1/servers/" + serverId + "/display",
+                java.util.Map.of("playerId", playerId, "enabled", enabled), Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> console(long serverId, long playerId, String command) {
+        return call("POST", "/api/v1/servers/" + serverId + "/console",
+                java.util.Map.of("playerId", playerId, "command", command), Duration.ofSeconds(30));
+    }
+
+    public CompletableFuture<JsonNode> move(long serverId, long playerId, String username) {
+        return call("POST", "/api/v1/servers/" + serverId + "/move",
+                java.util.Map.of("playerId", playerId, "username", username), Duration.ofSeconds(15));
+    }
 }

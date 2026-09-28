@@ -196,13 +196,30 @@ contourner, et refusé si l'API ne répond pas.
 - Serveur d'un autre joueur : `pseudo/nom` (ex. `/mcs join bob/survie`) ; le nom seul
   suffit s'il n'y a pas d'ambiguïté.
 - Console : `/mcs console <serveur> <commande>` (rcon-cli dans le conteneur, rien
-  d'exposé). Le propriétaire et l'hébergeur s'y mettent OP (`op <pseudo>`) ; les
-  **admins sont OP automatiquement** en arrivant sur un serveur.
+  d'exposé). L'hébergeur peut s'y mettre OP (`op <pseudo>`) ; le créateur et les
+  admins le sont automatiquement.
 - `/mcs move <joueur> <serveur>` (hébergeur, admins) : envoie un joueur connecté sur le
   serveur avec un laissez-passer d'une minute, à usage unique. Il ne peut pas revenir seul.
 - L'hébergeur d'une machine se définit sur le VPS : `sudo mcs-node-owner <id> <pseudo>`
   (le joueur doit s'être connecté une fois).
 - Les fichiers (rôle technicien, hébergeur) arriveront avec le panneau web.
+
+### Sur les serveurs de jeu (sans plugin imposé)
+
+- `/mcs` est une commande du **proxy** : elle marche depuis le lobby et depuis tous les
+  serveurs de jeu (Velocity la traite avant le serveur).
+- En arrivant sur un serveur, par sa console : le **créateur** et les **admins** sont OP ;
+  le **rôle réseau** s'affiche en petit (préfixe `[Admin]`, `[VIP]`... dans le chat, le Tab et
+  au-dessus de la tête) grâce aux équipes vanilla `mcs_<rang>`. Paper, Fabric, Forge, Vanilla.
+- Le propriétaire garde la main sur son serveur (son propre LuckPerms, ses rôles...). S'il
+  utilise ses propres équipes : `/mcs display <serveur> off`.
+
+### LuckPerms du réseau
+
+Proxy et lobby partagent la même base LuckPerms (PostgreSQL `luckperms`, sur le VPS
+seulement). Les serveurs de jeu n'y sont **jamais** branchés : leur propriétaire a accès aux
+fichiers, donc au mot de passe. Préfixe d'un groupe : `lp group vip meta setprefix 20 "&a[VIP] "`
+(dans `sudo mcs-rcon`). L'étape `bootstrap` ne réécrit plus les quotas et préfixes déjà réglés.
 
 ## Limites connues
 

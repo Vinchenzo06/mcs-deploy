@@ -1,4 +1,4 @@
-package vinch.mcs.lobby.commands;
+package vinch.mcs.proxymanager;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import net.kyori.adventure.text.Component;
@@ -6,13 +6,10 @@ import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
-import org.bukkit.Bukkit;
-import org.bukkit.command.Command;
-import org.bukkit.command.CommandExecutor;
-import org.bukkit.command.CommandSender;
-import org.bukkit.entity.Player;
-import org.jetbrains.annotations.NotNull;
-import vinch.mcs.lobby.McsLobbyPlugin;
+import com.velocitypowered.api.command.SimpleCommand;
+import com.velocitypowered.api.proxy.Player;
+import com.velocitypowered.api.proxy.ProxyServer;
+import org.slf4j.Logger;
 
 import java.util.Locale;
 import java.util.Set;
@@ -21,7 +18,12 @@ import java.util.concurrent.ExecutionException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public class ServerCommand implements CommandExecutor {
+/**
+ * Commande /mcs, enregistrée sur le proxy : utilisable depuis le lobby ET depuis
+ * n'importe quel serveur de jeu, sans plugin sur ces serveurs (Velocity traite la
+ * commande avant le serveur). Les droits sont vérifiés par l'API.
+ */
+public class McsCommand implements SimpleCommand {
 
     private static final Pattern NAME_PATTERN = Pattern.compile("^[a-z0-9-]{3,32}$");
     private static final Pattern RAM_PATTERN =
@@ -32,32 +34,61 @@ public class ServerCommand implements CommandExecutor {
     private static final int MIN_RAM_MB = 1024;
     private static final int DEFAULT_RAM_MB = 2048;
 
-    private final McsLobbyPlugin plugin;
+    private final ProxyServer server;
+    private final ApiClient apiClient;
+    private final PlayerSync playerSync;
+    private final Logger logger;
 
-    public ServerCommand(McsLobbyPlugin plugin) {
-        this.plugin = plugin;
+    public McsCommand(ProxyServer server, ApiClient apiClient, PlayerSync playerSync, Logger logger) {
+        this.server = server;
+        this.apiClient = apiClient;
+        this.playerSync = playerSync;
+        this.logger = logger;
     }
 
     @Override
-    public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command,
-                             @NotNull String label, @NotNull String[] args) {
-
-        if (!(sender instanceof Player player)) {
-            sender.sendMessage(Component.text("Cette commande est réservée aux joueurs.", NamedTextColor.RED));
-            return true;
+    public void execute(Invocation invocation) {
+        if (!(invocation.source() instanceof Player player)) {
+            invocation.source().sendMessage(Component.text("Cette commande est réservée aux joueurs.", NamedTextColor.RED));
+            return;
         }
-
+        String[] args = invocation.arguments();
         // Filet de sécurité : une erreur du plugin s'affiche clairement en jeu et
-        // sa trace complète part dans le journal du lobby
+        // sa trace complète part dans le journal du proxy
         try {
             dispatch(player, args);
         } catch (Throwable t) {
-            plugin.getLogger().log(java.util.logging.Level.SEVERE,
-                    "/mcs " + String.join(" ", args) + " (" + player.getName() + ") a planté", t);
+            logger.error("/mcs " + String.join(" ", args) + " (" + player.getUsername() + ") a planté", t);
             player.sendMessage(Component.text("MCS » Erreur interne du plugin (" + t.getClass().getSimpleName()
                     + "). Préviens un admin.").color(NamedTextColor.RED));
         }
-        return true;
+    }
+
+    @Override
+    public java.util.concurrent.CompletableFuture<java.util.List<String>> suggestAsync(Invocation invocation) {
+        if (!(invocation.source() instanceof Player player)) {
+            return java.util.concurrent.CompletableFuture.completedFuture(java.util.List.of());
+        }
+        return completer.suggest(player, invocation.arguments());
+    }
+
+    private final McsTabCompleter completer = new McsTabCompleter(this);
+
+    ProxyServer proxy() {
+        return server;
+    }
+
+    ApiClient api() {
+        return apiClient;
+    }
+
+    /** Exécute un rappel d'API en journalisant toute erreur inattendue */
+    private void run(Runnable r) {
+        try {
+            r.run();
+        } catch (Throwable t) {
+            logger.error("/mcs : erreur dans un rappel", t);
+        }
     }
 
     private void dispatch(Player player, String[] args) {
@@ -80,6 +111,7 @@ public class ServerCommand implements CommandExecutor {
             case "leave" -> handleLeave(player, args);
             case "public", "private" -> handleVisibility(player, args);
             case "console" -> handleConsole(player, args);
+            case "display" -> handleDisplay(player, args);
             case "move" -> handleMove(player, args);
             default -> sendUsage(player);
         }
@@ -298,7 +330,7 @@ public class ServerCommand implements CommandExecutor {
             // Les refus de l'API sont déjà des phrases en français (droits, joueur inconnu...)
             failure(player, text(msg));
             if (!apiRefusal(error)) {
-                plugin.getLogger().warning("/mcs (" + player.getName() + ") : " + msg);
+                logger.warn("/mcs (" + player.getUsername() + ") : " + msg);
             }
         }
     }
@@ -339,8 +371,11 @@ public class ServerCommand implements CommandExecutor {
                 "Le joueur n'a plus accès au serveur"));
         player.sendMessage(helpLine("/mcs public|private <serveur>", "/mcs public ", "Ouvert ou privé",
                 "Public : tout le monde peut entrer\nPrivé (par défaut) : seulement toi et tes invités"));
+        player.sendMessage(helpLine("/mcs display <serveur> on|off", "/mcs display ", "Rôles réseau",
+                "Affiche le rôle réseau ([Admin], [VIP]...) des joueurs en préfixe\n"
+                        + "(équipes vanilla). À couper si ton serveur utilise ses propres équipes."));
         player.sendMessage(helpLine("/mcs console <serveur> <commande>", "/mcs console ", "Console",
-                "Exécute une commande sur le serveur, ex. : op TonPseudo"));
+                "Exécute une commande sur le serveur, ex. : whitelist add Bob"));
         player.sendMessage(helpLine("/mcs move <joueur> <serveur>", "/mcs move ", "Amener un joueur",
                 "Hébergeur de la machine et admins : envoie un joueur\nsur le serveur, une seule fois (sans lui donner d'accès)"));
         player.sendMessage(helpLine("/mcs delete <serveur>", "/mcs delete ", "Supprimer",
@@ -428,12 +463,12 @@ public class ServerCommand implements CommandExecutor {
         final int finalRamMb = ramMb;
         final int finalCpuCores = cpuCores;
 
-        plugin.syncPlayerLimits(player.getUniqueId(), player.getName())
-                .thenCompose(v -> plugin.getApiClient().getPlayerByUuid(player.getUniqueId()))
-                .thenCompose(playerInfo -> plugin.getApiClient().createServer(
-                        playerInfo.get("id").asLong(), name, name, type, version, finalRamMb, finalCpuCores, 0))
-                .whenComplete((result, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (!player.isOnline()) {
+        playerSync.sync(player)
+                .thenCompose(v -> apiClient.getPlayerByUuid(player.getUniqueId()))
+                .thenCompose(playerInfo -> apiClient.createServer(
+                        playerInfo.get("id").asLong(), name, type, version, finalRamMb, finalCpuCores))
+                .whenComplete((result, error) -> run(() -> {
+                    if (!player.isActive()) {
                         return;
                     }
                     if (error != null) {
@@ -478,13 +513,13 @@ public class ServerCommand implements CommandExecutor {
      * puis lance l'action sur le thread principal. Les erreurs sont affichées.
      */
     private void withServer(Player player, String ref, java.util.function.Consumer<Target> action) {
-        plugin.getApiClient().getPlayerByUuid(player.getUniqueId())
+        apiClient.getPlayerByUuid(player.getUniqueId())
                 .thenCompose(info -> {
                     long playerId = info.get("id").asLong();
-                    return plugin.getApiClient().resolveServer(playerId, ref).thenApply(s -> new Target(playerId, s));
+                    return apiClient.resolveServer(playerId, ref).thenApply(s -> new Target(playerId, s));
                 })
-                .whenComplete((target, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (!player.isOnline()) {
+                .whenComplete((target, error) -> run(() -> {
+                    if (!player.isActive()) {
                         return;
                     }
                     if (error != null) {
@@ -498,8 +533,8 @@ public class ServerCommand implements CommandExecutor {
     /** Réponse d'une action lancée au nom du joueur, affichée sur le thread principal */
     private void afterApi(Player player, java.util.concurrent.CompletableFuture<JsonNode> call, String ref,
                           java.util.function.Consumer<JsonNode> onSuccess) {
-        call.whenComplete((result, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
-            if (!player.isOnline()) {
+        call.whenComplete((result, error) -> run(() -> {
+            if (!player.isActive()) {
                 return;
             }
             if (error != null) {
@@ -532,9 +567,9 @@ public class ServerCommand implements CommandExecutor {
     // ============================================================ list ====
 
     private void handleList(Player player) {
-        plugin.getApiClient().getPlayerByUuid(player.getUniqueId())
-                .thenCompose(playerInfo -> plugin.getApiClient().getPlayerServers(playerInfo.get("id").asLong()))
-                .whenComplete((result, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
+        apiClient.getPlayerByUuid(player.getUniqueId())
+                .thenCompose(playerInfo -> apiClient.getPlayerServers(playerInfo.get("id").asLong()))
+                .whenComplete((result, error) -> run(() -> {
                     if (error != null) {
                         reportError(player, error, null);
                         return;
@@ -630,7 +665,7 @@ public class ServerCommand implements CommandExecutor {
                 return;
             }
             pending(player, text("Suppression de ").append(Component.text(ref, NamedTextColor.WHITE)).append(text("…")));
-            afterApi(player, plugin.getApiClient().serverAction(t.id(), "delete", t.playerId()), ref,
+            afterApi(player, apiClient.serverAction(t.id(), "delete", t.playerId()), ref,
                     r -> success(player, text("Serveur ").append(Component.text(ref, NamedTextColor.WHITE))
                             .append(text(" supprimé."))));
         });
@@ -691,7 +726,7 @@ public class ServerCommand implements CommandExecutor {
             };
             pending(player, text(doing).append(Component.text(ref, NamedTextColor.WHITE))
                     .append(text("stop".equals(action) ? "…" : "… (jusqu'à 2 minutes)")));
-            afterApi(player, plugin.getApiClient().serverAction(t.id(), action, t.playerId()), ref, r -> {
+            afterApi(player, apiClient.serverAction(t.id(), action, t.playerId()), ref, r -> {
                 // L'agent ne répond qu'une fois le serveur prêt à accueillir des joueurs
                 switch (action) {
                     case "start" -> {
@@ -718,7 +753,7 @@ public class ServerCommand implements CommandExecutor {
             usage(player, "/mcs info <serveur>", "/mcs info ");
             return;
         }
-        withServer(player, args[1], t -> afterApi(player, plugin.getApiClient().getServerStats(t.id()), t.ref(),
+        withServer(player, args[1], t -> afterApi(player, apiClient.getServerStats(t.id()), t.ref(),
                 stats -> sendInfo(player, stats, t)));
     }
 
@@ -729,7 +764,7 @@ public class ServerCommand implements CommandExecutor {
             usage(player, "/mcs members <serveur>", "/mcs members ");
             return;
         }
-        withServer(player, args[1], t -> afterApi(player, plugin.getApiClient().getMembers(t.id(), t.playerId()),
+        withServer(player, args[1], t -> afterApi(player, apiClient.getMembers(t.id(), t.playerId()),
                 t.ref(), result -> sendMembers(player, t, result.path("members"))));
     }
 
@@ -764,6 +799,20 @@ public class ServerCommand implements CommandExecutor {
                     : button("Rendre public", NamedTextColor.GREEN, "/mcs public " + ref, "Ouvrir " + ref + " à tout le monde"));
         }
         player.sendMessage(access);
+
+        boolean display = s.path("showNetworkRank").asBoolean(true);
+        Component ranks = Component.text(" Rôles réseau : ", NamedTextColor.GRAY)
+                .append(display ? Component.text("affichés", NamedTextColor.GREEN) : Component.text("masqués", NamedTextColor.GOLD))
+                .hoverEvent(HoverEvent.showText(Component.text(
+                        "Préfixe [Admin], [VIP]... via les équipes vanilla du serveur", NamedTextColor.GRAY)));
+        if (t.can("VISIBILITY")) {
+            ranks = ranks.append(text("  ")).append(display
+                    ? button("Masquer", NamedTextColor.GOLD, "/mcs display " + ref + " off",
+                            "Laisser les équipes libres (mini-jeux...)")
+                    : button("Afficher", NamedTextColor.GREEN, "/mcs display " + ref + " on",
+                            "Afficher le rôle réseau des joueurs"));
+        }
+        player.sendMessage(ranks);
 
         if (members.size() == 0) {
             player.sendMessage(Component.text(" Aucun invité pour l'instant.", NamedTextColor.GRAY));
@@ -814,14 +863,14 @@ public class ServerCommand implements CommandExecutor {
         }
         withServer(player, args[1], t -> {
             String ref = t.ref();
-            afterApi(player, plugin.getApiClient().invite(t.id(), t.playerId(), target, level), ref, r -> {
+            afterApi(player, apiClient.invite(t.id(), t.playerId(), target, level), ref, r -> {
                 String role = relationLabel(r.path("level").asText(level));
                 if (r.path("created").asBoolean(true)) {
                     success(player, text(target + " est invité sur ").append(serverName(ref))
                             .append(text(" (" + role + ").")));
-                    Player invited = Bukkit.getPlayerExact(target);
+                    Player invited = server.getPlayer(target).orElse(null);
                     if (invited != null) {
-                        notice(invited, text(player.getName() + " t'a invité sur ").append(serverName(ref))
+                        notice(invited, text(player.getUsername() + " t'a invité sur ").append(serverName(ref))
                                 .append(text(" (" + role + ").")));
                         invited.sendMessage(buttons(joinButton(ref), infoButton(ref)));
                     }
@@ -844,7 +893,7 @@ public class ServerCommand implements CommandExecutor {
             return;
         }
         withServer(player, args[1], t -> afterApi(player,
-                plugin.getApiClient().removeMember(t.id(), t.playerId(), target), t.ref(),
+                apiClient.removeMember(t.id(), t.playerId(), target), t.ref(),
                 r -> success(player, text(target + " n'a plus accès à ").append(serverName(t.ref())).append(text(".")))));
     }
 
@@ -854,7 +903,7 @@ public class ServerCommand implements CommandExecutor {
             return;
         }
         withServer(player, args[1], t -> afterApi(player,
-                plugin.getApiClient().removeMember(t.id(), t.playerId(), player.getName()), t.ref(),
+                apiClient.removeMember(t.id(), t.playerId(), player.getUsername()), t.ref(),
                 r -> success(player, text("Tu n'as plus accès à " + t.ref() + "."))));
     }
 
@@ -866,10 +915,23 @@ public class ServerCommand implements CommandExecutor {
             return;
         }
         withServer(player, args[1], t -> afterApi(player,
-                plugin.getApiClient().setVisibility(t.id(), t.playerId(), makePublic), t.ref(),
+                apiClient.setVisibility(t.id(), t.playerId(), makePublic), t.ref(),
                 r -> success(player, text("").append(serverName(t.ref())).append(text(makePublic
                         ? " est public : tout le monde peut y entrer."
                         : " est privé : seuls tes invités peuvent y entrer.")))));
+    }
+
+    private void handleDisplay(Player player, String[] args) {
+        if (args.length != 3 || !("on".equalsIgnoreCase(args[2]) || "off".equalsIgnoreCase(args[2]))) {
+            usage(player, "/mcs display <serveur> on|off", "/mcs display ");
+            return;
+        }
+        boolean enabled = "on".equalsIgnoreCase(args[2]);
+        withServer(player, args[1], t -> afterApi(player,
+                apiClient.setDisplay(t.id(), t.playerId(), enabled), t.ref(),
+                r -> success(player, text("Rôles réseau sur ").append(serverName(t.ref())).append(text(enabled
+                        ? " : affichés (préfixe [Admin], [VIP]... à l'arrivée des joueurs)."
+                        : " : masqués, les équipes du serveur sont libres.")))));
     }
 
     // ============================================================ console / move ====
@@ -887,7 +949,7 @@ public class ServerCommand implements CommandExecutor {
             }
             send(player, Component.text(t.ref() + " > ", NamedTextColor.DARK_GRAY)
                     .append(Component.text(command, NamedTextColor.WHITE)));
-            afterApi(player, plugin.getApiClient().console(t.id(), t.playerId(), command), t.ref(), r -> {
+            afterApi(player, apiClient.console(t.id(), t.playerId(), command), t.ref(), r -> {
                 String output = r.path("output").asText("").strip();
                 if (output.isEmpty()) {
                     player.sendMessage(Component.text("   (pas de réponse)", NamedTextColor.DARK_GRAY));
@@ -918,7 +980,7 @@ public class ServerCommand implements CommandExecutor {
                 failure(player, text("Seuls l'hébergeur de la machine et les admins peuvent amener un joueur ici."));
                 return;
             }
-            afterApi(player, plugin.getApiClient().move(t.id(), t.playerId(), target), t.ref(),
+            afterApi(player, apiClient.move(t.id(), t.playerId(), target), t.ref(),
                     r -> success(player, text(target + " est envoyé sur ").append(serverName(t.ref()))
                             .append(text(" (une seule fois : il ne pourra pas revenir seul)."))));
         });
@@ -1105,10 +1167,10 @@ public class ServerCommand implements CommandExecutor {
     // ============================================================ quota ====
 
     private void handleQuota(Player player) {
-        plugin.syncPlayerLimits(player.getUniqueId(), player.getName())
-                .thenCompose(v -> plugin.getApiClient().getPlayerByUuid(player.getUniqueId()))
-                .thenCompose(playerInfo -> plugin.getApiClient().getPlayerQuota(playerInfo.get("id").asLong()))
-                .whenComplete((q, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
+        playerSync.sync(player)
+                .thenCompose(v -> apiClient.getPlayerByUuid(player.getUniqueId()))
+                .thenCompose(playerInfo -> apiClient.getPlayerQuota(playerInfo.get("id").asLong()))
+                .whenComplete((q, error) -> run(() -> {
                     if (error != null) {
                         reportError(player, error, null);
                         return;
@@ -1170,9 +1232,13 @@ public class ServerCommand implements CommandExecutor {
         return total <= 0 ? (used > 0 ? 1 : 0) : (double) used / total;
     }
 
-    // Demande au proxy (plugin proxymanager) d'envoyer le joueur vers ce serveur
+    // Connexion par le proxy (l'accès est revérifié par le contrôle de pré-connexion)
     private void sendToServer(Player player, String serverName) {
-        player.sendPluginMessage(plugin, "mcs:connect",
-                serverName.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        java.util.Optional<com.velocitypowered.api.proxy.server.RegisteredServer> target = server.getServer(serverName);
+        if (target.isEmpty()) {
+            failure(player, text("Ce serveur n'est pas encore joignable, réessaie dans un instant."));
+            return;
+        }
+        player.createConnectionRequest(target.get()).fireAndForget();
     }
 }

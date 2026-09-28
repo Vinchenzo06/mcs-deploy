@@ -16,5 +16,9 @@ public interface PlayerRepository extends JpaRepository<Player, Long> {
 
     Optional<Player> findFirstByMinecraftUsernameIgnoreCase(String minecraftUsername);
 
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT DISTINCT p.networkRank FROM Player p WHERE p.networkRank IS NOT NULL")
+    java.util.List<String> findDistinctNetworkRanks();
+
     boolean existsByMinecraftUuid(UUID minecraftUuid);
 }

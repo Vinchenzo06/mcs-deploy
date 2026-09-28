@@ -59,7 +59,9 @@ public class PlayerController {
                     request.getMaxServers(),
                     request.getTotalRamMb(),
                     request.getTotalCpuCores(),
-                    request.getAdmin()
+                    request.getAdmin(),
+                    request.getRank(),
+                    request.getPrefix()
             );
             return ResponseEntity.ok(Map.of(
                     "success", true,

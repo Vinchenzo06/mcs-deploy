@@ -5,8 +5,6 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import vinch.mcs.lobby.commands.ServerCommand;
-import vinch.mcs.lobby.commands.ServerTabCompleter;
 import vinch.mcs.lobby.listeners.PlayerJoinListener;
 import vinch.mcs.lobby.permissions.LuckPermsHelper;
 
@@ -39,8 +37,7 @@ public final class McsLobbyPlugin extends JavaPlugin {
         // Canal privé vers le proxy (le canal "BungeeCord" est désactivé sur Velocity)
         getServer().getMessenger().registerOutgoingPluginChannel(this, "mcs:connect");
 
-        getCommand("mcs").setExecutor(new ServerCommand(this));
-        getCommand("mcs").setTabCompleter(new ServerTabCompleter(this));
+        // /mcs est maintenant sur le proxy (proxymanager) : disponible sur tous les serveurs
 
         getServer().getPluginManager().registerEvents(new PlayerJoinListener(this), this);
 
@@ -59,7 +56,8 @@ public final class McsLobbyPlugin extends JavaPlugin {
         }
         return luckPermsHelper.loadUserMeta(uuid)
                 .thenCompose(meta -> apiClient.updatePlayerLimits(
-                        uuid, meta.maxServers(), meta.totalRamMb(), meta.totalCpuCores(), meta.admin()))
+                        uuid, meta.maxServers(), meta.totalRamMb(), meta.totalCpuCores(), meta.admin(),
+                        meta.rank(), meta.prefixJson()))
                 .handle((result, error) -> {
                     if (error != null) {
                         getLogger().warning("Synchronisation des limites de " + name + " : " + error.getMessage());

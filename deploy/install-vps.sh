@@ -75,6 +75,39 @@ set_prop() {
 
 write_unit() { cat > "/etc/systemd/system/$1.service"; }
 
+# LuckPerms (proxy et lobby) lit sa base dans ces variables d'environnement
+# (LUCKPERMS_<clé>, prioritaires sur config.yml), chargées par systemd
+LP_ENV_FILE=/etc/mcs/luckperms.env
+write_lp_env() {
+  ( umask 077
+    cat > "$LP_ENV_FILE" <<LPEOF
+LUCKPERMS_STORAGE_METHOD=postgresql
+LUCKPERMS_DATA_ADDRESS=127.0.0.1:5432
+LUCKPERMS_DATA_DATABASE=luckperms
+LUCKPERMS_DATA_USERNAME=luckperms
+LUCKPERMS_DATA_PASSWORD=$LP_DB_PASSWORD
+LUCKPERMS_MESSAGING_SERVICE=auto
+LUCKPERMS_SYNC_MINUTES=3
+LPEOF
+  )
+}
+
+# Télécharge LuckPerms pour une plateforme (bukkit | velocity) s'il manque
+install_luckperms() {
+  local platform=$1 dir=$2 var=$3
+  if compgen -G "$dir/LuckPerms-*.jar" >/dev/null; then
+    return 0
+  fi
+  local url=${!var:-}
+  [[ -n "$url" ]] || url=$(curl -fsSL https://metadata.luckperms.net/data/all 2>/dev/null | jq -r --arg p "$platform" '.downloads[$p] // empty' || true)
+  if [[ -n "$url" ]]; then
+    download "$url" "$dir/$(basename "$url")"
+    ok "LuckPerms ($platform) téléchargé"
+  else
+    warn "LuckPerms ($platform) non téléchargé : renseigne $var dans /etc/mcs/mcs.env"
+  fi
+}
+
 restart_service() {
   systemctl daemon-reload
   systemctl enable "$1" >/dev/null 2>&1
@@ -194,7 +227,7 @@ load_config() {
     source "$SECRETS_FILE"
   fi
   local k
-  for k in DB_PASSWORD LOBBY_API_KEY VELOCITY_PLUGIN_KEY RCON_PASSWORD FORWARDING_SECRET IP_MASK_KEY; do
+  for k in DB_PASSWORD LOBBY_API_KEY VELOCITY_PLUGIN_KEY RCON_PASSWORD FORWARDING_SECRET IP_MASK_KEY LP_DB_PASSWORD; do
     save_secret "$k" "${!k:-$(gen_secret)}"
   done
 
@@ -739,6 +772,18 @@ step_postgres() {
   fi
   "${psql[@]}" -d mcs_db -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"' >/dev/null
   ok "Base mcs_db prête (utilisateur mcs_api)"
+
+  # LuckPerms du réseau (proxy + lobby, sur le VPS seulement ; jamais les serveurs de jeu)
+  if [[ "$("${psql[@]}" -c "SELECT 1 FROM pg_roles WHERE rolname='luckperms'")" == "1" ]]; then
+    "${psql[@]}" -c "ALTER ROLE luckperms WITH LOGIN PASSWORD '$LP_DB_PASSWORD'" >/dev/null
+  else
+    "${psql[@]}" -c "CREATE ROLE luckperms WITH LOGIN PASSWORD '$LP_DB_PASSWORD'" >/dev/null
+  fi
+  if [[ "$("${psql[@]}" -c "SELECT 1 FROM pg_database WHERE datname='luckperms'")" != "1" ]]; then
+    runuser -u postgres -- createdb -O luckperms luckperms
+  fi
+  write_lp_env
+  ok "Base luckperms prête (partagée par le proxy et le lobby)"
 }
 
 step_rathole() {
@@ -917,6 +962,8 @@ step_velocity() {
   (( ${#jars[@]} )) || die "Aucun plugin dans $JARS_DIR/velocity/ (proxymanager attendu)"
   rm -f "$VELOCITY_DIR"/plugins/proxymanager*.jar
   cp -f "${jars[@]}" "$VELOCITY_DIR/plugins/"
+  install_luckperms velocity "$VELOCITY_DIR/plugins" LUCKPERMS_VELOCITY_URL
+  [[ -f "$LP_ENV_FILE" ]] || write_lp_env
 
   echo -n "$FORWARDING_SECRET" > "$VELOCITY_DIR/forwarding.secret"
 
@@ -986,6 +1033,7 @@ Wants=network-online.target
 [Service]
 User=$MC_USER
 WorkingDirectory=$VELOCITY_DIR
+EnvironmentFile=-$LP_ENV_FILE
 ExecStart=$JAVA_BIN -Xms256M -Xmx$VELOCITY_XMX -XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:+ParallelRefProcEnabled -jar velocity.jar
 Restart=on-failure
 RestartSec=10
@@ -1018,16 +1066,27 @@ step_lobby() {
   rm -f "$LOBBY_DIR"/plugins/mcs-lobby-plugin*.jar
   cp -f "${jars[@]}" "$LOBBY_DIR/plugins/"
 
-  local lp=("$LOBBY_DIR"/plugins/LuckPerms-Bukkit*.jar)
   shopt -u nullglob
-  if (( ${#lp[@]} == 0 )); then
-    local lp_url=${LUCKPERMS_BUKKIT_URL:-}
-    [[ -n "$lp_url" ]] || lp_url=$(curl -fsSL https://metadata.luckperms.net/data/all 2>/dev/null | jq -r '.downloads.bukkit // empty' || true)
-    if [[ -n "$lp_url" ]]; then
-      download "$lp_url" "$LOBBY_DIR/plugins/$(basename "$lp_url")"
-      ok "LuckPerms téléchargé"
+  install_luckperms bukkit "$LOBBY_DIR/plugins" LUCKPERMS_BUKKIT_URL
+  [[ -f "$LP_ENV_FILE" ]] || write_lp_env
+
+  # Passage de LuckPerms du fichier local (H2) à la base partagée : on exporte
+  # une seule fois les groupes et joueurs actuels, réimportés après redémarrage
+  local lp_dir="$LOBBY_DIR/plugins/LuckPerms" lp_marker="$ETC_DIR/.luckperms-postgres"
+  if [[ ! -f "$lp_marker" ]] && systemctl is-active --quiet minecraft-lobby \
+      && compgen -G "$lp_dir/luckperms-h2*" >/dev/null; then
+    rm -f "$lp_dir/mcs-migration.json.gz"
+    if mcs-rcon "lp export mcs-migration" >/dev/null; then
+      local i
+      for ((i = 0; i < 60; i++)); do
+        zcat "$lp_dir/mcs-migration.json.gz" 2>/dev/null | jq -e . >/dev/null 2>&1 && break
+        sleep 1
+      done
+    fi
+    if [[ -s "$lp_dir/mcs-migration.json.gz" ]]; then
+      ok "LuckPerms exporté avant le passage à PostgreSQL"
     else
-      warn "LuckPerms non téléchargé : renseigne LUCKPERMS_BUKKIT_URL dans /etc/mcs/mcs.env"
+      warn "Export LuckPerms impossible : groupes recréés par l'étape bootstrap, relance mcs-admin pour les admins"
     fi
   fi
 
@@ -1070,6 +1129,7 @@ Wants=network-online.target
 [Service]
 User=$MC_USER
 WorkingDirectory=$LOBBY_DIR
+EnvironmentFile=-$LP_ENV_FILE
 ExecStart=$JAVA_BIN -Xms256M -Xmx$LOBBY_XMX -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -jar paper.jar nogui
 Restart=on-failure
 RestartSec=10
@@ -1082,6 +1142,19 @@ EOF
   echo "    Démarrage du lobby (premier lancement = génération du monde)..."
   wait_port "$RCON_PORT" 240 || die "Le lobby ne démarre pas. Logs : journalctl -u minecraft-lobby -n 100"
   ok "Lobby prêt sur 127.0.0.1:25566"
+
+  if [[ ! -f "$lp_marker" ]]; then
+    if [[ -s "$lp_dir/mcs-migration.json.gz" ]]; then
+      mcs-rcon "lp import mcs-migration" >/dev/null && sleep 15
+      ok "Groupes et joueurs LuckPerms importés dans PostgreSQL"
+    fi
+    touch "$lp_marker"
+  fi
+  if journalctl -u minecraft-lobby -n 400 --no-pager 2>/dev/null | grep -qi "storage provider.*postgre"; then
+    ok "LuckPerms du lobby sur PostgreSQL (partagé avec le proxy)"
+  else
+    warn "LuckPerms du lobby ne semble pas utiliser PostgreSQL : vérifie 'journalctl -u minecraft-lobby | grep -i storage'"
+  fi
 }
 
 step_firewall() {
@@ -1134,16 +1207,23 @@ step_firewall() {
 }
 
 bootstrap_luckperms() {
-  local cmds=() g var s ram cpu
+  local cmds=() g var s ram cpu before
+  # État actuel : ce qui est déjà réglé (à la main ou avant) est gardé tel quel
+  before=$(mcs-lp-export 2>/dev/null || echo '{}')
+  lp_has() { jq -e --arg g "$1" --arg p "$2" '.groups[$g].nodes // [] | map(.key) | any(startswith($p))' <<<"$before" >/dev/null 2>&1; }
+  local -A prefix=([admin]="&c[Admin] " [premium]="&6[Premium] " [vip]="&a[VIP] ")
+  local -A weight=([admin]=100 [premium]=30 [vip]=20)
   for g in default vip premium admin; do
     var="QUOTA_${g^^}"
     read -r s ram cpu <<<"${!var}"
     if [[ "$g" != "default" ]]; then
       cmds+=("lp creategroup $g")
+      lp_has "$g" "weight." || cmds+=("lp group $g setweight ${weight[$g]}")
+      lp_has "$g" "prefix." || cmds+=("lp group $g meta setprefix ${weight[$g]} \"${prefix[$g]}\"")
     fi
-    cmds+=("lp group $g meta set max-servers $s"
-           "lp group $g meta set total-ram $ram"
-           "lp group $g meta set total-cpu $cpu")
+    lp_has "$g" "meta.max-servers." || cmds+=("lp group $g meta set max-servers $s")
+    lp_has "$g" "meta.total-ram." || cmds+=("lp group $g meta set total-ram $ram")
+    lp_has "$g" "meta.total-cpu." || cmds+=("lp group $g meta set total-cpu $cpu")
   done
   cmds+=("lp group admin permission set mcs.admin true"
          "lp group admin permission set luckperms.* true")

@@ -212,6 +212,7 @@ public class AccessService {
         m.put("allocatedRamMb", s.getAllocatedRamMb());
         m.put("allocatedCpuCores", s.getAllocatedCpuCores());
         m.put("isPublic", Boolean.TRUE.equals(s.getIsPublic()));
+        m.put("showNetworkRank", !Boolean.FALSE.equals(s.getShowNetworkRank()));
         m.put("relation", relation(p, s));
         m.put("rights", rightsOf(p, s).stream().map(Enum::name).toList());
         m.put("members", collaboratorRepository.findByServerId(s.getId()).size());

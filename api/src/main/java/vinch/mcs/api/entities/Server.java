@@ -77,6 +77,11 @@ public class Server {
     @Builder.Default
     private Boolean isPublic = false;
 
+    // Rôle réseau affiché en préfixe (équipes vanilla) ; le propriétaire peut le couper
+    @Column(name = "show_network_rank", nullable = false)
+    @Builder.Default
+    private Boolean showNetworkRank = true;
+
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) createdAt = LocalDateTime.now();
