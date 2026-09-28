@@ -810,7 +810,7 @@ EOF
     || die "Caddyfile invalide : caddy validate --config /etc/caddy/Caddyfile"
 
   # Let's Encrypt a besoin des ports 80 et 443
-  ufw allow 80/tcp comment 'HTTP (certificats Let'"'"'s Encrypt)' >/dev/null
+  ufw allow 80/tcp comment 'HTTP (certificats Lets Encrypt)' >/dev/null
   ufw allow 443/tcp comment 'HTTPS (API des agents)' >/dev/null
   systemctl enable caddy >/dev/null 2>&1
   systemctl reload caddy 2>/dev/null || systemctl restart caddy
@@ -1024,7 +1024,7 @@ step_firewall() {
   ufw allow 2333/tcp comment 'rathole (volontaires)' >/dev/null
   if [[ -n "$API_DOMAIN" ]]; then
     # Agents en HTTPS via Caddy : l'accès direct en clair est fermé
-    ufw allow 80/tcp comment 'HTTP (certificats Let'"'"'s Encrypt)' >/dev/null
+    ufw allow 80/tcp comment 'HTTP (certificats Lets Encrypt)' >/dev/null
     ufw allow 443/tcp comment 'HTTPS (API des agents)' >/dev/null
     ufw delete allow 8081/tcp >/dev/null 2>&1 || true
     api_ports="80, 443"
