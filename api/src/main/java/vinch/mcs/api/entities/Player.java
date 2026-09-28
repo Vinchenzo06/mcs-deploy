@@ -32,12 +32,15 @@ public class Player {
     private PlayerRole role = PlayerRole.PLAYER;
 
     @Column(name = "max_servers", nullable = false)
+    @Builder.Default
     private Integer maxServers = 1;
 
     @Column(name = "total_storage_mb", nullable = false)
+    @Builder.Default
     private Integer totalStorageMb = 5000;
 
     @Column(name = "is_banned", nullable = false)
+    @Builder.Default
     private Boolean isBanned = false;
 
     @Column(name = "created_at", nullable = false)
@@ -47,9 +50,11 @@ public class Player {
     private LocalDateTime lastSeenAt;
 
     @Column(name = "total_ram_mb", nullable = false)
+    @Builder.Default
     private Integer totalRamMb = 1024;
 
     @Column(name = "total_cpu_cores", nullable = false)
+    @Builder.Default
     private Integer totalCpuCores = 1;
 
     @PrePersist
