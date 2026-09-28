@@ -1,0 +1,54 @@
+# Compile l'agent Go à chaque modification de agent/ et le publie dans la
+# release GitHub "agent-latest". node-setup.sh télécharge l'agent depuis là.
+name: Agent
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - ".github/workflows/agent.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agent-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+          cache-dependency-path: agent/go.sum
+
+      - name: Vérification
+        working-directory: agent
+        run: go vet ./...
+
+      - name: Compilation (linux amd64 + arm64)
+        working-directory: agent
+        run: |
+          mkdir -p ../dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
+              go build -trimpath -ldflags "-s -w" -o ../dist/mcs-agent-linux-$arch .
+          done
+          cd ../dist && sha256sum mcs-agent-linux-* > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publication (release "agent-latest")
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete agent-latest --yes --cleanup-tag || true
+          gh release create agent-latest dist/* \
+            --title "Agent MCS (dernière version)" \
+            --notes "Compilé automatiquement depuis ${GITHUB_SHA::7}." \
+            --target "$GITHUB_SHA" \
+            --latest=false

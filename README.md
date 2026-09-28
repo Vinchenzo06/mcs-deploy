@@ -35,6 +35,18 @@ Il affiche une commande `curl ... | sudo bash -s -- <CODE>`.
 Copie-la et lance-la sur la **machine volontaire**. Elle détecte seule son port SSH,
 configure le tunnel rathole et l'agent, puis se connecte au VPS.
 
+La commande installe aussi Docker s'il manque, et l'agent MCS (téléchargé depuis
+la release GitHub `agent-latest`, compilée automatiquement par GitHub Actions à
+chaque modification de `agent/`). Pour mettre à jour l'agent d'une machine déjà
+jumelée :
+```bash
+curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh | sudo bash -s -- --update-agent
+```
+
+Les serveurs joueurs tournent isolés : réseau Docker dédié, sans accès aux autres
+serveurs, à la machine ni au réseau local du volontaire (Internet reste accessible),
+utilisateur non-root, limites de RAM et de processus.
+
 Chaque machine reçoit sa propre plage de ports et son propre jeton rathole :
 elle ne peut pas intercepter les serveurs d'une autre. Pour retirer une machine :
 `sudo mcs-remove-node <id>` (les id sont affichés par `sudo mcs-status`).

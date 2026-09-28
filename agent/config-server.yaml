@@ -3,7 +3,6 @@ api:
 
 node:
   token: TON_TOKEN
-  agent_version: "0.1.0"
 
 heartbeat:
   interval_seconds: 30

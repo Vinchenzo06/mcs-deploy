@@ -2,12 +2,17 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"runtime"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// errAuth : l'API a refusé le jeton du node
+var errAuth = errors.New("authentification refusée par l'API")
 
 type Message struct {
 	Type string                 `json:"type"`
@@ -60,11 +65,11 @@ func runConnection(config *Config, stopChan chan struct{}) error {
 	respType, _ := response["type"].(string)
 
 	if respType == "error" {
-		log.Fatalf("Erreur d'authentification : %v", response)
+		return fmt.Errorf("%w : %v", errAuth, response)
 	}
 
 	if respType != "register_ok" {
-		log.Fatalf("Réponse inattendue : %s", respType)
+		return fmt.Errorf("réponse inattendue à l'authentification : %s", respType)
 	}
 
 	nodeID, _ := response["node_id"].(float64)

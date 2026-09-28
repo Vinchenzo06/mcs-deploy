@@ -6,10 +6,19 @@
 #  complète à copier ici :
 #    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh | sudo bash -s -- <CODE>
 #
+#  Mettre à jour seulement l'agent (machine déjà jumelée) :
+#    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh | sudo bash -s -- --update-agent
+#
 #  Tout ce qui est propre à cette machine (port SSH, nom...) est détecté ici :
-#  le VPS n'a pas besoin de le connaître.
+#  le VPS n'a pas besoin de le connaître. L'agent est téléchargé depuis la
+#  release GitHub "agent-latest", compilée automatiquement (GitHub Actions).
 # =============================================================================
 set -euo pipefail
+
+REPO="${MCS_REPO:-Vinchenzo06/mcs-deploy}"
+AGENT_DIR=/opt/mcs-agent
+AGENT_BIN=$AGENT_DIR/mcs-agent
+AGENT_CFG=$AGENT_DIR/config.yaml
 
 C_STEP='\033[1;36m'; C_OK='\033[1;32m'; C_WARN='\033[1;33m'; C_ERR='\033[1;31m'; C_OFF='\033[0m'
 step() { echo -e "\n${C_STEP}==> $*${C_OFF}"; }
@@ -18,24 +27,113 @@ warn() { echo -e "${C_WARN}    ! $*${C_OFF}"; }
 die()  { echo -e "${C_ERR}    ✘ $*${C_OFF}" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "Lance avec sudo"
-CODE="${1:-}"
-[[ -n "$CODE" ]] || die "Code de jumelage manquant (obtiens-le avec 'sudo mcs-add-node' sur le VPS)"
+ARG="${1:-}"
+[[ -n "$ARG" ]] || die "Code de jumelage manquant (obtiens-le avec 'sudo mcs-add-node' sur le VPS)"
+UPDATE_ONLY=false
+[[ "$ARG" == "--update-agent" ]] && UPDATE_ONLY=true
 
-# ------------------------------------------------------------ prérequis ----
-step "Prérequis"
-missing=()
-for bin in jq curl unzip; do
-  command -v "$bin" >/dev/null || missing+=("$bin")
-done
-if (( ${#missing[@]} )); then
-  command -v apt-get >/dev/null || die "Installe d'abord : ${missing[*]}"
-  apt-get update -qq
-  apt-get install -y -qq "${missing[@]}" >/dev/null
+# ================================================================ étapes ====
+
+prerequisites() {
+  step "Prérequis"
+  local missing=() bin
+  for bin in jq curl unzip iptables; do
+    command -v "$bin" >/dev/null || missing+=("$bin")
+  done
+  if (( ${#missing[@]} )); then
+    command -v apt-get >/dev/null || die "Installe d'abord : ${missing[*]}"
+    apt-get update -qq
+    apt-get install -y -qq "${missing[@]}" >/dev/null
+  fi
+  ok "jq, curl, unzip, iptables"
+
+  if ! command -v docker >/dev/null; then
+    command -v apt-get >/dev/null || die "Docker est requis : installe-le d'abord"
+    echo "    Installation de Docker (paquet docker.io)..."
+    apt-get update -qq
+    apt-get install -y -qq docker.io >/dev/null
+  fi
+  systemctl enable --now docker >/dev/null 2>&1 || true
+  docker info >/dev/null 2>&1 || die "Docker ne répond pas (systemctl status docker)"
+  ok "Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null)"
+}
+
+# Télécharge et vérifie le binaire de l'agent (release GitHub "agent-latest")
+install_agent_binary() {
+  local arch base tmp sum_line
+  case "$(uname -m)" in
+    x86_64|amd64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) die "Architecture non prise en charge : $(uname -m)" ;;
+  esac
+  base="https://github.com/$REPO/releases/download/agent-latest"
+  tmp=$(mktemp -d)
+  if ! curl -fsSL -o "$tmp/mcs-agent" "$base/mcs-agent-linux-$arch" \
+     || ! curl -fsSL -o "$tmp/SHA256SUMS" "$base/SHA256SUMS"; then
+    rm -rf "$tmp"
+    if [[ -x "$AGENT_BIN" ]]; then
+      warn "Release de l'agent introuvable sur GitHub : l'agent actuel est conservé"
+      return
+    fi
+    die "Release de l'agent introuvable ($base). Vérifie l'onglet Actions du dépôt GitHub."
+  fi
+  sum_line=$(grep " mcs-agent-linux-$arch\$" "$tmp/SHA256SUMS" || true)
+  [[ -n "$sum_line" ]] || { rm -rf "$tmp"; die "Somme de contrôle absente pour mcs-agent-linux-$arch"; }
+  if [[ "$(sha256sum "$tmp/mcs-agent" | awk '{print $1}')" != "${sum_line%% *}" ]]; then
+    rm -rf "$tmp"
+    die "Somme de contrôle invalide : téléchargement corrompu"
+  fi
+  mkdir -p "$AGENT_DIR"
+  install -m 755 "$tmp/mcs-agent" "$AGENT_BIN"
+  rm -rf "$tmp"
+  ok "Agent installé ($AGENT_BIN, linux-$arch)"
+}
+
+write_agent_unit() {
+  cat > /etc/systemd/system/mcs-agent.service <<EOF
+[Unit]
+Description=MCS - Agent (serveurs Minecraft de cette machine)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+WorkingDirectory=$AGENT_DIR
+ExecStart=$AGENT_BIN -config $AGENT_CFG
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable mcs-agent >/dev/null 2>&1
+}
+
+show_agent_log() {
+  sleep 5
+  journalctl -u mcs-agent -n 8 --no-pager || true
+}
+
+# ============================================== mise à jour de l'agent seule ====
+if [[ "$UPDATE_ONLY" == "true" ]]; then
+  [[ -f "$AGENT_CFG" ]] || die "Aucune config d'agent ($AGENT_CFG) : jumelle d'abord la machine avec un code"
+  prerequisites
+  step "Mise à jour de l'agent MCS"
+  install_agent_binary
+  write_agent_unit
+  systemctl restart mcs-agent
+  show_agent_log
+  echo
+  ok "Agent à jour"
+  exit 0
 fi
-ok "jq, curl, unzip"
+
+# ============================================================ jumelage ====
+prerequisites
 
 # --------------------------------------------------------- lecture du code ----
-json=$(printf '%s' "$CODE" | base64 -d 2>/dev/null) || die "Code invalide"
+json=$(printf '%s' "$ARG" | base64 -d 2>/dev/null) || die "Code invalide"
 jq -e . >/dev/null 2>&1 <<<"$json" || die "Code invalide"
 field() { jq -r "$1 // empty" <<<"$json"; }
 [[ "$(field .v)" == "2" ]] || die "Code d'une ancienne version : génère-en un nouveau avec 'sudo mcs-add-node' sur le VPS (à jour)"
@@ -108,24 +206,40 @@ ok "client.toml écrit (ports $PORT_START-$PORT_END$([[ "$SSH_TUNNEL" == "true" 
 
 # ------------------------------------------------------------------- agent ----
 step "Agent MCS"
-AGENT_CFG=/opt/mcs-agent/config.yaml
+install_agent_binary
+
+DATA_PATH=/opt/mcs-data/servers
 if [[ -f "$AGENT_CFG" ]]; then
+  old=$(awk '$1 == "data_path:" { gsub(/"/, "", $2); print $2 }' "$AGENT_CFG" || true)
+  [[ -n "$old" ]] && DATA_PATH=$old
   cp "$AGENT_CFG" "$AGENT_CFG.bak.$(date +%s)"
-  sed -i -E "s|^(\s*url:\s*).*|\1ws://$VPS_IP:8081/ws/agent|" "$AGENT_CFG"
-  sed -i -E "s|^(\s*token:\s*).*|\1$NODE_TOKEN|" "$AGENT_CFG"
-  ok "config.yaml mis à jour (URL du VPS + token du node)"
-else
-  warn "Agent absent de /opt/mcs-agent : installation automatique prévue dans une version suivante"
 fi
+cat > "$AGENT_CFG" <<EOF
+# Généré par node-setup.sh (VPS $VPS_IP, node $NODE_ID)
+api:
+  url: ws://$VPS_IP:8081/ws/agent
+
+node:
+  token: $NODE_TOKEN
+
+heartbeat:
+  interval_seconds: 30
+
+docker:
+  data_path: $DATA_PATH
+EOF
+chmod 600 "$AGENT_CFG"
+mkdir -p "$DATA_PATH"
+write_agent_unit
+ok "config.yaml écrit (données : $DATA_PATH)"
 
 # -------------------------------------------------- conteneurs orphelins ----
-if command -v docker >/dev/null && [[ -n "$(docker ps -aq --filter label=mcs.managed=true)" ]]; then
+if [[ -n "$(docker ps -aq --filter label=mcs.managed=true)" ]]; then
   step "Anciens serveurs MCS"
   echo "    Ces conteneurs appartiennent à une ancienne base de données et"
   echo "    entreront en conflit avec les nouveaux serveurs :"
   docker ps -a --filter label=mcs.managed=true --format '      {{.Names}}  ({{.Status}})'
-  DATA_PATH=$(grep -E '^\s*data_path:' "$AGENT_CFG" 2>/dev/null | awk '{print $2}' | tr -d '"' || true)
-  if read -rp "    Les supprimer, avec le contenu de ${DATA_PATH:-<data_path inconnu>} ? [o/N] " rep </dev/tty 2>/dev/null \
+  if read -rp "    Les supprimer, avec le contenu de $DATA_PATH ? [o/N] " rep </dev/tty 2>/dev/null \
      && [[ "$rep" =~ ^[oOyY]$ ]]; then
     docker ps -aq --filter label=mcs.managed=true | xargs -r docker rm -f >/dev/null
     if [[ -n "$DATA_PATH" && -d "$DATA_PATH" ]]; then
@@ -142,11 +256,8 @@ step "Démarrage"
 systemctl daemon-reload
 systemctl enable rathole-client >/dev/null 2>&1
 systemctl restart rathole-client
-if [[ -f "$AGENT_CFG" ]]; then
-  systemctl restart mcs-agent
-  sleep 5
-  journalctl -u mcs-agent -n 5 --no-pager || true
-fi
+systemctl restart mcs-agent
+show_agent_log
 
 echo
 ok "Machine connectée au VPS $VPS_IP (node $NODE_ID, ports $PORT_START-$PORT_END)"

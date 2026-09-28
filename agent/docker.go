@@ -38,11 +38,21 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 	log.Printf("Création du serveur id=%d type=%s version=%s port=%d ram=%dMo",
 		req.ServerID, req.Type, req.Version, req.Port, req.RamMb)
 
+	// Jamais de serveur sans isolation réseau
+	if !isolationReady.Load() {
+		if err := ensureIsolation(); err != nil {
+			return fmt.Errorf("isolation réseau indisponible, création refusée : %w", err)
+		}
+	}
+
 	serverPath := serverDataPath(dataPath, req.ServerID)
 
-	// Créer le dossier de données
+	// Créer le dossier de données, propriété de l'utilisateur du conteneur
 	if err := os.MkdirAll(serverPath, 0755); err != nil {
 		return fmt.Errorf("création du dossier : %w", err)
+	}
+	if err := os.Chown(serverPath, containerUID, containerGID); err != nil {
+		return fmt.Errorf("droits du dossier : %w", err)
 	}
 
 	// Vérifier qu'il n'y a pas déjà un conteneur avec ce nom
@@ -64,13 +74,16 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 		"-e", "TYPE=" + serverType,
 		"-e", "VERSION=" + req.Version,
 		"-e", fmt.Sprintf("MEMORY=%dM", req.RamMb),
-		"--cpus", fmt.Sprintf("%d", req.CpuCores),
 		"-e", "ENABLE_QUERY=false",
+		"--cpus", fmt.Sprintf("%d", req.CpuCores),
+	}
+	args = append(args, hardeningArgs(req.RamMb)...)
+	args = append(args,
 		"--label", "mcs.managed=true",
 		"--label", fmt.Sprintf("mcs.server_id=%d", req.ServerID),
 		"--label", fmt.Sprintf("mcs.owner=%s", req.OwnerName),
 		"itzg/minecraft-server",
-	}
+	)
 
 	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
@@ -101,6 +114,35 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 	}
 
 	return nil
+}
+
+// Utilisateur non-root sous lequel tournent les serveurs (celui de l'image itzg)
+const (
+	containerUID = 1000
+	containerGID = 1000
+)
+
+// hardeningArgs : réseau isolé et limites de sécurité pour un conteneur de serveur.
+func hardeningArgs(ramMb int) []string {
+	// RAM du conteneur = tas Java + marge pour la JVM hors tas (mods, threads...)
+	containerMb := ramMb + ramMb/4 + 512
+
+	args := []string{
+		"--network", mcsNetwork,
+		"--user", fmt.Sprintf("%d:%d", containerUID, containerGID),
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges:true",
+		"--pids-limit", "2048",
+		"--memory", fmt.Sprintf("%dm", containerMb),
+		"--memory-swap", fmt.Sprintf("%dm", containerMb),
+		"--log-driver", "json-file",
+		"--log-opt", "max-size=10m",
+		"--log-opt", "max-file=3",
+	}
+	for _, dns := range containerDNS {
+		args = append(args, "--dns", dns)
+	}
+	return args
 }
 
 // waitForConfigFiles attend que server.properties et spigot.yml soient générés
