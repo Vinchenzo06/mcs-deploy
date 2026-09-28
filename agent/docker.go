@@ -82,6 +82,8 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 		"-e", "ENABLE_QUERY=false",
 		// RCON local au conteneur (port non publié) : /mcs console via rcon-cli
 		"-e", "ENABLE_RCON=true",
+		// Les commandes de MCS (OP, équipes...) ne s'affichent pas aux OP
+		"-e", "BROADCAST_RCON_TO_OPS=false",
 		"--cpus", fmt.Sprintf("%d", req.CpuCores),
 	}
 	args = append(args, hardeningArgs(req.RamMb)...)

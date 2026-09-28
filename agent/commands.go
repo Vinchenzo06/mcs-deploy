@@ -18,7 +18,7 @@ func handleCommand(conn *websocket.Conn, config *Config, msgType, commandId stri
 	case "create_server":
 		handleCreateServer(conn, config, commandId, msg)
 	case "start_server":
-		handleStartServer(conn, commandId, msg)
+		handleStartServer(conn, config, commandId, msg)
 	case "stop_server":
 		handleStopServer(conn, commandId, msg)
 	case "delete_server":
@@ -86,11 +86,17 @@ func handleCreateServer(conn *websocket.Conn, config *Config, commandId string, 
 	})
 }
 
-func handleStartServer(conn *websocket.Conn, commandId string, msg map[string]interface{}) {
+func handleStartServer(conn *websocket.Conn, config *Config, commandId string, msg map[string]interface{}) {
 	serverID, ok := getServerID(msg)
 	if !ok {
 		sendCommandError(conn, commandId, "missing_server_id", "server_id manquant")
 		return
+	}
+
+	// Serveurs créés avant la 0.9.0 : les commandes console de MCS ne doivent pas
+	// s'afficher aux OP ("[Rcon: ...]"). Pris en compte à ce démarrage.
+	if err := setServerProperty(serverDataPath(config.Docker.DataPath, serverID), "broadcast-rcon-to-ops", "false"); err != nil {
+		log.Printf("server.properties du serveur %d : %v", serverID, err)
 	}
 
 	if err := StartServer(serverID); err != nil {

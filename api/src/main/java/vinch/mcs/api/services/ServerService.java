@@ -552,8 +552,20 @@ public class ServerService {
             commands.add("op " + name);
         }
         if (!Boolean.FALSE.equals(s.getShowNetworkRank())) {
-            String team = teamName(p.getNetworkRank());
-            String prefix = safeTextComponent(p.getNetworkPrefix());
+            // Un seul titre : admin, sinon créateur du serveur, sinon rang réseau
+            String team;
+            String prefix;
+            if (AccessService.isAdmin(p)) {
+                team = teamName(1, p.getNetworkRank() == null ? "admin" : p.getNetworkRank());
+                prefix = safeTextComponent(p.getNetworkPrefix());
+            } else if (AccessService.isOwner(p, s)) {
+                team = teamName(2, "createur");
+                prefix = CREATOR_PREFIX;
+            } else {
+                boolean ranked = p.getNetworkRank() != null && !"default".equals(p.getNetworkRank());
+                team = teamName(ranked ? 5 : 9, ranked ? p.getNetworkRank() : "default");
+                prefix = safeTextComponent(p.getNetworkPrefix());
+            }
             commands.add("team add " + team);
             commands.add("team modify " + team + " prefix " + prefix);
             commands.add("team join " + team + " " + name);
@@ -576,17 +588,26 @@ public class ServerService {
         });
     }
 
-    /** Équipe vanilla d'un rang réseau : "mcs_admin", "mcs_vip"... ("mcs_default" sans rang) */
-    static String teamName(String rank) {
+    /**
+     * Équipe vanilla d'un titre : "mcs_1admin", "mcs_2createur", "mcs_5vip", "mcs_9default".
+     * Le chiffre ordonne le Tab (trié par nom d'équipe) : admins, créateur, rangs, autres.
+     */
+    static String teamName(int order, String rank) {
         String r = rank == null ? "" : rank.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_]", "");
         if (r.isEmpty()) {
             r = "default";
         }
-        return "mcs_" + r.substring(0, Math.min(12, r.length()));
+        return "mcs_" + order + r.substring(0, Math.min(10, r.length()));
     }
 
+    /** Titre du créateur, discret (petites capitales), comme les préfixes par défaut du réseau */
+    static final String CREATOR_PREFIX = "{\"text\":\"\\u1d04\\u0280\\u1d07\\u1d00\\u1d1b\\u1d07\\u1d1c\\u0280 \",\"color\":\"gold\"}";
+
+    // Caractères non ASCII échappés (\\uXXXX) : la commande console reste en ASCII
     private static final com.fasterxml.jackson.databind.ObjectMapper TEXT_MAPPER =
-            new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.json.JsonMapper.builder()
+                    .enable(com.fasterxml.jackson.core.json.JsonWriteFeature.ESCAPE_NON_ASCII)
+                    .build();
 
     /**
      * Préfixe en composant texte JSON, validé et réécrit sur une ligne (il part dans
@@ -621,13 +642,15 @@ public class ServerService {
         // Coupé : on retire nos équipes du serveur (les joueurs gardent leur nom normal)
         Long nodeId = server.getNode().getId();
         Long id = server.getId();
-        List<String> teams = new ArrayList<>();
-        teams.add(teamName(null));
+        Set<String> teams = new LinkedHashSet<>();
+        teams.add("mcs_default"); // noms du lot 19
+        teams.add(teamName(2, "createur"));
+        teams.add(teamName(9, "default"));
+        teams.add(teamName(1, "admin"));
         for (String rank : playerRepository.findDistinctNetworkRanks()) {
-            String t = teamName(rank);
-            if (!teams.contains(t)) {
-                teams.add(t);
-            }
+            teams.add("mcs_" + rank.replaceAll("[^a-z0-9_]", ""));
+            teams.add(teamName(1, rank));
+            teams.add(teamName(5, rank));
         }
         CompletableFuture.runAsync(() -> {
             for (String t : teams) {

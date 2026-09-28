@@ -209,8 +209,10 @@ contourner, et refusé si l'API ne répond pas.
 - `/mcs` est une commande du **proxy** : elle marche depuis le lobby et depuis tous les
   serveurs de jeu (Velocity la traite avant le serveur).
 - En arrivant sur un serveur, par sa console : le **créateur** et les **admins** sont OP ;
-  le **rôle réseau** s'affiche en petit (préfixe `[Admin]`, `[VIP]`... dans le chat, le Tab et
-  au-dessus de la tête) grâce aux équipes vanilla `mcs_<rang>`. Paper, Fabric, Forge, Vanilla.
+  un **titre** discret s'affiche (petites capitales, dans le chat, le Tab et au-dessus de la
+  tête) grâce aux équipes vanilla `mcs_<ordre><titre>` : `ᴀᴅᴍɪɴ` passe avant `ᴄʀᴇᴀᴛᴇᴜʀ`, qui
+  passe avant le rang réseau (`ᴘʀᴇᴍɪᴜᴍ`, `ᴠɪᴘ`). Le Tab est trié dans cet ordre. Les commandes de
+  MCS ne s'affichent pas aux OP (`broadcast-rcon-to-ops=false`). Paper, Fabric, Forge, Vanilla.
 - Le propriétaire garde la main sur son serveur (son propre LuckPerms, ses rôles...). S'il
   utilise ses propres équipes : `/mcs display <serveur> off`.
 
@@ -218,7 +220,7 @@ contourner, et refusé si l'API ne répond pas.
 
 Proxy et lobby partagent la même base LuckPerms (PostgreSQL `luckperms`, sur le VPS
 seulement). Les serveurs de jeu n'y sont **jamais** branchés : leur propriétaire a accès aux
-fichiers, donc au mot de passe. Préfixe d'un groupe : `lp group vip meta setprefix 20 "&a[VIP] "`
+fichiers, donc au mot de passe. Titre d'un groupe : `lp group vip meta setprefix 20 "&aᴠɪᴘ "`
 (dans `sudo mcs-rcon`). L'étape `bootstrap` ne réécrit plus les quotas et préfixes déjà réglés.
 
 ## Limites connues

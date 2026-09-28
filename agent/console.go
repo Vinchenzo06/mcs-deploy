@@ -7,7 +7,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -96,4 +98,41 @@ func handleConsoleCommand(conn *websocket.Conn, commandId string, msg map[string
 		"server_id": serverID,
 		"output":    output,
 	})
+}
+
+// setServerProperty change (ou ajoute) une clé de server.properties sans toucher
+// au reste ; sans fichier (serveur jamais démarré), ne fait rien
+func setServerProperty(serverPath, key, value string) error {
+	file := filepath.Join(serverPath, "server.properties")
+	info, err := os.Stat(file)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(raw), "\n")
+	found := false
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), key+"=") {
+			if strings.TrimSpace(l) == key+"="+value {
+				return nil
+			}
+			lines[i] = key + "=" + value
+			found = true
+		}
+	}
+	if !found {
+		if len(lines) > 0 && lines[len(lines)-1] == "" {
+			lines = append(lines[:len(lines)-1], key+"="+value, "")
+		} else {
+			lines = append(lines, key+"="+value)
+		}
+	}
+	// Réécrit en place : le fichier garde son propriétaire (uid du conteneur)
+	return os.WriteFile(file, []byte(strings.Join(lines, "\n")), info.Mode().Perm())
 }

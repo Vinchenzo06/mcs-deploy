@@ -1211,7 +1211,10 @@ bootstrap_luckperms() {
   # État actuel : ce qui est déjà réglé (à la main ou avant) est gardé tel quel
   before=$(mcs-lp-export 2>/dev/null || echo '{}')
   lp_has() { jq -e --arg g "$1" --arg p "$2" '.groups[$g].nodes // [] | map(.key) | any(startswith($p))' <<<"$before" >/dev/null 2>&1; }
-  local -A prefix=([admin]="&c[Admin] " [premium]="&6[Premium] " [vip]="&a[VIP] ")
+  # Titres discrets en petites capitales ; les anciens titres par défaut ("[Admin]"...)
+  # sont remplacés, ceux que tu as changés toi-même sont gardés
+  local -A prefix=([admin]="&cᴀᴅᴍɪɴ " [premium]="&6ᴘʀᴇᴍɪᴜᴍ " [vip]="&aᴠɪᴘ ")
+  local -A old_prefix=([admin]="&c[Admin] " [premium]="&6[Premium] " [vip]="&a[VIP] ")
   local -A weight=([admin]=100 [premium]=30 [vip]=20)
   for g in default vip premium admin; do
     var="QUOTA_${g^^}"
@@ -1219,7 +1222,9 @@ bootstrap_luckperms() {
     if [[ "$g" != "default" ]]; then
       cmds+=("lp creategroup $g")
       lp_has "$g" "weight." || cmds+=("lp group $g setweight ${weight[$g]}")
-      lp_has "$g" "prefix." || cmds+=("lp group $g meta setprefix ${weight[$g]} \"${prefix[$g]}\"")
+      if ! lp_has "$g" "prefix." || lp_has "$g" "prefix.${weight[$g]}.${old_prefix[$g]}"; then
+        cmds+=("lp group $g meta setprefix ${weight[$g]} \"${prefix[$g]}\"")
+      fi
     fi
     lp_has "$g" "meta.max-servers." || cmds+=("lp group $g meta set max-servers $s")
     lp_has "$g" "meta.total-ram." || cmds+=("lp group $g meta set total-ram $ram")
