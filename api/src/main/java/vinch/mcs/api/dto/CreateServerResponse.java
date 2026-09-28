@@ -17,4 +17,5 @@ public class CreateServerResponse {
     private Integer port;
     private Long nodeId;
     private String status;
+    private Integer storageMb;
 }

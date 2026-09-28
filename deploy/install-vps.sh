@@ -320,7 +320,7 @@ echo
 echo "=== Nodes ==="
 runuser -u postgres -- psql -qtA -d mcs_db -c "SELECT '  node ' || id || '  ' || COALESCE(hostname, '?') || '  ports=' || COALESCE(port_start || '-' || port_end, 'aucune') || '  online=' || is_online || '  heartbeat=' || COALESCE(to_char(last_heartbeat_at, 'YYYY-MM-DD HH24:MI'), 'jamais') || CASE WHEN is_revoked THEN '  (révoqué)' ELSE '' END FROM nodes ORDER BY id" 2>/dev/null
 echo
-echo "=== Capacité des machines (utilisé / prêté) ==="
+echo "=== Capacité des machines (utilisé / prêté ; 10 % du prêté restent en réserve) ==="
 runuser -u postgres -- psql -qtA -d mcs_db -c "
   SELECT '  node ' || n.id || '  RAM ' || COALESCE(SUM(s.allocated_ram_mb + s.allocated_ram_mb / 4 + 512), 0) || '/' || n.total_ram_mb || ' Mo'
       || '  CPU ' || COALESCE(SUM(s.allocated_cpu_cores), 0) || '/' || n.cpu_cores

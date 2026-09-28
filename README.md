@@ -109,8 +109,16 @@ curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/
 la machine en ligne qui a la place et garde le plus de RAM libre ; s'il n'y en a aucune,
 la création est refusée. La RAM comptée est celle du conteneur (tas Java + 25 % + 512 Mo).
 
-Chaque serveur a un quota disque (5 Go par défaut), mesuré toutes les 10 minutes : au-delà,
-il ne peut plus démarrer ; au-delà de 125 %, il est arrêté proprement. Voir ou changer les
+Chaque serveur reçoit un quota disque **proportionnel à sa RAM** : s'il occupe 10 % de la
+RAM prêtée par sa machine, il reçoit 10 % de son disque prêté (le joueur ne choisit pas son
+disque ; la somme des quotas ne dépasse jamais le disque prêté). Mesuré toutes les 10 minutes : au-delà,
+il ne peut plus démarrer ; au-delà de 110 %, il est arrêté proprement.
+
+**Réserve de sécurité** : une machine n'est remplie qu'à 90 % de ce que le volontaire
+prête (RAM, CPU, disque ; réglable avec `MCS_NODES_RESERVE_PERCENT`). Comme les quotas
+disque suivent la RAM, même si tous les serveurs dépassaient leur quota en même temps,
+ils n'occuperaient au plus que 90 % × 110 % = 99 % du disque prêté, qui laisse lui-même
+au moins 10 % du disque libre au volontaire. La RAM est une limite dure (Docker). Voir ou changer les
 quotas sur le VPS : `sudo mcs-disk-quota [<nom> <Mo>]`. Vue d'ensemble : `sudo mcs-status`.
 
 ## Cohérence machines ↔ API

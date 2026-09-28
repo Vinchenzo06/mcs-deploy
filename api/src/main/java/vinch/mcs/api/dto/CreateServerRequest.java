@@ -29,7 +29,7 @@ public class CreateServerRequest {
     @NotNull
     private Integer cpuCores;
 
-    @NotNull
+    // Ignoré : le quota disque est calculé par l'API (part de la machine)
     private Integer storageMb;
 
     private Long forceNodeId;

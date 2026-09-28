@@ -38,6 +38,9 @@ mcs:
     start: 25600
     end: 29999
     per-node: 20
+  nodes:
+    # Part de la capacité prêtée par chaque volontaire gardée en réserve (en %)
+    reserve-percent: 10
   velocity:
     url: http://127.0.0.1:8082
     plugin-key: ${VELOCITY_PLUGIN_KEY}

@@ -26,7 +26,9 @@ import java.util.stream.Collectors;
  * les agents les renvoient dans les 30 secondes.
  *
  * Quota disque : au-delà de l'espace alloué, un serveur ne peut plus démarrer ;
- * au-delà de 125 %, il est arrêté proprement (protection du disque du volontaire).
+ * au-delà de 110 %, il est arrêté proprement (protection du disque du volontaire).
+ * Avec la réserve de placement (quotas ≤ 90 % du disque prêté), même si tous les
+ * serveurs dépassent en même temps : 90 % × 110 % = 99 % du disque prêté au plus.
  * Mesure toutes les 10 minutes : c'est un quota "souple", pas une limite dure.
  */
 @Service
@@ -38,7 +40,7 @@ public class ServerMetricsService {
                           long netRxBytes, long netTxBytes, long pids, Long diskUsedMb, Instant updatedAt) {
     }
 
-    private static final double DISK_STOP_RATIO = 1.25;
+    private static final double DISK_STOP_RATIO = 1.10;
 
     private final ServerRepository serverRepository;
     private final VelocityClient velocityClient;

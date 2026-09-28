@@ -3,6 +3,7 @@ package vinch.mcs.api.services;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vinch.mcs.api.dto.CreateServerRequest;
@@ -76,6 +77,10 @@ public class ServerService {
         // Choisir le node : assez de place pour ce serveur (RAM, CPU, disque)
         Node node = chooseNode(request.getForceNodeId(), request);
 
+        // Disque proportionnel à la RAM : 10 % de la RAM prêtée par la machine
+        // donne 10 % de son disque prêté (le joueur ne choisit pas son disque)
+        int storageMb = diskQuotaFor(node, request.getRamMb());
+
         // Allouer un port libre
         int port = allocatePort(node);
 
@@ -96,7 +101,7 @@ public class ServerService {
                 .tunnelPort(port)
                 .allocatedRamMb(request.getRamMb())
                 .allocatedCpuCores(request.getCpuCores())
-                .allocatedStorageMb(request.getStorageMb())
+                .allocatedStorageMb(storageMb)
                 .status(ServerStatus.CREATING)
                 .build();
 
@@ -111,7 +116,7 @@ public class ServerService {
         data.put("port", port);
         data.put("ram_mb", request.getRamMb());
         data.put("cpu_cores", request.getCpuCores());  // ← AJOUTER
-        data.put("storage_mb", request.getStorageMb());
+        data.put("storage_mb", storageMb);
         data.put("owner_name", owner.getMinecraftUsername());
 
         try {
@@ -154,6 +159,7 @@ public class ServerService {
                 .port(server.getTunnelPort())
                 .nodeId(node.getId())
                 .status(server.getStatus().name())
+                .storageMb(storageMb)
                 .build();
     }
 
@@ -164,6 +170,35 @@ public class ServerService {
 
     // Marge de disque libre à garder sur la machine du volontaire
     private static final int DISK_FREE_MARGIN_MB = 2048;
+
+    // Plancher du quota disque (petites machines, petits serveurs)
+    private static final int MIN_DISK_QUOTA_MB = 1024;
+
+    // Réserve de sécurité : une machine n'est remplie qu'à (100 - réserve) % de ce
+    // que le volontaire prête (RAM, CPU, disque). Les quotas disque suivant la RAM,
+    // leur somme reste elle aussi sous ce seuil. Réglage : MCS_NODES_RESERVE_PERCENT.
+    @Value("${mcs.nodes.reserve-percent:10}")
+    private int reservePercent;
+
+    private int usable(int lent) {
+        int pct = Math.max(0, Math.min(50, reservePercent));
+        return lent * (100 - pct) / 100;
+    }
+
+    /**
+     * Quota disque d'un serveur sur une machine : la même part de son disque prêté
+     * que la part de sa RAM prêtée qu'il occupe (RAM du conteneur, comme pour le
+     * placement). La somme des quotas ne peut donc jamais dépasser le disque prêté.
+     */
+    static int diskQuotaFor(Node node, int heapMb) {
+        Integer nodeRam = node.getTotalRamMb();
+        Integer nodeDisk = node.getTotalStorageMb();
+        if (nodeRam == null || nodeRam <= 0 || nodeDisk == null || nodeDisk <= 0) {
+            return 5000; // capacité inconnue : ancien comportement
+        }
+        long quota = (long) nodeDisk * containerRamMb(heapMb) / nodeRam;
+        return (int) Math.max(MIN_DISK_QUOTA_MB, Math.min(quota, nodeDisk));
+    }
 
     /** Place encore libre sur une machine pour un nouveau serveur, ou null si elle ne peut pas l'accueillir */
     private Integer freeRamAfter(Node node, CreateServerRequest request) {
@@ -177,12 +212,13 @@ public class ServerService {
             cpu += s.getAllocatedCpuCores();
             disk += s.getAllocatedStorageMb();
         }
-        int freeRam = node.getTotalRamMb() - ram - containerRamMb(request.getRamMb());
-        boolean cpuOk = cpu + request.getCpuCores() <= node.getCpuCores();
+        int freeRam = usable(node.getTotalRamMb()) - ram - containerRamMb(request.getRamMb());
+        int storage = diskQuotaFor(node, request.getRamMb());
+        boolean cpuOk = cpu + request.getCpuCores() <= Math.max(1, usable(node.getCpuCores()));
         boolean diskOk = node.getTotalStorageMb() == null || node.getTotalStorageMb() <= 0
-                || disk + request.getStorageMb() <= node.getTotalStorageMb();
+                || disk + storage <= usable(node.getTotalStorageMb());
         boolean hostDiskOk = node.getHostDiskFreeMb() == null
-                || node.getHostDiskFreeMb() - request.getStorageMb() >= DISK_FREE_MARGIN_MB;
+                || node.getHostDiskFreeMb() - storage >= DISK_FREE_MARGIN_MB;
         return (freeRam >= 0 && cpuOk && diskOk && hostDiskOk) ? freeRam : null;
     }
 

@@ -169,10 +169,12 @@ public class ServerCommand implements CommandExecutor {
                         }
 
                         String serverName = result.get("name").asText();
-                        int port = result.get("port").asInt();
 
                         player.sendMessage(Component.text("✅ Serveur '" + serverName + "' créé avec succès !").color(NamedTextColor.GREEN));
-                        player.sendMessage(Component.text("📡 Port : " + port + " | RAM : " + finalRamMb + " Mo | CPU : " + finalCpuCores + " core(s)").color(NamedTextColor.GRAY));
+                        long storage = result.path("storageMb").asLong(0);
+                        player.sendMessage(Component.text("RAM : " + size(finalRamMb) + "  ·  CPU : " + finalCpuCores
+                                + (finalCpuCores > 1 ? " cœurs" : " cœur")
+                                + (storage > 0 ? "  ·  Disque : " + size(storage) : "")).color(NamedTextColor.GRAY));
                         player.sendMessage(Component.text("Connecte-toi avec /mcs join " + serverName).color(NamedTextColor.AQUA));
                     });
                 });
