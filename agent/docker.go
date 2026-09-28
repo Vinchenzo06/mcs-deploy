@@ -305,9 +305,9 @@ func DeleteServer(dataPath string, serverID int64, deleteData bool) error {
 	// Stopper d'abord (ignore l'erreur si déjà arrêté)
 	_ = StopServer(serverID)
 
-	// Supprimer le conteneur
+	// Supprimer le conteneur (déjà absent = rien à faire)
 	out, err := exec.Command("docker", "rm", containerName(serverID)).CombinedOutput()
-	if err != nil {
+	if err != nil && !strings.Contains(string(out), "No such container") {
 		return fmt.Errorf("docker rm a échoué : %s : %w", string(out), err)
 	}
 

@@ -196,6 +196,15 @@ public class ServerService {
         log.info("Suppression définitive du serveur {} (name={} velocityName={})",
                 serverId, server.getName(), server.getVelocityName());
 
+        // La machine doit être joignable, sinon son conteneur resterait orphelin.
+        // Exception : machine révoquée (ou absente), qui ne reviendra jamais.
+        Node node = server.getNode();
+        boolean nodeGone = node == null || Boolean.TRUE.equals(node.getIsRevoked());
+        if (!nodeGone && !agentWebSocketHandler.isNodeOnline(node.getId())) {
+            throw new RuntimeException("La machine qui héberge ce serveur est hors ligne : "
+                    + "suppression impossible pour l'instant, réessaie plus tard");
+        }
+
         // 1. Désenregistrer du Velocity avec velocity_name
         try {
             velocityClient.unregisterServer(server.getVelocityName());
@@ -204,18 +213,21 @@ public class ServerService {
             log.warn("Erreur désenregistrement Velocity (on continue) : {}", e.getMessage());
         }
 
-        // 2. Envoyer la commande à l'agent
-        Map<String, Object> data = new HashMap<>();
-        data.put("server_id", server.getId());
-        data.put("delete_data", deleteData);
+        // 2. Envoyer la commande à l'agent (sauf machine révoquée) : en cas d'échec,
+        //    la base n'est PAS modifiée, pour ne jamais laisser de conteneur orphelin
+        if (!nodeGone) {
+            Map<String, Object> data = new HashMap<>();
+            data.put("server_id", server.getId());
+            data.put("delete_data", deleteData);
 
-        try {
-            CompletableFuture<JsonNode> future = agentWebSocketHandler.sendCommand(
-                    server.getNode().getId(), "delete_server", data);
-            future.get();
+            JsonNode result = agentWebSocketHandler.sendCommand(node.getId(), "delete_server", data).get();
+            if (result != null && result.has("success") && !result.get("success").asBoolean()) {
+                String message = result.path("message").asText("erreur inconnue");
+                throw new RuntimeException("Suppression refusée par la machine : " + message);
+            }
             log.info("Conteneur et données supprimés côté agent");
-        } catch (Exception e) {
-            log.warn("Erreur suppression côté agent (on continue) : {}", e.getMessage());
+        } else {
+            log.info("Machine révoquée : suppression en base uniquement");
         }
 
         // 3. VRAIE suppression en base

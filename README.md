@@ -95,6 +95,18 @@ sudo mcs-admin TonPseudo
 | `sudo mcs-lp-export` | État LuckPerms en JSON (groupes, joueurs) |
 | `sudo mcs-rcon "<commande>"` | Commande dans la console du lobby |
 
+## Cohérence machines ↔ API
+
+À chaque connexion (puis toutes les 5 minutes), l'agent envoie l'inventaire de ses
+conteneurs. L'API corrige les statuts (serveur arrêté ou redémarré hors de son
+contrôle, conteneur disparu → `ERROR`) et met en **quarantaine** les conteneurs
+qu'elle ne connaît pas : arrêtés, renommés `mcs-orphan-<id>-<date>`, **données
+conservées** (jamais de suppression automatique). Pour les supprimer, sur la machine :
+`docker rm mcs-orphan-…` puis le dossier `/opt/mcs-data/servers/<id>`.
+
+Un serveur ne peut pas être supprimé pendant que sa machine est hors ligne (sauf
+machine révoquée).
+
 ## Vie privée des joueurs
 
 - Les serveurs joueurs ne reçoivent jamais l'IP réelle des joueurs : le plugin

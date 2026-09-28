@@ -6,10 +6,21 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// gorilla/websocket n'accepte qu'un seul écrivain à la fois : heartbeats,
+// inventaires et résultats de commandes passent tous par writeJSON.
+var writeMu sync.Mutex
+
+func writeJSON(conn *websocket.Conn, v interface{}) error {
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	return conn.WriteJSON(v)
+}
 
 // errAuth : l'API a refusé le jeton du node
 var errAuth = errors.New("authentification refusée par l'API")
@@ -45,7 +56,7 @@ func runConnection(config *Config, stopChan chan struct{}) error {
 		AgentVersion: config.Node.AgentVersion,
 	}
 
-	if err := conn.WriteJSON(register); err != nil {
+	if err := writeJSON(conn, register); err != nil {
 		return err
 	}
 
@@ -89,13 +100,22 @@ func runConnection(config *Config, stopChan chan struct{}) error {
 			msgType, _ := msg["type"].(string)
 			commandId, _ := msg["command_id"].(string)
 
-			// Tout ce qui n'est pas heartbeat ou register est une commande
-			handleCommand(conn, config, msgType, commandId, msg)
+			// Tout ce qui n'est pas heartbeat ou register est une commande. Chaque
+			// commande tourne à part : une création de plusieurs minutes ne bloque
+			// pas les autres (arrêt d'un autre serveur, quarantaine...).
+			go handleCommand(conn, config, msgType, commandId, msg)
 		}
 	}()
 
+	// Inventaire complet à la connexion : l'API réconcilie tous les statuts
+	if err := sendInventory(conn, true); err != nil {
+		log.Printf("Inventaire : %v", err)
+	}
+
 	heartbeatTicker := time.NewTicker(time.Duration(config.Heartbeat.IntervalSeconds) * time.Second)
 	defer heartbeatTicker.Stop()
+	inventoryTicker := time.NewTicker(inventoryInterval)
+	defer inventoryTicker.Stop()
 
 	for {
 		select {
@@ -105,9 +125,15 @@ func runConnection(config *Config, stopChan chan struct{}) error {
 			if err := sendHeartbeat(conn); err != nil {
 				return err
 			}
+		case <-inventoryTicker.C:
+			if err := sendInventory(conn, false); err != nil {
+				log.Printf("Inventaire : %v", err)
+			}
 		case <-stopChan:
 			log.Println("Arrêt demandé, déconnexion...")
-			conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			writeMu.Lock()
+			_ = conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			writeMu.Unlock()
 			return nil
 		}
 	}
@@ -125,7 +151,7 @@ func sendHeartbeat(conn *websocket.Conn) error {
 		},
 	}
 
-	if err := conn.WriteJSON(heartbeat); err != nil {
+	if err := writeJSON(conn, heartbeat); err != nil {
 		return err
 	}
 

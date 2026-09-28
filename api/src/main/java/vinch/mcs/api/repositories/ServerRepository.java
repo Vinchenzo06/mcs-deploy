@@ -13,6 +13,8 @@ public interface ServerRepository extends JpaRepository<Server, Long> {
 
     List<Server> findByStatus(ServerStatus status);
 
+    List<Server> findByNodeId(Long nodeId);
+
     @Query("SELECT s.tunnelPort FROM Server s WHERE s.node.id = :nodeId AND s.tunnelPort IS NOT NULL")
     List<Integer> findUsedPortsByNodeId(Long nodeId);
 

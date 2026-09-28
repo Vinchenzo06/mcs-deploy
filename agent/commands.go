@@ -27,6 +27,8 @@ func handleCommand(conn *websocket.Conn, config *Config, msgType, commandId stri
 		handleServerStatus(conn, commandId, msg)
 	case "list_servers":
 		handleListServers(conn, commandId)
+	case "quarantine_server":
+		handleQuarantineServer(conn, commandId, msg)
 	default:
 		log.Printf("Type de commande non géré : %s", msgType)
 		sendCommandError(conn, commandId, "unknown_command", "Commande inconnue : "+msgType)
@@ -171,6 +173,27 @@ func handleListServers(conn *websocket.Conn, commandId string) {
 	})
 }
 
+// handleQuarantineServer isole un conteneur orphelin (inconnu de l'API)
+func handleQuarantineServer(conn *websocket.Conn, commandId string, msg map[string]interface{}) {
+	serverID, ok := getServerID(msg)
+	if !ok {
+		sendCommandError(conn, commandId, "missing_server_id", "server_id manquant")
+		return
+	}
+
+	newName, err := QuarantineServer(serverID)
+	if err != nil {
+		sendCommandError(conn, commandId, "quarantine_failed", err.Error())
+		return
+	}
+
+	sendCommandResult(conn, commandId, map[string]interface{}{
+		"server_id": serverID,
+		"status":    "quarantined",
+		"container": newName,
+	})
+}
+
 // getServerID extrait le server_id depuis le payload data
 func getServerID(msg map[string]interface{}) (int64, bool) {
 	data, ok := msg["data"].(map[string]interface{})
@@ -193,7 +216,7 @@ func sendCommandResult(conn *websocket.Conn, commandId string, result interface{
 		"result":     result,
 	}
 
-	if err := conn.WriteJSON(response); err != nil {
+	if err := writeJSON(conn, response); err != nil {
 		log.Printf("Erreur d'envoi du résultat : %v", err)
 	}
 }
@@ -208,7 +231,7 @@ func sendCommandError(conn *websocket.Conn, commandId, errorCode, errorMsg strin
 		"message":    errorMsg,
 	}
 
-	if err := conn.WriteJSON(response); err != nil {
+	if err := writeJSON(conn, response); err != nil {
 		log.Printf("Erreur d'envoi de l'erreur : %v", err)
 	}
 }

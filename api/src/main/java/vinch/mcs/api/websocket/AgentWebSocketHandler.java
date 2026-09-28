@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -15,6 +16,7 @@ import vinch.mcs.api.repositories.NodeRepository;
 import vinch.mcs.api.services.NodeService;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -28,6 +30,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
 
     private final NodeService nodeService;
     private final NodeRepository nodeRepository;
+    private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     // Map nodeId -> WebSocketSession pour pouvoir envoyer des messages plus tard
@@ -55,6 +58,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
                 case "register" -> handleRegister(session, json);
                 case "heartbeat" -> handleHeartbeat(session, json);
                 case "command_result" -> handleCommandResult(json);
+                case "inventory" -> handleInventory(session, json);
                 default -> {
                     if (sessionToNode.containsKey(session.getId())) {
                         log.debug("Message reçu de node {} : type={}", sessionToNode.get(session.getId()), type);
@@ -69,6 +73,27 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
             log.error("Erreur de traitement du message WebSocket", e);
             sendError(session, "invalid_message");
         }
+    }
+
+    // Inventaire des conteneurs de la machine : réconcilié par ReconciliationService
+    private void handleInventory(WebSocketSession session, JsonNode json) throws Exception {
+        Long nodeId = sessionToNode.get(session.getId());
+        if (nodeId == null) {
+            sendError(session, "not_authenticated");
+            return;
+        }
+        Map<Long, String> containers = new HashMap<>();
+        JsonNode list = json.get("containers");
+        if (list != null && list.isArray()) {
+            for (JsonNode c : list) {
+                if (c.hasNonNull("server_id") && c.hasNonNull("state")) {
+                    containers.put(c.get("server_id").asLong(), c.get("state").asText());
+                }
+            }
+        }
+        boolean fullSync = json.path("full_sync").asBoolean(false);
+        log.debug("Inventaire de la machine {} : {} conteneur(s) (complet={})", nodeId, containers.size(), fullSync);
+        eventPublisher.publishEvent(new AgentInventoryEvent(nodeId, containers, fullSync));
     }
 
     private void handleCommandResult(JsonNode json) {
