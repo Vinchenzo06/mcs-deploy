@@ -595,7 +595,7 @@ else
   echo "Node $node_id créé ($name), ports $port_start-$port_end. Sur la machine volontaire, lance :"
 fi
 echo
-echo "curl -fsSL https://raw.githubusercontent.com/$MCS_REPO/$MCS_BRANCH/deploy/node-setup.sh | sudo bash -s -- $code"
+echo "curl -fsSL https://raw.githubusercontent.com/$MCS_REPO/$MCS_BRANCH/deploy/node-setup.sh -o node-setup.sh && sudo bash node-setup.sh $code"
 echo
 echo "Ce code contient des secrets propres à cette machine : ne le donne qu'à son propriétaire."
 SHEOF

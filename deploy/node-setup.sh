@@ -4,13 +4,13 @@
 #
 #  Le code vient de "sudo mcs-add-node" sur le VPS, qui affiche la commande
 #  complète à copier ici :
-#    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh | sudo bash -s -- <CODE>
+#    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh -o node-setup.sh && sudo bash node-setup.sh <CODE>
 #
 #  Mettre à jour seulement l'agent (machine déjà jumelée) :
-#    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh | sudo bash -s -- --update-agent
+#    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh -o node-setup.sh && sudo bash node-setup.sh --update-agent
 #
 #  Changer la part de la machine prêtée à MCS (RAM, CPU, disque) :
-#    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh | sudo bash -s -- --capacity
+#    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh -o node-setup.sh && sudo bash node-setup.sh --capacity
 #
 #  Tout ce qui est propre à cette machine (port SSH, nom...) est détecté ici :
 #  le VPS n'a pas besoin de le connaître. L'agent est téléchargé depuis la
@@ -43,6 +43,10 @@ CAPACITY_ONLY=false
 # Terminal disponible pour poser des questions ? (non si l'installation est
 # automatisée). Tester avant : "read -p ... 2>/dev/null" masquerait la question.
 has_tty() { ( : </dev/tty ) 2>/dev/null; }
+
+# Le script pose des questions : il se lance depuis un fichier (voir en-tête),
+# pas via "curl | sudo bash" (avec sudo-rs, Ubuntu 26.04, le clavier n'arrive
+# pas toujours au script quand celui-ci est lu depuis un tuyau).
 
 # ================================================================ étapes ====
 

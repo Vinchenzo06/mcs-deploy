@@ -31,7 +31,7 @@ Sur le **VPS** :
 ```bash
 sudo mcs-add-node --ssh maison
 ```
-Il affiche une commande `curl ... | sudo bash -s -- <CODE>`.
+Il affiche une commande `curl ... -o node-setup.sh && sudo bash node-setup.sh <CODE>`.
 Copie-la et lance-la sur la **machine volontaire**. Elle détecte seule son port SSH,
 configure le tunnel rathole et l'agent, puis se connecte au VPS.
 
@@ -40,7 +40,7 @@ la release GitHub `agent-latest`, compilée automatiquement par GitHub Actions �
 chaque modification de `agent/`). Pour mettre à jour l'agent d'une machine déjà
 jumelée :
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh | sudo bash -s -- --update-agent
+curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh -o node-setup.sh && sudo bash node-setup.sh --update-agent
 ```
 
 Les serveurs joueurs tournent isolés : réseau Docker dédié, sans accès aux autres
@@ -104,7 +104,7 @@ réponses en Go (`8G`) ou en Mo (`8192`), et garantit qu'il reste toujours au vo
 au moins 10 % de sa RAM, 10 % de son disque et un cœur (l'agent applique les mêmes
 limites). Pour changer d'avis plus tard, sur la machine :
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh | sudo bash -s -- --capacity
+curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh -o node-setup.sh && sudo bash node-setup.sh --capacity
 ``` Un nouveau serveur va sur
 la machine en ligne qui a la place et garde le plus de RAM libre ; s'il n'y en a aucune,
 la création est refusée. La RAM comptée est celle du conteneur (tas Java + 25 % + 512 Mo).

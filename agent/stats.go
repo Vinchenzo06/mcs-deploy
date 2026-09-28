@@ -123,22 +123,20 @@ func collectStats(dataPath string) ([]serverStats, error) {
 		}
 	}
 
-	// Espace disque : mesure coûteuse, rafraîchie toutes les 10 minutes
+	// Espace disque : mesure coûteuse, rafraîchie toutes les 10 minutes. Un
+	// serveur jamais mesuré (tout juste créé) l'est tout de suite.
 	diskMu.Lock()
-	if time.Since(diskAt) >= diskInterval {
-		fresh := map[int64]int64{}
-		for _, s := range result {
-			out, err := exec.Command("du", "-sm", serverDataPath(dataPath, s.ServerID)).Output()
-			if err != nil {
-				continue
-			}
-			if f := strings.Fields(string(out)); len(f) > 0 {
-				if mb, err := strconv.ParseInt(f[0], 10, 64); err == nil {
-					fresh[s.ServerID] = mb
-				}
-			}
+	refreshAll := time.Since(diskAt) >= diskInterval
+	if refreshAll {
+		diskCache, diskAt = map[int64]int64{}, time.Now()
+	}
+	for _, s := range result {
+		if _, known := diskCache[s.ServerID]; known {
+			continue
 		}
-		diskCache, diskAt = fresh, time.Now()
+		if mb, ok := measureDisk(serverDataPath(dataPath, s.ServerID)); ok {
+			diskCache[s.ServerID] = mb
+		}
 	}
 	for i := range result {
 		if mb, ok := diskCache[result[i].ServerID]; ok {
@@ -149,6 +147,19 @@ func collectStats(dataPath string) ([]serverStats, error) {
 	diskMu.Unlock()
 
 	return result, nil
+}
+
+func measureDisk(path string) (int64, bool) {
+	out, err := exec.Command("du", "-sm", path).Output()
+	if err != nil {
+		return 0, false
+	}
+	if f := strings.Fields(string(out)); len(f) > 0 {
+		if mb, err := strconv.ParseInt(f[0], 10, 64); err == nil {
+			return mb, true
+		}
+	}
+	return 0, false
 }
 
 func sendStats(conn *websocket.Conn, dataPath string) {

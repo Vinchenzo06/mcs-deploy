@@ -2,7 +2,10 @@ package vinch.mcs.lobby.commands;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.event.HoverEvent;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -303,37 +306,168 @@ public class ServerCommand implements CommandExecutor {
                 }));
     }
 
+    // ------------------------------------------------------------ /mcs info ----
+
+    private static final int BAR_LENGTH = 20;
+
+    /** Barre de progression colorée : vert < 70 %, jaune < 90 %, rouge au-delà */
+    private static Component bar(double ratio) {
+        double r = Math.max(0, Math.min(1, ratio));
+        int filled = (int) Math.round(r * BAR_LENGTH);
+        NamedTextColor color = r < 0.7 ? NamedTextColor.GREEN : r < 0.9 ? NamedTextColor.YELLOW : NamedTextColor.RED;
+        return Component.text("|".repeat(filled)).color(color)
+                .append(Component.text("|".repeat(BAR_LENGTH - filled)).color(NamedTextColor.DARK_GRAY));
+    }
+
+    /** 2048 -> "2 Go", 1998 -> "2,0 Go", 800 -> "800 Mo" */
+    private static String size(long mb) {
+        if (mb < 1024) {
+            return mb + " Mo";
+        }
+        double go = mb / 1024.0;
+        return (go == Math.floor(go) ? String.valueOf((long) go) : String.format(java.util.Locale.FRANCE, "%.1f", go)) + " Go";
+    }
+
+    private static String percent(double ratio) {
+        return String.format(java.util.Locale.FRANCE, "%.0f %%", ratio * 100);
+    }
+
+    // La police de Minecraft est proportionnelle : les barres (toutes de la même
+    // largeur) viennent en premier pour rester alignées, le libellé ensuite
+    private static Component label(String text) {
+        return Component.text("  " + text + "  ").color(NamedTextColor.GRAY);
+    }
+
+    private static Component button(String text, NamedTextColor color, String command, String hover) {
+        return Component.text("[" + text + "]").color(color).decorate(TextDecoration.BOLD)
+                .clickEvent(ClickEvent.runCommand(command))
+                .hoverEvent(HoverEvent.showText(Component.text(hover).color(NamedTextColor.GRAY)));
+    }
+
+    /** "depuis 2 h 05" à partir de la date de démarrage (heure du VPS, comme le lobby) */
+    private static String uptime(String startedAt) {
+        try {
+            java.time.Duration d = java.time.Duration.between(
+                    java.time.LocalDateTime.parse(startedAt), java.time.LocalDateTime.now());
+            long min = Math.max(0, d.toMinutes());
+            if (min < 60) {
+                return min + " min";
+            }
+            if (min < 24 * 60) {
+                return String.format("%d h %02d", min / 60, min % 60);
+            }
+            return String.format("%d j %d h", min / (24 * 60), (min / 60) % 24);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private void sendInfo(Player player, JsonNode s) {
+        String name = s.path("name").asText();
         String status = s.path("status").asText("?");
-        NamedTextColor color = switch (status) {
-            case "RUNNING" -> NamedTextColor.GREEN;
-            case "STARTING", "CREATING", "STOPPING" -> NamedTextColor.YELLOW;
-            case "ERROR" -> NamedTextColor.RED;
-            default -> NamedTextColor.GRAY;
+        String health = s.path("health").asText("unknown");
+
+        Component state = switch (status) {
+            case "RUNNING" -> "unhealthy".equals(health)
+                    ? Component.text("● En ligne, ne répond plus").color(NamedTextColor.GOLD)
+                    : Component.text("● En ligne").color(NamedTextColor.GREEN);
+            case "STARTING" -> Component.text("◐ Démarrage…").color(NamedTextColor.YELLOW);
+            case "CREATING" -> Component.text("◐ Création…").color(NamedTextColor.YELLOW);
+            case "STOPPING" -> Component.text("◐ Arrêt en cours…").color(NamedTextColor.YELLOW);
+            case "STOPPED" -> Component.text("○ Arrêté").color(NamedTextColor.GRAY);
+            case "ERROR" -> Component.text("✖ Erreur").color(NamedTextColor.RED);
+            default -> Component.text(status).color(NamedTextColor.GRAY);
         };
-        player.sendMessage(Component.text("=== " + s.path("name").asText() + " ===").color(NamedTextColor.GOLD));
-        player.sendMessage(Component.text("État : ").color(NamedTextColor.GRAY)
-                .append(Component.text(status + " (" + s.path("health").asText("?") + ")").color(color)));
-        player.sendMessage(Component.text("Type : " + s.path("serverType").asText("?") + " "
-                + s.path("minecraftVersion").asText("")).color(NamedTextColor.GRAY));
-        player.sendMessage(Component.text("Joueurs : " + s.path("players").asInt(0)).color(NamedTextColor.AQUA));
-        if (s.has("memUsedMb")) {
-            player.sendMessage(Component.text(String.format("CPU : %.1f %% (%d vcore(s) alloué(s))",
-                    s.path("cpuPercent").asDouble(), s.path("allocatedCpuCores").asInt())).color(NamedTextColor.AQUA));
-            player.sendMessage(Component.text(String.format("RAM : %d / %d Mo (tas Java : %d Mo)",
-                    s.path("memUsedMb").asLong(), s.path("memLimitMb").asLong(),
-                    s.path("allocatedRamMb").asInt())).color(NamedTextColor.AQUA));
+        boolean running = "RUNNING".equals(status);
+
+        // En-tête : nom, état, type et version, durée en ligne
+        player.sendMessage(Component.empty());
+        player.sendMessage(Component.text("━━━━━━ ").color(NamedTextColor.DARK_GRAY)
+                .append(Component.text(name).color(NamedTextColor.GOLD).decorate(TextDecoration.BOLD))
+                .append(Component.text(" ━━━━━━").color(NamedTextColor.DARK_GRAY)));
+        Component line = Component.text(" ").append(state)
+                .append(Component.text("  ·  " + capitalize(s.path("serverType").asText("?")) + " "
+                        + s.path("minecraftVersion").asText("")).color(NamedTextColor.GRAY));
+        String up = running && s.hasNonNull("lastStartedAt") ? uptime(s.get("lastStartedAt").asText()) : null;
+        if (up != null) {
+            line = line.append(Component.text("  ·  depuis " + up).color(NamedTextColor.GRAY));
         }
-        if (s.hasNonNull("diskUsedMb")) {
+        player.sendMessage(line);
+
+        // Joueurs
+        int players = s.path("players").asInt(0);
+        player.sendMessage(Component.text(" Joueurs : ").color(NamedTextColor.GRAY)
+                .append(Component.text(players + (players > 1 ? " connectés" : " connecté"))
+                        .color(players > 0 ? NamedTextColor.AQUA : NamedTextColor.WHITE)));
+
+        boolean measured = s.has("memUsedMb") && running;
+
+        // CPU : rapporté aux cœurs alloués (docker compte 100 % par cœur)
+        int cores = Math.max(1, s.path("allocatedCpuCores").asInt(1));
+        if (measured) {
+            double cpuRaw = s.path("cpuPercent").asDouble(0);
+            double cpu = cpuRaw / 100.0 / cores;
+            player.sendMessage(Component.text(" ").append(bar(cpu)).append(label("CPU"))
+                    .append(Component.text(percent(cpu) + " de " + cores + (cores > 1 ? " cœurs" : " cœur"))
+                            .color(NamedTextColor.WHITE))
+                    .hoverEvent(HoverEvent.showText(Component.text(String.format(java.util.Locale.FRANCE,
+                            "%.1f %% d'un cœur, sur %d cœur(s) alloué(s)", cpuRaw, cores)).color(NamedTextColor.GRAY))));
+        }
+
+        // RAM : utilisée réellement / RAM choisie par le joueur (le tas Java)
+        long allocated = s.path("allocatedRamMb").asLong(0);
+        if (measured && allocated > 0) {
+            long used = s.path("memUsedMb").asLong(0);
+            player.sendMessage(Component.text(" ").append(bar((double) used / allocated)).append(label("RAM"))
+                    .append(Component.text(size(used) + " / " + size(allocated)).color(NamedTextColor.WHITE))
+                    .hoverEvent(HoverEvent.showText(Component.text(
+                            "Mémoire réellement utilisée / RAM choisie pour le serveur.\n"
+                                    + "Java réserve " + size(allocated) + " mais n'occupe que ce dont il a besoin.\n"
+                                    + "Limite du conteneur (avec la marge de Java) : "
+                                    + size(s.path("memLimitMb").asLong(0))).color(NamedTextColor.GRAY))));
+        }
+
+        // Disque : mesuré toutes les 10 minutes
+        long quota = s.path("allocatedStorageMb").asLong(0);
+        if (s.hasNonNull("diskUsedMb") && quota > 0) {
+            long disk = s.path("diskUsedMb").asLong(0);
             boolean over = s.path("diskQuotaExceeded").asBoolean(false);
-            player.sendMessage(Component.text(String.format("Disque : %d / %d Mo%s",
-                    s.path("diskUsedMb").asLong(), s.path("allocatedStorageMb").asInt(),
-                    over ? " — QUOTA DÉPASSÉ" : "")).color(over ? NamedTextColor.RED : NamedTextColor.AQUA));
+            player.sendMessage(Component.text(" ").append(bar((double) disk / quota)).append(label("Disque"))
+                    .append(Component.text(size(disk) + " / " + size(quota)).color(NamedTextColor.WHITE))
+                    .append(over ? Component.text("  quota dépassé").color(NamedTextColor.RED) : Component.empty())
+                    .hoverEvent(HoverEvent.showText(Component.text(
+                            "Espace utilisé par le monde, les plugins et les mods.\nMesuré toutes les 10 minutes.")
+                            .color(NamedTextColor.GRAY))));
+        } else if (quota > 0) {
+            player.sendMessage(Component.text(" Disque : ").color(NamedTextColor.GRAY)
+                    .append(Component.text("mesure en cours… (quota " + size(quota) + ")").color(NamedTextColor.DARK_GRAY)));
         }
-        if (s.has("metricsAgeSeconds")) {
-            player.sendMessage(Component.text("(mesures d'il y a " + s.path("metricsAgeSeconds").asLong() + " s)")
-                    .color(NamedTextColor.DARK_GRAY));
+
+        if (!measured && running) {
+            player.sendMessage(Component.text(" Mesures disponibles dans moins de 30 s").color(NamedTextColor.DARK_GRAY));
         }
+
+        // Actions
+        Component actions = Component.text(" ");
+        if (running) {
+            actions = actions.append(button("Rejoindre", NamedTextColor.GREEN, "/mcs join " + name, "Aller sur " + name))
+                    .append(Component.text(" "))
+                    .append(button("Redémarrer", NamedTextColor.YELLOW, "/mcs restart " + name, "Redémarrer " + name))
+                    .append(Component.text(" "))
+                    .append(button("Arrêter", NamedTextColor.RED, "/mcs stop " + name, "Arrêter " + name));
+        } else if ("STOPPED".equals(status) || "ERROR".equals(status)) {
+            actions = actions.append(button("Démarrer", NamedTextColor.GREEN, "/mcs start " + name, "Démarrer " + name));
+        }
+        actions = actions.append(Component.text(" "))
+                .append(button("Actualiser", NamedTextColor.AQUA, "/mcs info " + name, "Mettre à jour ces informations"));
+        player.sendMessage(actions);
+    }
+
+    private static String capitalize(String type) {
+        if (type == null || type.isEmpty()) {
+            return type;
+        }
+        return type.charAt(0) + type.substring(1).toLowerCase();
     }
 
     private void handleStart(Player player, String[] args) {
