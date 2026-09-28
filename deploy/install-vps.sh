@@ -12,7 +12,7 @@
 #
 #  Config (optionnelle) : /etc/mcs/mcs.env    Secrets : /etc/mcs/secrets.env
 #
-#  Étapes : system java postgres rathole egress api velocity lobby firewall bootstrap summary
+#  Étapes : system java postgres rathole egress api https velocity lobby firewall bootstrap summary
 #
 #  Machines volontaires : chacune a sa plage de ports (attribuée par l'API) et
 #  son propre jeton rathole, décrits dans /etc/mcs/nodes/<id>.env.
@@ -39,7 +39,7 @@ MAVEN_VERSION=3.9.11
 MAVEN_HOME=/opt/maven
 M2_REPO=/var/cache/mcs/m2
 
-ALL_STEPS=(system java postgres rathole egress api velocity lobby firewall bootstrap summary)
+ALL_STEPS=(system java postgres rathole egress api https velocity lobby firewall bootstrap summary)
 
 # ================================================================ helpers ====
 C_STEP='\033[1;36m'; C_OK='\033[1;32m'; C_WARN='\033[1;33m'; C_ERR='\033[1;31m'; C_OFF='\033[0m'
@@ -177,6 +177,7 @@ load_config() {
   : "${API_XMX:=384M}" "${VELOCITY_XMX:=512M}" "${LOBBY_XMX:=512M}"
   : "${PORT_START:=25600}" "${PORT_END:=29999}" "${NODE_PORTS:=20}"
   : "${ENABLE_SSH_TUNNEL:=true}" "${SSH_TUNNEL_PORT:=2222}" "${WG_PORT:=51820}"
+  : "${API_DOMAIN:=}" "${ACME_EMAIL:=}"
   : "${SRC_API:=api}" "${SRC_PROXY:=proxymanager}" "${SRC_LOBBY:=lobby-plugin}"
   : "${QUOTA_DEFAULT:=1 6144 2}" "${QUOTA_VIP:=2 12288 4}"
   : "${QUOTA_PREMIUM:=2 16384 5}" "${QUOTA_ADMIN:=16 32768 32}"
@@ -197,12 +198,23 @@ load_config() {
     save_secret "$k" "${!k:-$(gen_secret)}"
   done
 
+  # Adresse publique de l'API pour les agents : HTTPS (Caddy) si un domaine est
+  # configuré, sinon l'ancien accès direct en clair sur le port 8081
+  if [[ -n "$API_DOMAIN" ]]; then
+    AGENT_API_URL="wss://$API_DOMAIN/ws/agent"
+    API_BIND=127.0.0.1
+  else
+    AGENT_API_URL="ws://$VPS_IP:8081/ws/agent"
+    API_BIND=0.0.0.0
+  fi
+
   # Infos utilisées par mcs-add-node
   cat > "$ETC_DIR/runtime.env" <<EOF
 VPS_IP=$VPS_IP
 ENABLE_SSH_TUNNEL=$ENABLE_SSH_TUNNEL
 SSH_TUNNEL_PORT=$SSH_TUNNEL_PORT
 WG_PORT=$WG_PORT
+AGENT_API_URL=$AGENT_API_URL
 EOF
 }
 
@@ -287,12 +299,12 @@ PYEOF
   cat > /usr/local/bin/mcs-status <<'SHEOF'
 #!/usr/bin/env bash
 echo "=== Services ==="
-for s in postgresql rathole-server wg-quick@wg-mcs mcs-api minecraft-velocity minecraft-lobby; do
+for s in postgresql rathole-server wg-quick@wg-mcs mcs-api caddy minecraft-velocity minecraft-lobby; do
   printf "  %-20s %s\n" "$s" "$(systemctl is-active "$s")"
 done
 echo
 echo "=== Ports en écoute ==="
-ss -ltnp | grep -E ':(25565|25566|8081|8082|2333|2222)\b' | awk '{print "  " $4 "  " $6}'
+ss -ltnp | grep -E ':(25565|25566|8081|8082|2333|2222|80|443)\b' | awk '{print "  " $4 "  " $6}'
 echo
 echo "=== Sortie Internet des serveurs (WireGuard) ==="
 if command -v wg >/dev/null && wg show wg-mcs >/dev/null 2>&1; then
@@ -560,8 +572,10 @@ mcs-wg-sync
 code=$(jq -cn --arg vps "$VPS_IP" --argjson id "$node_id" --arg rt "$rathole_token" --arg nt "$node_token" \
   --argjson ps "$port_start" --argjson pe "$port_end" --argjson ssh "$ssh_flag" --argjson sp "$SSH_TUNNEL_PORT" \
   --arg wk "$wg_private" --arg wip "$wg_ip" --arg wvp "$(cat /etc/mcs/wg/vps.pub)" --argjson wport "${WG_PORT:-51820}" \
+  --arg api "${AGENT_API_URL:-ws://$VPS_IP:8081/ws/agent}" \
   '{v: 3, vps: $vps, node_id: $id, rathole_token: $rt, node_token: $nt, ports: [$ps, $pe],
-    ssh: $ssh, ssh_public_port: $sp, wg_private: $wk, wg_ip: $wip, wg_vps_public: $wvp, wg_port: $wport}' | base64 -w0)
+    ssh: $ssh, ssh_public_port: $sp, wg_private: $wk, wg_ip: $wip, wg_vps_public: $wvp, wg_port: $wport,
+    api_url: $api}' | base64 -w0)
 
 echo
 if [[ -n "$renew_id" ]]; then
@@ -724,6 +738,7 @@ VELOCITY_PLUGIN_KEY=$VELOCITY_PLUGIN_KEY
 MCS_PORTS_START=$PORT_START
 MCS_PORTS_END=$PORT_END
 MCS_PORTS_PER_NODE=$NODE_PORTS
+SERVER_ADDRESS=$API_BIND
 EOF
   chmod 600 "$ETC_DIR/api.env"
 
@@ -750,7 +765,67 @@ EOF
   echo "    Démarrage (Flyway applique les migrations)..."
   wait_http "http://127.0.0.1:8081/actuator/health" 180 \
     || die "L'API ne répond pas. Logs : journalctl -u mcs-api -n 100"
-  ok "API en ligne sur :8081"
+  if [[ "$API_BIND" == "127.0.0.1" ]]; then
+    ok "API en ligne sur 127.0.0.1:8081 (locale ; agents via https://$API_DOMAIN)"
+  else
+    warn "API en ligne sur :8081 en clair (définis API_DOMAIN dans $ENV_FILE pour passer en HTTPS)"
+  fi
+}
+
+step_https() {
+  step "HTTPS de l'API (Caddy)"
+  if [[ -z "$API_DOMAIN" ]]; then
+    warn "API_DOMAIN non défini dans $ENV_FILE : étape ignorée (agents en clair sur :8081)"
+    return
+  fi
+  local resolved
+  resolved=$(getent ahostsv4 "$API_DOMAIN" | awk 'NR == 1 { print $1 }')
+  [[ "$resolved" == "$VPS_IP" ]] \
+    || die "$API_DOMAIN pointe vers '${resolved:-rien}' au lieu de $VPS_IP (enregistrement DNS A à corriger)"
+
+  if ! command -v caddy >/dev/null; then
+    apt-get install -y -qq caddy >/dev/null || die "Installation de Caddy impossible (apt install caddy)"
+  fi
+
+  # Seul le canal des agents est public : les routes d'administration de l'API
+  # restent joignables uniquement depuis le VPS (127.0.0.1:8081)
+  {
+    echo "# Généré par install-vps.sh - réécrit à chaque déploiement"
+    if [[ -n "$ACME_EMAIL" ]]; then
+      printf '{\n\temail %s\n}\n\n' "$ACME_EMAIL"
+    fi
+    cat <<EOF
+$API_DOMAIN {
+	@agent path /ws/agent
+	handle @agent {
+		reverse_proxy 127.0.0.1:8081
+	}
+	handle {
+		respond 404
+	}
+}
+EOF
+  } > /etc/caddy/Caddyfile
+  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 \
+    || die "Caddyfile invalide : caddy validate --config /etc/caddy/Caddyfile"
+
+  # Let's Encrypt a besoin des ports 80 et 443
+  ufw allow 80/tcp comment 'HTTP (certificats Let'"'"'s Encrypt)' >/dev/null
+  ufw allow 443/tcp comment 'HTTPS (API des agents)' >/dev/null
+  systemctl enable caddy >/dev/null 2>&1
+  systemctl reload caddy 2>/dev/null || systemctl restart caddy
+
+  # Certificat obtenu et proxy en place : une requête HTTP simple sur le canal
+  # WebSocket doit recevoir une réponse de l'API (400, pas de mise à niveau)
+  local i code=000
+  for ((i = 0; i < 60; i++)); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "https://$API_DOMAIN/ws/agent" || true)
+    [[ "$code" != "000" ]] && break
+    sleep 2
+  done
+  [[ "$code" != "000" ]] \
+    || die "https://$API_DOMAIN injoignable (certificat ?). Logs : journalctl -u caddy -n 50"
+  ok "https://$API_DOMAIN actif (canal des agents : $AGENT_API_URL)"
 }
 
 step_velocity() {
@@ -822,7 +897,7 @@ EOF
   mkdir -p "$VELOCITY_DIR/plugins/proxymanager"
   cat > "$VELOCITY_DIR/plugins/proxymanager/config.yml" <<EOF
 # Généré par install-vps.sh
-api-url: http://localhost:8081
+api-url: http://127.0.0.1:8081
 api-key: $LOBBY_API_KEY
 local-api-port: 8082
 local-api-key: $VELOCITY_PLUGIN_KEY
@@ -908,7 +983,7 @@ step_lobby() {
   mkdir -p "$LOBBY_DIR/plugins/MCSLobbyPlugin"
   cat > "$LOBBY_DIR/plugins/MCSLobbyPlugin/config.yml" <<EOF
 # Généré par install-vps.sh
-api-url: http://localhost:8081
+api-url: http://127.0.0.1:8081
 api-key: $LOBBY_API_KEY
 EOF
   chown -R "$MC_USER:$MC_USER" "$LOBBY_DIR"
@@ -939,7 +1014,7 @@ EOF
 step_firewall() {
   step "Pare-feu (ufw)"
   # Port(s) SSH réellement utilisés par ce VPS, pour ne jamais se bloquer dehors
-  local ssh_ports p
+  local ssh_ports p api_ports
   ssh_ports=$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2 }' | sort -u | tr '\n' ' ')
   [[ -n "${ssh_ports// /}" ]] || ssh_ports=22
   for p in $ssh_ports; do
@@ -947,7 +1022,16 @@ step_firewall() {
   done
   ufw allow 25565/tcp comment 'Minecraft (Velocity)' >/dev/null
   ufw allow 2333/tcp comment 'rathole (volontaires)' >/dev/null
-  ufw allow 8081/tcp comment 'mcs-api (agents WebSocket)' >/dev/null
+  if [[ -n "$API_DOMAIN" ]]; then
+    # Agents en HTTPS via Caddy : l'accès direct en clair est fermé
+    ufw allow 80/tcp comment 'HTTP (certificats Let'"'"'s Encrypt)' >/dev/null
+    ufw allow 443/tcp comment 'HTTPS (API des agents)' >/dev/null
+    ufw delete allow 8081/tcp >/dev/null 2>&1 || true
+    api_ports="80, 443"
+  else
+    ufw allow 8081/tcp comment 'mcs-api (agents WebSocket)' >/dev/null
+    api_ports="8081"
+  fi
   if [[ "$ENABLE_SSH_TUNNEL" == "true" ]]; then
     ufw allow "$SSH_TUNNEL_PORT/tcp" comment 'tunnel SSH machine volontaire' >/dev/null
   fi
@@ -973,7 +1057,7 @@ step_firewall() {
     warn "Interface publique introuvable : sortie des serveurs non autorisée dans ufw"
   fi
   ufw --force enable >/dev/null
-  ok "Ouverts : SSH ${ssh_ports% }, 25565, 2333, 8081, $WG_PORT/udp$([[ "$ENABLE_SSH_TUNNEL" == "true" ]] && echo ", $SSH_TUNNEL_PORT") ; transit wg-mcs → Internet (sauf SMTP)"
+  ok "Ouverts : SSH ${ssh_ports% }, 25565, 2333, $api_ports, $WG_PORT/udp$([[ "$ENABLE_SSH_TUNNEL" == "true" ]] && echo ", $SSH_TUNNEL_PORT") ; transit wg-mcs → Internet (sauf SMTP)"
 }
 
 bootstrap_luckperms() {
@@ -1023,7 +1107,7 @@ step_summary() {
   step "Terminé"
   cat <<EOF
 
-  Minecraft : $VPS_IP:25565
+  Minecraft : $VPS_IP:25565$([[ -n "$API_DOMAIN" ]] && echo "   API des agents : https://$API_DOMAIN")
   Secrets   : $SECRETS_FILE  (à sauvegarder hors du VPS !)
 
   Et maintenant :

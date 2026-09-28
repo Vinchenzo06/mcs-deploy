@@ -169,6 +169,9 @@ WG_PRIVATE=$(field .wg_private)
 WG_IP=$(field .wg_ip)
 WG_VPS_PUBLIC=$(field .wg_vps_public)
 WG_PORT=$(field .wg_port)
+# Adresse de l'API pour l'agent (wss:// via HTTPS si le VPS a un domaine)
+API_URL=$(field .api_url)
+API_URL=${API_URL:-ws://$VPS_IP:8081/ws/agent}
 [[ "$NODE_ID" =~ ^[0-9]+$ && -n "$VPS_IP" && -n "$RATHOLE_TOKEN" && -n "$NODE_TOKEN" \
    && "$PORT_START" =~ ^[0-9]+$ && "$PORT_END" =~ ^[0-9]+$ \
    && -n "$WG_PRIVATE" && -n "$WG_IP" && -n "$WG_VPS_PUBLIC" && "$WG_PORT" =~ ^[0-9]+$ ]] || die "Code incomplet"
@@ -290,7 +293,7 @@ fi
 cat > "$AGENT_CFG" <<EOF
 # Généré par node-setup.sh (VPS $VPS_IP, node $NODE_ID)
 api:
-  url: ws://$VPS_IP:8081/ws/agent
+  url: $API_URL
 
 node:
   token: $NODE_TOKEN
@@ -308,7 +311,7 @@ EOF
 chmod 600 "$AGENT_CFG"
 mkdir -p "$DATA_PATH"
 write_agent_unit
-ok "config.yaml écrit (données : $DATA_PATH)"
+ok "config.yaml écrit (API : $API_URL, données : $DATA_PATH)"
 
 # -------------------------------------------------- conteneurs orphelins ----
 # Seulement si cette machine change de numéro : un renouvellement garde ses serveurs

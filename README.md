@@ -95,6 +95,14 @@ sudo mcs-admin TonPseudo
 | `sudo mcs-lp-export` | État LuckPerms en JSON (groupes, joueurs) |
 | `sudo mcs-rcon "<commande>"` | Commande dans la console du lobby |
 
+## HTTPS de l'API
+
+Avec `API_DOMAIN=api.ton-domaine` dans `/etc/mcs/mcs.env` (enregistrement DNS A vers
+le VPS), `sudo mcs-deploy` installe Caddy avec un certificat Let's Encrypt : les agents
+se connectent en `wss://`, et l'API n'est plus joignable depuis Internet (seul le
+canal des agents est exposé). Les machines déjà jumelées doivent recevoir un nouveau
+code (`sudo mcs-add-node --renew <id>`) pour passer en HTTPS.
+
 ## Réglages
 
 Tout fonctionne sans configuration. Pour changer un réglage commun à la plateforme
