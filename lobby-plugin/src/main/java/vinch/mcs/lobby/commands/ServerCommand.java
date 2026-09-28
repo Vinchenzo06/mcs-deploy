@@ -47,9 +47,23 @@ public class ServerCommand implements CommandExecutor {
             return true;
         }
 
+        // Filet de sécurité : une erreur du plugin s'affiche clairement en jeu et
+        // sa trace complète part dans le journal du lobby
+        try {
+            dispatch(player, args);
+        } catch (Throwable t) {
+            plugin.getLogger().log(java.util.logging.Level.SEVERE,
+                    "/mcs " + String.join(" ", args) + " (" + player.getName() + ") a planté", t);
+            player.sendMessage(Component.text("MCS » Erreur interne du plugin (" + t.getClass().getSimpleName()
+                    + "). Préviens un admin.").color(NamedTextColor.RED));
+        }
+        return true;
+    }
+
+    private void dispatch(Player player, String[] args) {
         if (args.length == 0) {
             sendUsage(player);
-            return true;
+            return;
         }
 
         switch (args[0].toLowerCase()) {
@@ -64,8 +78,6 @@ public class ServerCommand implements CommandExecutor {
             case "info" -> handleInfo(player, args);
             default -> sendUsage(player);
         }
-
-        return true;
     }
 
     // ============================================================ style ====
