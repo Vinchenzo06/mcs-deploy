@@ -2,6 +2,9 @@ package vinch.mcs.lobby;
 
 import lombok.Getter;
 import org.bukkit.plugin.java.JavaPlugin;
+
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import vinch.mcs.lobby.commands.ServerCommand;
 import vinch.mcs.lobby.commands.ServerTabCompleter;
 import vinch.mcs.lobby.listeners.PlayerJoinListener;
@@ -42,6 +45,27 @@ public final class McsLobbyPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(new PlayerJoinListener(this), this);
 
         getLogger().info("MCSLobbyPlugin démarré avec succès");
+    }
+
+    /**
+     * Envoie à l'API les quotas LuckPerms actuels du joueur (max-servers,
+     * total-ram, total-cpu). Appelé à la connexion, puis avant /mcs create et
+     * /mcs quota : un changement de groupe est pris en compte tout de suite.
+     * N'échoue jamais : en cas de problème, les dernières limites connues restent.
+     */
+    public CompletableFuture<Void> syncPlayerLimits(UUID uuid, String name) {
+        if (!luckPermsHelper.isEnabled()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return luckPermsHelper.loadUserMeta(uuid)
+                .thenCompose(meta -> apiClient.updatePlayerLimits(
+                        uuid, meta.maxServers(), meta.totalRamMb(), meta.totalCpuCores()))
+                .handle((result, error) -> {
+                    if (error != null) {
+                        getLogger().warning("Synchronisation des limites de " + name + " : " + error.getMessage());
+                    }
+                    return (Void) null;
+                });
     }
 
     @Override

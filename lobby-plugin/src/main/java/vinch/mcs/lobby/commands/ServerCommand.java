@@ -60,8 +60,8 @@ public class ServerCommand implements CommandExecutor {
         player.sendMessage(Component.text("Commandes disponibles :").color(NamedTextColor.YELLOW));
         player.sendMessage(Component.text("  /mcs create <type> <version> <nom> [ram_mb] [cpu_cores]").color(NamedTextColor.AQUA));
         player.sendMessage(Component.text("    Types : PAPER, SPIGOT, FABRIC, FORGE, VANILLA").color(NamedTextColor.GRAY));
-        player.sendMessage(Component.text("    RAM : 512-32768 Mo (défaut : 1024)").color(NamedTextColor.GRAY));
-        player.sendMessage(Component.text("    CPU : 1-32 cores (défaut : 1)").color(NamedTextColor.GRAY));
+        player.sendMessage(Component.text("    RAM : en Mo, 512 minimum (défaut : 1024) — limitée par ton quota (/mcs quota)").color(NamedTextColor.GRAY));
+        player.sendMessage(Component.text("    CPU : en cœurs (défaut : 1) — limité par ton quota").color(NamedTextColor.GRAY));
         player.sendMessage(Component.text("  /mcs list").color(NamedTextColor.AQUA));
         player.sendMessage(Component.text("  /mcs delete <nom>").color(NamedTextColor.AQUA));
         player.sendMessage(Component.text("  /mcs join <nom>").color(NamedTextColor.AQUA));
@@ -88,12 +88,9 @@ public class ServerCommand implements CommandExecutor {
         if (args.length >= 5) {
             try {
                 ramMb = Integer.parseInt(args[4]);
+                // Pas de maximum ici : l'API vérifie le budget du joueur et la place sur les machines
                 if (ramMb < 512) {
                     player.sendMessage(Component.text("RAM minimum : 512 Mo.").color(NamedTextColor.RED));
-                    return;
-                }
-                if (ramMb > 32768) {
-                    player.sendMessage(Component.text("RAM maximum : 32768 Mo.").color(NamedTextColor.RED));
                     return;
                 }
             } catch (NumberFormatException e) {
@@ -106,11 +103,7 @@ public class ServerCommand implements CommandExecutor {
             try {
                 cpuCores = Integer.parseInt(args[5]);
                 if (cpuCores < 1) {
-                    player.sendMessage(Component.text("CPU minimum : 1 core.").color(NamedTextColor.RED));
-                    return;
-                }
-                if (cpuCores > 32) {
-                    player.sendMessage(Component.text("CPU maximum : 32 cores.").color(NamedTextColor.RED));
+                    player.sendMessage(Component.text("CPU minimum : 1 cœur.").color(NamedTextColor.RED));
                     return;
                 }
             } catch (NumberFormatException e) {
@@ -135,7 +128,8 @@ public class ServerCommand implements CommandExecutor {
         final int finalRamMb = ramMb;
         final int finalCpuCores = cpuCores;
 
-        plugin.getApiClient().getPlayerByUuid(player.getUniqueId())
+        plugin.syncPlayerLimits(player.getUniqueId(), player.getName())
+                .thenCompose(v -> plugin.getApiClient().getPlayerByUuid(player.getUniqueId()))
                 .thenCompose(playerInfo -> {
                     long playerId = playerInfo.get("id").asLong();
                     return plugin.getApiClient().createServer(
@@ -562,7 +556,8 @@ public class ServerCommand implements CommandExecutor {
     private void handleQuota(Player player) {
         player.sendMessage(Component.text("⏳ Récupération de ton quota...").color(NamedTextColor.YELLOW));
 
-        plugin.getApiClient().getPlayerByUuid(player.getUniqueId())
+        plugin.syncPlayerLimits(player.getUniqueId(), player.getName())
+                .thenCompose(v -> plugin.getApiClient().getPlayerByUuid(player.getUniqueId()))
                 .thenCompose(playerInfo -> {
                     long playerId = playerInfo.get("id").asLong();
                     return plugin.getApiClient().getPlayerQuota(playerId);
