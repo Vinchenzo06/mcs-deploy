@@ -36,7 +36,10 @@ ok "jq, curl, unzip"
 
 # --------------------------------------------------------- lecture du code ----
 json=$(printf '%s' "$CODE" | base64 -d 2>/dev/null) || die "Code invalide"
+jq -e . >/dev/null 2>&1 <<<"$json" || die "Code invalide"
 field() { jq -r "$1 // empty" <<<"$json"; }
+[[ "$(field .v)" == "2" ]] || die "Code d'une ancienne version : génère-en un nouveau avec 'sudo mcs-add-node' sur le VPS (à jour)"
+NODE_ID=$(field .node_id)
 VPS_IP=$(field .vps)
 RATHOLE_TOKEN=$(field .rathole_token)
 NODE_TOKEN=$(field .node_token)
@@ -44,13 +47,14 @@ PORT_START=$(field '.ports[0]')
 PORT_END=$(field '.ports[1]')
 SSH_TUNNEL=$(field .ssh)
 SSH_PUBLIC_PORT=$(field .ssh_public_port)
-[[ -n "$VPS_IP" && -n "$RATHOLE_TOKEN" && -n "$NODE_TOKEN" && -n "$PORT_START" ]] || die "Code incomplet"
+[[ "$NODE_ID" =~ ^[0-9]+$ && -n "$VPS_IP" && -n "$RATHOLE_TOKEN" && -n "$NODE_TOKEN" \
+   && "$PORT_START" =~ ^[0-9]+$ && "$PORT_END" =~ ^[0-9]+$ ]] || die "Code incomplet"
 
 # --------------------------------------------------------- détection locale ----
 step "Détection de la machine"
 SSH_PORT=$(sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }' || true)
 SSH_PORT=${SSH_PORT:-22}
-ok "Machine $(hostname), SSH local sur le port $SSH_PORT, VPS $VPS_IP"
+ok "Machine $(hostname) = node $NODE_ID, SSH local sur le port $SSH_PORT, VPS $VPS_IP"
 
 # ----------------------------------------------------------------- rathole ----
 step "Tunnel rathole"
@@ -71,15 +75,15 @@ fi
 mkdir -p /etc/rathole
 [[ -f /etc/rathole/client.toml ]] && cp /etc/rathole/client.toml "/etc/rathole/client.toml.bak.$(date +%s)"
 {
-  echo "# Généré par node-setup.sh (VPS $VPS_IP)"
+  echo "# Généré par node-setup.sh (VPS $VPS_IP, node $NODE_ID)"
   echo "[client]"
   echo "remote_addr = \"$VPS_IP:2333\""
   echo "default_token = \"$RATHOLE_TOKEN\""
   for ((p = PORT_START; p <= PORT_END; p++)); do
-    printf '\n[client.services.mcs-%d]\nlocal_addr = "127.0.0.1:%d"\n' "$p" "$p"
+    printf '\n[client.services.n%s-%d]\nlocal_addr = "127.0.0.1:%d"\n' "$NODE_ID" "$p" "$p"
   done
   if [[ "$SSH_TUNNEL" == "true" ]]; then
-    printf '\n[client.services.home_ssh]\nlocal_addr = "127.0.0.1:%d"\n' "$SSH_PORT"
+    printf '\n[client.services.n%s-ssh]\nlocal_addr = "127.0.0.1:%d"\n' "$NODE_ID" "$SSH_PORT"
   fi
 } > /etc/rathole/client.toml
 chmod 600 /etc/rathole/client.toml
@@ -145,7 +149,7 @@ if [[ -f "$AGENT_CFG" ]]; then
 fi
 
 echo
-ok "Machine connectée au VPS $VPS_IP"
+ok "Machine connectée au VPS $VPS_IP (node $NODE_ID, ports $PORT_START-$PORT_END)"
 if [[ "$SSH_TUNNEL" == "true" ]]; then
   echo "    SSH depuis l'extérieur : ssh -p $SSH_PUBLIC_PORT ${SUDO_USER:-<utilisateur>}@$VPS_IP"
 fi

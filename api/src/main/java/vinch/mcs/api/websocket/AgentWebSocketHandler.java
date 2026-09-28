@@ -218,6 +218,17 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
         session.sendMessage(new TextMessage(objectMapper.writeValueAsString(error)));
     }
 
+    public void disconnectNode(Long nodeId) {
+        WebSocketSession session = activeSessions.remove(nodeId);
+        if (session != null && session.isOpen()) {
+            try {
+                session.close(CloseStatus.POLICY_VIOLATION.withReason("Node revoked"));
+            } catch (Exception e) {
+                log.warn("Fermeture de la session du node {} : {}", nodeId, e.getMessage());
+            }
+        }
+    }
+
     public boolean isNodeOnline(Long nodeId) {
         WebSocketSession session = activeSessions.get(nodeId);
         return session != null && session.isOpen();

@@ -35,6 +35,10 @@ Il affiche une commande `curl ... | sudo bash -s -- <CODE>`.
 Copie-la et lance-la sur la **machine volontaire**. Elle détecte seule son port SSH,
 configure le tunnel rathole et l'agent, puis se connecte au VPS.
 
+Chaque machine reçoit sa propre plage de ports et son propre jeton rathole :
+elle ne peut pas intercepter les serveurs d'une autre. Pour retirer une machine :
+`sudo mcs-remove-node <id>` (les id sont affichés par `sudo mcs-status`).
+
 `--ssh` : la machine devient joignable depuis l'extérieur avec `ssh -p 2222 <user>@IP_DU_VPS`.
 Une seule machine peut avoir cette option à la fois.
 
@@ -67,6 +71,7 @@ sudo mcs-admin TonPseudo
 | `sudo mcs-deploy [étapes]` | Récupère GitHub, compile, installe |
 | `sudo mcs-status` | État des services, ports et machines volontaires |
 | `sudo mcs-add-node [--ssh] [nom]` | Code de jumelage pour une nouvelle machine |
+| `sudo mcs-remove-node <id>` | Révoque une machine (jeton refusé, tunnels supprimés) |
 | `sudo mcs-admin <pseudo>` | Groupe admin LuckPerms (vérifié) |
 | `sudo mcs-lp-export` | État LuckPerms en JSON (groupes, joueurs) |
 | `sudo mcs-rcon "<commande>"` | Commande dans la console du lobby |
@@ -81,6 +86,5 @@ sur le VPS, modifie-le, puis relance `sudo mcs-deploy`.
 
 - La base PostgreSQL et `/etc/mcs/secrets.env` ne sont que sur le VPS : **à sauvegarder ailleurs**.
 - L'API est en HTTP clair sur le port 8081 (protégée par clé). À terme : TLS.
-- Toutes les machines volontaires partagent le même token rathole.
 - Le code de jumelage contient des secrets et reste valable : à terme, un code
   à usage unique qui expire.

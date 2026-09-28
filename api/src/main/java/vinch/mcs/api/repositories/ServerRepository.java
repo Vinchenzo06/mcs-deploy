@@ -16,6 +16,10 @@ public interface ServerRepository extends JpaRepository<Server, Long> {
     @Query("SELECT s.tunnelPort FROM Server s WHERE s.node.id = :nodeId AND s.tunnelPort IS NOT NULL")
     List<Integer> findUsedPortsByNodeId(Long nodeId);
 
+    // Les ports sont uniques sur tout le VPS (un port = un tunnel rathole)
+    @Query("SELECT s.tunnelPort FROM Server s WHERE s.tunnelPort IS NOT NULL")
+    List<Integer> findAllUsedPorts();
+
     @Query("SELECT s FROM Server s WHERE s.owner.id = :playerId")
     List<Server> findByOwnerId(Long playerId);
 

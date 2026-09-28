@@ -3,7 +3,6 @@ package vinch.mcs.api.services;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import vinch.mcs.api.dto.CreateServerRequest;
@@ -28,12 +27,6 @@ public class ServerService {
     private final PlayerRepository playerRepository;
     private final AgentWebSocketHandler agentWebSocketHandler;
     private final VelocityClient velocityClient;
-
-    @Value("${mcs.ports.start:25600}")
-    private int portRangeStart;
-
-    @Value("${mcs.ports.end:25620}")
-    private int portRangeEnd;
 
     @Transactional
     public CreateServerResponse createServer(CreateServerRequest request) throws Exception {
@@ -83,7 +76,7 @@ public class ServerService {
         Node node = chooseNode(request.getForceNodeId());
 
         // Allouer un port libre
-        int port = allocatePort(node.getId());
+        int port = allocatePort(node);
 
         log.info("Allocation : node={} port={}", node.getId(), port);
 
@@ -165,27 +158,35 @@ public class ServerService {
 
     private Node chooseNode(Long forceNodeId) {
         if (forceNodeId != null) {
-            return nodeRepository.findById(forceNodeId)
+            Node forced = nodeRepository.findById(forceNodeId)
                     .orElseThrow(() -> new RuntimeException("Node forcée non trouvée : " + forceNodeId));
+            if (forced.getIsRevoked() || forced.getPortStart() == null) {
+                throw new RuntimeException("Node forcée inutilisable (révoquée ou sans plage de ports) : " + forceNodeId);
+            }
+            return forced;
         }
 
         return nodeRepository.findAll().stream()
                 .filter(Node::getIsOnline)
                 .filter(n -> !n.getIsRevoked())
+                .filter(n -> n.getPortStart() != null && n.getPortEnd() != null)
                 .findFirst()
                 .orElseThrow(() -> new RuntimeException("Aucune node disponible"));
     }
 
-    private int allocatePort(Long nodeId) {
-        Set<Integer> usedPorts = new HashSet<>(serverRepository.findUsedPortsByNodeId(nodeId));
+    // Premier port libre dans la plage de la machine. Les ports sont vérifiés
+    // sur tout le VPS : deux serveurs ne peuvent jamais partager un tunnel.
+    private int allocatePort(Node node) {
+        Set<Integer> usedPorts = new HashSet<>(serverRepository.findAllUsedPorts());
 
-        for (int port = portRangeStart; port <= portRangeEnd; port++) {
+        for (int port = node.getPortStart(); port <= node.getPortEnd(); port++) {
             if (!usedPorts.contains(port)) {
                 return port;
             }
         }
 
-        throw new RuntimeException("Plus de port disponible dans la plage " + portRangeStart + "-" + portRangeEnd);
+        throw new RuntimeException("Plus de port libre sur la machine " + node.getId()
+                + " (" + node.getPortStart() + "-" + node.getPortEnd() + ")");
     }
 
     public void deleteServer(Long serverId, boolean deleteData) throws Exception {

@@ -38,6 +38,9 @@ if [[ "$PULL" == "true" && -z "${MCS_PULLED:-}" ]]; then
     git_auth=(-c "http.extraHeader=Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)")
   fi
   echo "==> Récupération de la dernière version ($MCS_REPO@$MCS_BRANCH)"
+  # La copie du VPS ne se modifie jamais à la main : on annule tout changement
+  # local (fichiers régénérés par une compilation, etc.) avant de mettre à jour
+  git -C "$INSTALL_DIR" reset -q --hard
   git "${git_auth[@]}" -C "$INSTALL_DIR" pull --ff-only -q
   echo "    $(git -C "$INSTALL_DIR" log -1 --format='%h  %s  (%cr)')"
   # Relance la version fraîchement récupérée de ce script

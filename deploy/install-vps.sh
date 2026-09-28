@@ -13,6 +13,9 @@
 #  Config (optionnelle) : /etc/mcs/mcs.env    Secrets : /etc/mcs/secrets.env
 #
 #  Étapes : system java postgres rathole api velocity lobby firewall bootstrap summary
+#
+#  Machines volontaires : chacune a sa plage de ports (attribuée par l'API) et
+#  son propre jeton rathole, décrits dans /etc/mcs/nodes/<id>.env.
 # =============================================================================
 set -euo pipefail
 
@@ -172,7 +175,7 @@ load_config() {
   : "${TIMEZONE:=America/Toronto}" "${USER_AGENT:=mcs-deploy/0.3 (+https://github.com/Vinchenzo06/mcs-deploy)}"
   : "${PAPER_VERSION:=26.1.2}" "${VELOCITY_VERSION:=4.2.1-SNAPSHOT}" "${FORCE_UPDATE:=false}"
   : "${API_XMX:=384M}" "${VELOCITY_XMX:=512M}" "${LOBBY_XMX:=512M}"
-  : "${PORT_START:=25600}" "${PORT_END:=25620}"
+  : "${PORT_START:=25600}" "${PORT_END:=29999}" "${NODE_PORTS:=20}"
   : "${ENABLE_SSH_TUNNEL:=true}" "${SSH_TUNNEL_PORT:=2222}"
   : "${SRC_API:=api}" "${SRC_PROXY:=proxymanager}" "${SRC_LOBBY:=lobby-plugin}"
   : "${QUOTA_DEFAULT:=1 6144 2}" "${QUOTA_VIP:=2 12288 4}"
@@ -193,13 +196,10 @@ load_config() {
   for k in DB_PASSWORD LOBBY_API_KEY VELOCITY_PLUGIN_KEY RCON_PASSWORD FORWARDING_SECRET; do
     save_secret "$k" "${!k:-$(gen_secret)}"
   done
-  save_secret RATHOLE_TOKEN "${RATHOLE_TOKEN:-$(openssl rand -hex 32)}"
 
   # Infos utilisées par mcs-add-node
   cat > "$ETC_DIR/runtime.env" <<EOF
 VPS_IP=$VPS_IP
-PORT_START=$PORT_START
-PORT_END=$PORT_END
 ENABLE_SSH_TUNNEL=$ENABLE_SSH_TUNNEL
 SSH_TUNNEL_PORT=$SSH_TUNNEL_PORT
 EOF
@@ -294,7 +294,7 @@ echo "=== Ports en écoute ==="
 ss -ltnp | grep -E ':(25565|25566|8081|8082|2333|2222)\b' | awk '{print "  " $4 "  " $6}'
 echo
 echo "=== Nodes ==="
-runuser -u postgres -- psql -qtA -d mcs_db -c "SELECT '  node ' || id || '  online=' || is_online || '  heartbeat=' || COALESCE(last_heartbeat_at::text,'jamais') FROM nodes" 2>/dev/null
+runuser -u postgres -- psql -qtA -d mcs_db -c "SELECT '  node ' || id || '  ' || COALESCE(hostname, '?') || '  ports=' || COALESCE(port_start || '-' || port_end, 'aucune') || '  online=' || is_online || '  heartbeat=' || COALESCE(to_char(last_heartbeat_at, 'YYYY-MM-DD HH24:MI'), 'jamais') || CASE WHEN is_revoked THEN '  (révoqué)' ELSE '' END FROM nodes ORDER BY id" 2>/dev/null
 SHEOF
   chmod 755 /usr/local/bin/mcs-status
 
@@ -347,7 +347,59 @@ fi
 SHEOF
   chmod 755 /usr/local/bin/mcs-admin
 
-  # mcs-add-node : créer un node et produire le code de jumelage
+  # mcs-rathole-sync : régénère la config du serveur rathole depuis /etc/mcs/nodes
+  cat > /usr/local/bin/mcs-rathole-sync <<'SHEOF'
+#!/usr/bin/env bash
+# sudo mcs-rathole-sync [--no-reload]
+#   Régénère /etc/rathole/server.toml à partir de /etc/mcs/nodes/*.env.
+#   Chaque machine a ses propres services (n<id>-<port>) et son propre jeton :
+#   une machine ne peut pas réclamer les ports d'une autre.
+#   rathole recharge les services à chaud : les tunnels existants ne sont pas coupés.
+set -euo pipefail
+[[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
+nodes_dir=/etc/mcs/nodes
+conf=/etc/rathole/server.toml
+# shellcheck disable=SC1091
+source /etc/mcs/runtime.env
+mkdir -p /etc/rathole "$nodes_dir"
+chmod 700 "$nodes_dir"
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+{
+  echo "# Généré par mcs-rathole-sync depuis $nodes_dir - ne pas modifier à la main"
+  echo "[server]"
+  echo "bind_addr = \"0.0.0.0:2333\""
+  # Table toujours présente : rathole refuse une config sans "services"
+  echo "[server.services]"
+  shopt -s nullglob
+  for f in "$nodes_dir"/*.env; do
+    (
+      # shellcheck disable=SC1090
+      source "$f"
+      printf '\n# --- machine %s (%s) : ports %s-%s\n' "$NODE_ID" "${NODE_NAME:-}" "$PORT_START" "$PORT_END"
+      for ((p = PORT_START; p <= PORT_END; p++)); do
+        printf '[server.services.n%s-%d]\ntoken = "%s"\nbind_addr = "127.0.0.1:%d"\n\n' \
+          "$NODE_ID" "$p" "$RATHOLE_TOKEN" "$p"
+      done
+      if [[ "${SSH:-false}" == "true" && "$ENABLE_SSH_TUNNEL" == "true" ]]; then
+        printf '[server.services.n%s-ssh]\ntoken = "%s"\nbind_addr = "0.0.0.0:%d"\n\n' \
+          "$NODE_ID" "$RATHOLE_TOKEN" "$SSH_TUNNEL_PORT"
+      fi
+    )
+  done
+} > "$tmp"
+# Écriture en place (pas de mv) : rathole surveille ce fichier
+touch "$conf"
+chmod 600 "$conf"
+cat "$tmp" > "$conf"
+if [[ "${1:-}" != "--no-reload" ]] && ! systemctl is-active --quiet rathole-server; then
+  systemctl restart rathole-server
+fi
+SHEOF
+  chmod 755 /usr/local/bin/mcs-rathole-sync
+
+  # mcs-add-node : créer un node (plage de ports + jeton rathole dédiés) et
+  # produire le code de jumelage
   cat > /usr/local/bin/mcs-add-node <<'SHEOF'
 #!/usr/bin/env bash
 # sudo mcs-add-node [--ssh] [nom]
@@ -363,6 +415,7 @@ for a in "$@"; do
     *) name=$a ;;
   esac
 done
+[[ "$name" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || { echo "Nom invalide (lettres, chiffres, - et _, 32 max)"; exit 1; }
 # shellcheck disable=SC1091
 source /etc/mcs/secrets.env
 # shellcheck disable=SC1091
@@ -373,6 +426,7 @@ if [[ -f /etc/mcs/deploy.env ]]; then
 fi
 : "${MCS_REPO:=Vinchenzo06/mcs-deploy}" "${MCS_BRANCH:=main}"
 [[ "$ENABLE_SSH_TUNNEL" == "true" ]] || ssh_tunnel=false
+nodes_dir=/etc/mcs/nodes
 
 vid=$(runuser -u postgres -- psql -qtA -d mcs_db -c "SELECT id FROM volunteers ORDER BY id LIMIT 1")
 [[ -n "$vid" ]] || { echo "Aucun volontaire en base"; exit 1; }
@@ -380,19 +434,71 @@ resp=$(curl -fsS -X POST "http://127.0.0.1:8081/api/v1/admin/nodes" \
   -H "X-API-Key: $LOBBY_API_KEY" -H "Content-Type: application/json" \
   -d "$(jq -n --argjson v "$vid" --arg h "$name" '{volunteerId: $v, region: "default", hostname: $h}')") \
   || { echo "L'API a refusé la création du node (est-elle démarrée ?)"; exit 1; }
-node_id=$(jq -r '.nodeId' <<<"$resp")
-code=$(jq -cn --arg vps "$VPS_IP" --arg rt "$RATHOLE_TOKEN" --arg nt "$(jq -r '.nodeToken' <<<"$resp")" \
-  --argjson ps "$PORT_START" --argjson pe "$PORT_END" --argjson ssh "$ssh_tunnel" --argjson sp "$SSH_TUNNEL_PORT" \
-  '{v: 1, vps: $vps, rathole_token: $rt, node_token: $nt, ports: [$ps, $pe], ssh: $ssh, ssh_public_port: $sp}' | base64 -w0)
+node_id=$(jq -r '.nodeId // empty' <<<"$resp")
+port_start=$(jq -r '.portStart // empty' <<<"$resp")
+port_end=$(jq -r '.portEnd // empty' <<<"$resp")
+node_token=$(jq -r '.nodeToken // empty' <<<"$resp")
+[[ "$node_id" =~ ^[0-9]+$ && "$port_start" =~ ^[0-9]+$ && "$port_end" =~ ^[0-9]+$ && -n "$node_token" ]] \
+  || { echo "Réponse inattendue de l'API (API à jour ?) : $resp"; exit 1; }
+
+# Le tunnel SSH public est unique : on le retire de l'ancienne machine
+mkdir -p "$nodes_dir"
+chmod 700 "$nodes_dir"
+if [[ "$ssh_tunnel" == "true" ]]; then
+  for f in "$nodes_dir"/*.env; do
+    [[ -e "$f" ]] || continue
+    if grep -q '^SSH=true' "$f"; then
+      sed -i 's/^SSH=true/SSH=false/' "$f"
+      echo "! Le tunnel SSH est retiré de la machine $(basename "$f" .env)"
+    fi
+  done
+fi
+
+rathole_token=$(openssl rand -hex 32)
+umask 077
+cat > "$nodes_dir/$node_id.env" <<EOF
+NODE_ID=$node_id
+NODE_NAME=$name
+RATHOLE_TOKEN=$rathole_token
+PORT_START=$port_start
+PORT_END=$port_end
+SSH=$ssh_tunnel
+EOF
+mcs-rathole-sync
+
+code=$(jq -cn --arg vps "$VPS_IP" --argjson id "$node_id" --arg rt "$rathole_token" --arg nt "$node_token" \
+  --argjson ps "$port_start" --argjson pe "$port_end" --argjson ssh "$ssh_tunnel" --argjson sp "$SSH_TUNNEL_PORT" \
+  '{v: 2, vps: $vps, node_id: $id, rathole_token: $rt, node_token: $nt, ports: [$ps, $pe], ssh: $ssh, ssh_public_port: $sp}' | base64 -w0)
 
 echo
-echo "Node $node_id créé ($name). Sur la machine volontaire, lance :"
+echo "Node $node_id créé ($name), ports $port_start-$port_end. Sur la machine volontaire, lance :"
 echo
 echo "curl -fsSL https://raw.githubusercontent.com/$MCS_REPO/$MCS_BRANCH/deploy/node-setup.sh | sudo bash -s -- $code"
 echo
-echo "Ce code contient des secrets : ne le donne qu'au propriétaire de la machine."
+echo "Ce code contient des secrets propres à cette machine : ne le donne qu'à son propriétaire."
 SHEOF
   chmod 755 /usr/local/bin/mcs-add-node
+
+  # mcs-remove-node : révoquer une machine (jeton refusé, tunnels supprimés)
+  cat > /usr/local/bin/mcs-remove-node <<'SHEOF'
+#!/usr/bin/env bash
+# sudo mcs-remove-node <id>
+set -euo pipefail
+[[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
+id=${1:-}
+[[ "$id" =~ ^[0-9]+$ ]] || { echo "Usage : sudo mcs-remove-node <id>   (voir sudo mcs-status)"; exit 1; }
+# shellcheck disable=SC1091
+source /etc/mcs/secrets.env
+if ! curl -fsS -o /dev/null -X POST "http://127.0.0.1:8081/api/v1/admin/nodes/$id/revoke" \
+     -H "X-API-Key: $LOBBY_API_KEY"; then
+  echo "! L'API n'a pas pu révoquer le node $id (on supprime quand même ses tunnels)"
+fi
+rm -f "/etc/mcs/nodes/$id.env"
+mcs-rathole-sync
+echo "✔ Machine $id révoquée : jeton refusé, tunnels supprimés."
+echo "  Ses serveurs restent en base : supprime-les avec /mcs delete."
+SHEOF
+  chmod 755 /usr/local/bin/mcs-remove-node
 }
 
 # =============================================================== étapes =====
@@ -410,7 +516,7 @@ step_system() {
   chown -R "$API_USER:$API_USER" "$API_DIR"
 
   install_helpers
-  ok "Paquets, utilisateurs ($MC_USER, $API_USER), outils mcs-status / mcs-rcon / mcs-admin / mcs-add-node"
+  ok "Paquets, utilisateurs ($MC_USER, $API_USER), outils mcs-status / mcs-rcon / mcs-admin / mcs-add-node / mcs-remove-node"
 }
 
 step_java() {
@@ -463,21 +569,9 @@ step_rathole() {
     rm -rf "$tmp"
   fi
 
-  mkdir -p /etc/rathole
-  local p
-  {
-    echo "# Généré par install-vps.sh - réécrit à chaque déploiement"
-    echo "[server]"
-    echo "bind_addr = \"0.0.0.0:2333\""
-    echo "default_token = \"$RATHOLE_TOKEN\""
-    for ((p = PORT_START; p <= PORT_END; p++)); do
-      printf '\n[server.services.mcs-%d]\nbind_addr = "127.0.0.1:%d"\n' "$p" "$p"
-    done
-    if [[ "$ENABLE_SSH_TUNNEL" == "true" ]]; then
-      printf '\n[server.services.home_ssh]\nbind_addr = "0.0.0.0:%d"\n' "$SSH_TUNNEL_PORT"
-    fi
-  } > /etc/rathole/server.toml
-  chmod 600 /etc/rathole/server.toml
+  # Config générée depuis /etc/mcs/nodes (une plage de ports + un jeton par machine)
+  install_helpers
+  mcs-rathole-sync --no-reload
 
   write_unit rathole-server <<EOF
 [Unit]
@@ -495,7 +589,9 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 EOF
   restart_service rathole-server
-  ok "Rathole actif (contrôle :2333, ports $PORT_START-$PORT_END en local)"
+  local n
+  n=$(find /etc/mcs/nodes -name '*.env' 2>/dev/null | wc -l)
+  ok "Rathole actif (contrôle :2333, $n machine(s) configurée(s))"
 }
 
 step_api() {
@@ -508,6 +604,9 @@ step_api() {
 DB_PASSWORD=$DB_PASSWORD
 LOBBY_API_KEY=$LOBBY_API_KEY
 VELOCITY_PLUGIN_KEY=$VELOCITY_PLUGIN_KEY
+MCS_PORTS_START=$PORT_START
+MCS_PORTS_END=$PORT_END
+MCS_PORTS_PER_NODE=$NODE_PORTS
 EOF
   chmod 600 "$ETC_DIR/api.env"
 
@@ -793,7 +892,7 @@ step_summary() {
     1. Connecter une machine volontaire :  sudo mcs-add-node --ssh maison
     2. Te connecter une fois en jeu, puis : sudo mcs-admin <ton_pseudo>
 
-  Outils : sudo mcs-status | sudo mcs-rcon "<commande>"
+  Outils : sudo mcs-status | sudo mcs-rcon "<commande>" | sudo mcs-remove-node <id>
 
 EOF
 }

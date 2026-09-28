@@ -33,8 +33,11 @@ mcs:
   api:
     lobby-key: ${LOBBY_API_KEY}
   ports:
+    # Plage globale du VPS, découpée en blocs de "per-node" ports par machine.
+    # Surchargeable par variables d'environnement (MCS_PORTS_START, ...).
     start: 25600
-    end: 25620
+    end: 29999
+    per-node: 20
   velocity:
     url: http://127.0.0.1:8082
     plugin-key: ${VELOCITY_PLUGIN_KEY}

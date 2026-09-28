@@ -41,6 +41,7 @@ fi
 
 echo "==> Récupération de $REPO ($BRANCH)"
 if [[ -d "$INSTALL_DIR/.git" ]]; then
+  git -C "$INSTALL_DIR" reset -q --hard
   git "${git_auth[@]}" -C "$INSTALL_DIR" pull --ff-only -q
 else
   rm -rf "$INSTALL_DIR"

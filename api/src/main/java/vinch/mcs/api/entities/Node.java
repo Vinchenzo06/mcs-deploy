@@ -63,6 +63,13 @@ public class Node {
     @Builder.Default
     private Integer cpuCores = 1;
 
+    // Plage de ports réservée à cette machine (tunnels rathole dédiés)
+    @Column(name = "port_start")
+    private Integer portStart;
+
+    @Column(name = "port_end")
+    private Integer portEnd;
+
     @Column(name = "is_revoked", nullable = false)
     @Builder.Default
     private Boolean isRevoked = false;
