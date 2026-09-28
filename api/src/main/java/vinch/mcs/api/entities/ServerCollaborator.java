@@ -31,6 +31,7 @@ public class ServerCollaborator {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "permission_level", nullable = false, length = 20)
+    @Builder.Default
     private PermissionLevel permissionLevel = PermissionLevel.MEMBER;
 
     @Column(name = "added_at", nullable = false)

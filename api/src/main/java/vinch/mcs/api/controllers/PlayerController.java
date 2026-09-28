@@ -42,7 +42,13 @@ public class PlayerController {
 
     @GetMapping("/{id}/servers")
     public ResponseEntity<?> getPlayerServers(@PathVariable Long id) {
-        return ResponseEntity.ok(Map.of("servers", serverService.getServersByOwnerId(id)));
+        try {
+            return ResponseEntity.ok(Map.of(
+                    "servers", serverService.getServersByOwnerId(id),
+                    "shared", serverService.getOtherServers(id).get("shared")));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
     }
 
     @PostMapping("/limits")
@@ -52,7 +58,8 @@ public class PlayerController {
                     request.getUuid(),
                     request.getMaxServers(),
                     request.getTotalRamMb(),
-                    request.getTotalCpuCores()
+                    request.getTotalCpuCores(),
+                    request.getAdmin()
             );
             return ResponseEntity.ok(Map.of(
                     "success", true,

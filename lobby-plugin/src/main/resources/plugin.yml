@@ -9,4 +9,4 @@ softdepend: [LuckPerms]
 commands:
   mcs:
     description: Gestion des serveurs MCS
-    usage: /mcs <create|list|delete|join|start|stop|restart|quota|info> [args]
+    usage: /mcs <create|list|info|join|start|stop|restart|members|invite|remove|leave|public|private|console|move|delete|quota> [args]

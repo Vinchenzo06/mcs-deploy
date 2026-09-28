@@ -87,6 +87,11 @@ public class Node {
     @Builder.Default
     private Boolean isRevoked = false;
 
+    // Joueur propriétaire de la machine (mcs-node-owner), null si inconnu
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "owner_player_id")
+    private Player ownerPlayer;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 

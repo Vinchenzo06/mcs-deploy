@@ -203,13 +203,15 @@ public class ApiClient {
         return sendAsync(request);
     }
 
-    public CompletableFuture<JsonNode> updatePlayerLimits(UUID uuid, int maxServers, int totalRamMb, int totalCpuCores) {
+    public CompletableFuture<JsonNode> updatePlayerLimits(UUID uuid, int maxServers, int totalRamMb, int totalCpuCores,
+                                                        boolean admin) {
         try {
             Map<String, Object> body = Map.of(
                     "uuid", uuid.toString(),
                     "maxServers", maxServers,
                     "totalRamMb", totalRamMb,
-                    "totalCpuCores", totalCpuCores
+                    "totalCpuCores", totalCpuCores,
+                    "admin", admin
             );
 
             String json = objectMapper.writeValueAsString(body);
@@ -226,6 +228,75 @@ public class ApiClient {
         } catch (Exception e) {
             return CompletableFuture.failedFuture(e);
         }
+    }
+
+    // ------------------------------------------------------------ accès (lot 17) ----
+
+    private CompletableFuture<JsonNode> call(String method, String path, Object body, Duration timeout) {
+        try {
+            HttpRequest.Builder b = HttpRequest.newBuilder()
+                    .uri(URI.create(config.getApiUrl() + path))
+                    .header("X-API-Key", config.getApiKey())
+                    .timeout(timeout);
+            if (body != null) {
+                b.header("Content-Type", "application/json")
+                        .method(method, HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)));
+            } else {
+                b.method(method, HttpRequest.BodyPublishers.noBody());
+            }
+            return sendAsync(b.build());
+        } catch (Exception e) {
+            return CompletableFuture.failedFuture(e);
+        }
+    }
+
+    private static String enc(String s) {
+        return java.net.URLEncoder.encode(s, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /** "nom" ou "proprietaire/nom" -> serveur, avec les droits du joueur (rights, relation, ref...) */
+    public CompletableFuture<JsonNode> resolveServer(long playerId, String ref) {
+        return call("GET", "/api/v1/servers/resolve?playerId=" + playerId + "&ref=" + enc(ref), null,
+                Duration.ofSeconds(10));
+    }
+
+    /** action = start | stop | restart | delete, au nom du joueur */
+    public CompletableFuture<JsonNode> serverAction(long serverId, String action, long playerId) {
+        Duration timeout = switch (action) {
+            case "start" -> Duration.ofMinutes(3);
+            case "restart" -> Duration.ofMinutes(5);
+            default -> Duration.ofMinutes(1);
+        };
+        return call("POST", "/api/v1/servers/" + serverId + "/" + action + "?playerId=" + playerId, null, timeout);
+    }
+
+    public CompletableFuture<JsonNode> getMembers(long serverId, long playerId) {
+        return call("GET", "/api/v1/servers/" + serverId + "/members?playerId=" + playerId, null, Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> invite(long serverId, long playerId, String username, String level) {
+        return call("POST", "/api/v1/servers/" + serverId + "/members",
+                Map.of("playerId", playerId, "username", username, "level", level), Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> removeMember(long serverId, long playerId, String username) {
+        return call("DELETE", "/api/v1/servers/" + serverId + "/members/" + enc(username) + "?playerId=" + playerId,
+                null, Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> setVisibility(long serverId, long playerId, boolean isPublic) {
+        return call("POST", "/api/v1/servers/" + serverId + "/visibility",
+                Map.of("playerId", playerId, "public", isPublic), Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> console(long serverId, long playerId, String command) {
+        return call("POST", "/api/v1/servers/" + serverId + "/console",
+                Map.of("playerId", playerId, "command", command), Duration.ofSeconds(30));
+    }
+
+    public CompletableFuture<JsonNode> move(long serverId, long playerId, String username) {
+        return call("POST", "/api/v1/servers/" + serverId + "/move",
+                Map.of("playerId", playerId, "username", username), Duration.ofSeconds(15));
     }
 
     public CompletableFuture<JsonNode> getPlayerQuota(Long playerId) {

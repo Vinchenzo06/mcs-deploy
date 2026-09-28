@@ -38,12 +38,12 @@ public class LuckPermsHelper {
      */
     public CompletableFuture<UserMeta> loadUserMeta(UUID uuid) {
         if (!enabled) {
-            return CompletableFuture.completedFuture(new UserMeta(1, 1024, 1));
+            return CompletableFuture.completedFuture(new UserMeta(1, 1024, 1, false));
         }
 
         return api.getUserManager().loadUser(uuid).thenApply(user -> {
             if (user == null) {
-                return new UserMeta(1, 1024, 1);
+                return new UserMeta(1, 1024, 1, false);
             }
 
             CachedMetaData meta = user.getCachedData().getMetaData();
@@ -52,7 +52,10 @@ public class LuckPermsHelper {
             int totalRam = parseInt(meta.getMetaValue("total-ram"), 1024);
             int totalCpu = parseInt(meta.getMetaValue("total-cpu"), 1);
 
-            return new UserMeta(maxServers, totalRam, totalCpu);
+            // Admin MCS : permission mcs.admin (donnée au groupe admin par le kit)
+            boolean admin = user.getCachedData().getPermissionData().checkPermission("mcs.admin").asBoolean();
+
+            return new UserMeta(maxServers, totalRam, totalCpu, admin);
         });
     }
 
@@ -65,5 +68,5 @@ public class LuckPermsHelper {
         }
     }
 
-    public record UserMeta(int maxServers, int totalRamMb, int totalCpuCores) {}
+    public record UserMeta(int maxServers, int totalRamMb, int totalCpuCores, boolean admin) {}
 }

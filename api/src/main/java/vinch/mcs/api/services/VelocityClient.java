@@ -80,6 +80,28 @@ public class VelocityClient {
         }
     }
 
+    /** Envoie un joueur connecté au réseau vers un serveur (/mcs move) */
+    public void connectPlayer(java.util.UUID uuid, String serverName) throws Exception {
+        String body = objectMapper.writeValueAsString(Map.of(
+                "uuid", uuid.toString(),
+                "server", serverName
+        ));
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(velocityUrl + "/players/connect"))
+                .header("Content-Type", "application/json")
+                .header("X-Plugin-Key", pluginKey)
+                .timeout(Duration.ofSeconds(10))
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() == 404) {
+            throw new RuntimeException("Ce joueur n'est pas connecté au réseau.");
+        }
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("Le proxy a refusé le déplacement : " + response.statusCode() + " - " + response.body());
+        }
+    }
+
     public void unregisterServer(String name) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(velocityUrl + "/servers/" + name))

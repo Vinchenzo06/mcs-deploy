@@ -15,8 +15,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ServerTabCompleter implements TabCompleter {
 
     private static final List<String> SUBCOMMANDS = List.of(
-            "create", "list", "delete", "join", "start", "stop", "restart", "quota", "info"
+            "create", "list", "info", "join", "start", "stop", "restart", "members", "invite", "remove",
+            "leave", "public", "private", "console", "move", "delete", "quota"
     );
+
+    private static final List<String> LEVELS = List.of("membre", "gerant", "technicien");
 
     private static final List<String> TYPES = List.of(
             "PAPER", "SPIGOT", "FABRIC", "FORGE", "VANILLA"
@@ -63,8 +66,18 @@ public class ServerTabCompleter implements TabCompleter {
                 case "join":
                 case "restart":
                 case "info":
+                case "members":
+                case "invite":
+                case "remove":
+                case "leave":
+                case "public":
+                case "private":
+                case "console":
                     refreshCacheIfNeeded(player);
                     return filter(getServerNames(player, null), args[1]);
+
+                case "move":
+                    return null; // pseudos des joueurs connectés
 
                 case "start":
                     refreshCacheIfNeeded(player);
@@ -76,6 +89,19 @@ public class ServerTabCompleter implements TabCompleter {
                     refreshCacheIfNeeded(player);
                     return filter(getServerNames(player, "RUNNING"), args[1]);
             }
+        }
+
+        if (args.length == 3 && (sub.equals("invite") || sub.equals("remove"))) {
+            return null; // pseudos des joueurs connectés
+        }
+
+        if (args.length == 3 && sub.equals("move")) {
+            refreshCacheIfNeeded(player);
+            return filter(getServerNames(player, null), args[2]);
+        }
+
+        if (args.length == 4 && sub.equals("invite")) {
+            return filter(LEVELS, args[3]);
         }
 
         if (args.length == 3 && sub.equals("create")) {
@@ -147,6 +173,10 @@ public class ServerTabCompleter implements TabCompleter {
                     List<CachedServer> list = new ArrayList<>();
                     for (JsonNode s : result.get("servers")) {
                         list.add(new CachedServer(s.get("name").asText(), s.get("status").asText()));
+                    }
+                    // Serveurs partagés : référencés par "proprietaire/nom"
+                    for (JsonNode s : result.path("shared")) {
+                        list.add(new CachedServer(s.path("ref").asText(), s.path("status").asText()));
                     }
                     serverCache.put(uuid, list);
                 });

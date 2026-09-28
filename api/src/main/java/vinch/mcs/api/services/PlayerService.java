@@ -64,13 +64,20 @@ public class PlayerService {
         return playerRepository.findByMinecraftUuid(uuid);
     }
 
-    public Player updateLimits(UUID uuid, int maxServers, int totalRamMb, int totalCpuCores) {
+    public Player updateLimits(UUID uuid, int maxServers, int totalRamMb, int totalCpuCores, Boolean admin) {
         Player player = playerRepository.findByMinecraftUuid(uuid)
                 .orElseThrow(() -> new RuntimeException("Joueur introuvable : " + uuid));
 
         player.setMaxServers(maxServers);
         player.setTotalRamMb(totalRamMb);
         player.setTotalCpuCores(totalCpuCores);
+        if (Boolean.TRUE.equals(admin) && player.getRole() != PlayerRole.ADMIN) {
+            log.info("{} devient admin MCS", player.getMinecraftUsername());
+            player.setRole(PlayerRole.ADMIN);
+        } else if (Boolean.FALSE.equals(admin) && player.getRole() == PlayerRole.ADMIN) {
+            log.info("{} n'est plus admin MCS", player.getMinecraftUsername());
+            player.setRole(PlayerRole.PLAYER);
+        }
 
         return playerRepository.save(player);
     }

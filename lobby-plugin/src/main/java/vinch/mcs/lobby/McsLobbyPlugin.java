@@ -59,7 +59,7 @@ public final class McsLobbyPlugin extends JavaPlugin {
         }
         return luckPermsHelper.loadUserMeta(uuid)
                 .thenCompose(meta -> apiClient.updatePlayerLimits(
-                        uuid, meta.maxServers(), meta.totalRamMb(), meta.totalCpuCores()))
+                        uuid, meta.maxServers(), meta.totalRamMb(), meta.totalCpuCores(), meta.admin()))
                 .handle((result, error) -> {
                     if (error != null) {
                         getLogger().warning("Synchronisation des limites de " + name + " : " + error.getMessage());

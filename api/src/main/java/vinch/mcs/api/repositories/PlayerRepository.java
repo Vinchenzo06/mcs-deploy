@@ -14,5 +14,7 @@ public interface PlayerRepository extends JpaRepository<Player, Long> {
 
     Optional<Player> findByMinecraftUsername(String minecraftUsername);
 
+    Optional<Player> findFirstByMinecraftUsernameIgnoreCase(String minecraftUsername);
+
     boolean existsByMinecraftUuid(UUID minecraftUuid);
 }

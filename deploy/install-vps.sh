@@ -318,7 +318,7 @@ else
 fi
 echo
 echo "=== Nodes ==="
-runuser -u postgres -- psql -qtA -d mcs_db -c "SELECT '  node ' || id || '  ' || COALESCE(hostname, '?') || '  ports=' || COALESCE(port_start || '-' || port_end, 'aucune') || '  online=' || is_online || '  heartbeat=' || COALESCE(to_char(last_heartbeat_at, 'YYYY-MM-DD HH24:MI'), 'jamais') || CASE WHEN is_revoked THEN '  (révoqué)' ELSE '' END FROM nodes ORDER BY id" 2>/dev/null
+runuser -u postgres -- psql -qtA -d mcs_db -c "SELECT '  node ' || n.id || '  ' || COALESCE(n.hostname, '?') || '  propriétaire=' || COALESCE(p.minecraft_username, 'aucun') || '  ports=' || COALESCE(n.port_start || '-' || n.port_end, 'aucune') || '  online=' || n.is_online || '  heartbeat=' || COALESCE(to_char(n.last_heartbeat_at, 'YYYY-MM-DD HH24:MI'), 'jamais') || CASE WHEN n.is_revoked THEN '  (révoqué)' ELSE '' END FROM nodes n LEFT JOIN players p ON p.id = n.owner_player_id ORDER BY n.id" 2>/dev/null
 echo
 echo "=== Capacité des machines (utilisé / prêté ; 10 % du prêté restent en réserve) ==="
 runuser -u postgres -- psql -qtA -d mcs_db -c "
@@ -486,9 +486,10 @@ SHEOF
   # machine existante (mêmes ports, nouveaux jetons et clés).
   cat > /usr/local/bin/mcs-add-node <<'SHEOF'
 #!/usr/bin/env bash
-# sudo mcs-add-node [--ssh] [nom]
+# sudo mcs-add-node [--ssh] [--owner <pseudo>] [nom]
 #   Crée un node dans l'API et affiche la commande à lancer sur la machine volontaire.
 #   --ssh : cette machine sera aussi joignable en SSH via le VPS (une seule machine à la fois)
+#   --owner : joueur propriétaire de la machine (voir mcs-node-owner)
 # sudo mcs-add-node --renew <id> [--ssh]
 #   Nouveau code pour une machine déjà jumelée (code perdu ou divulgué, mise à niveau) :
 #   ses anciens jetons et clés deviennent invalides, ses ports et ses serveurs sont conservés.
@@ -496,10 +497,12 @@ set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
 ssh_flag=false
 renew_id=
+owner=
 name=volontaire
 while (( $# )); do
   case "$1" in
     --ssh) ssh_flag=true; shift ;;
+    --owner) owner=${2:-}; shift 2 || { echo "Usage : sudo mcs-add-node --owner <pseudo> [nom]"; exit 1; } ;;
     --renew) renew_id=${2:-}; shift 2 || { echo "Usage : sudo mcs-add-node --renew <id>"; exit 1; } ;;
     *) name=$1; shift ;;
   esac
@@ -578,6 +581,9 @@ WG_PUBLIC=$wg_public
 EOF
 mcs-rathole-sync
 mcs-wg-sync
+if [[ -n "$owner" ]]; then
+  mcs-node-owner "$node_id" "$owner" || echo "! Propriétaire non défini : relance 'sudo mcs-node-owner $node_id <pseudo>'"
+fi
 
 code=$(jq -cn --arg vps "$VPS_IP" --argjson id "$node_id" --arg rt "$rathole_token" --arg nt "$node_token" \
   --argjson ps "$port_start" --argjson pe "$port_end" --argjson ssh "$ssh_flag" --argjson sp "$SSH_TUNNEL_PORT" \
@@ -600,6 +606,38 @@ echo
 echo "Ce code contient des secrets propres à cette machine : ne le donne qu'à son propriétaire."
 SHEOF
   chmod 755 /usr/local/bin/mcs-add-node
+
+  # mcs-node-owner : joueur propriétaire d'une machine (hébergeur). Il peut
+  # rejoindre, démarrer, arrêter les serveurs hébergés chez lui, utiliser leur
+  # console et y amener un joueur (/mcs move), mais pas inviter.
+  cat > /usr/local/bin/mcs-node-owner <<'SHEOF'
+#!/usr/bin/env bash
+# sudo mcs-node-owner                  liste les machines et leur propriétaire
+# sudo mcs-node-owner <id> <pseudo>    définit le propriétaire (il doit s'être connecté une fois)
+# sudo mcs-node-owner <id> --none      retire le propriétaire
+set -euo pipefail
+[[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
+psql=(runuser -u postgres -- psql -qtA -d mcs_db -v ON_ERROR_STOP=1)
+if (( $# == 0 )); then
+  "${psql[@]}" -c "SELECT '  node ' || n.id || '  ' || COALESCE(n.hostname, '?') || '  propriétaire : ' || COALESCE(p.minecraft_username, 'aucun')
+    FROM nodes n LEFT JOIN players p ON p.id = n.owner_player_id WHERE NOT n.is_revoked ORDER BY n.id"
+  exit 0
+fi
+[[ $# -eq 2 && "$1" =~ ^[0-9]+$ ]] || { echo "Usage : sudo mcs-node-owner <id> <pseudo> | --none"; exit 1; }
+id=$1
+[[ "$("${psql[@]}" -c "SELECT count(*) FROM nodes WHERE id = $id")" == "1" ]] || { echo "Machine $id inconnue"; exit 1; }
+if [[ "$2" == "--none" ]]; then
+  "${psql[@]}" -c "UPDATE nodes SET owner_player_id = NULL WHERE id = $id" >/dev/null
+  echo "✔ Machine $id : plus de propriétaire"
+  exit 0
+fi
+[[ "$2" =~ ^[A-Za-z0-9_]{3,16}$ ]] || { echo "Pseudo invalide"; exit 1; }
+pid=$("${psql[@]}" -c "SELECT id FROM players WHERE lower(minecraft_username) = lower('$2') ORDER BY last_seen_at DESC LIMIT 1")
+[[ -n "$pid" ]] || { echo "Joueur $2 inconnu : il doit se connecter au moins une fois au réseau"; exit 1; }
+"${psql[@]}" -c "UPDATE nodes SET owner_player_id = $pid WHERE id = $id" >/dev/null
+echo "✔ Machine $id : propriétaire $2"
+SHEOF
+  chmod 755 /usr/local/bin/mcs-node-owner
 
   # mcs-disk-quota : changer le quota disque d'un serveur
   cat > /usr/local/bin/mcs-disk-quota <<'SHEOF'

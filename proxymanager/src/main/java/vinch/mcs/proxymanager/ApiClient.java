@@ -58,6 +58,37 @@ public class ApiClient {
         return sendAsync(request);
     }
 
+    /** Ce joueur peut-il entrer sur ce serveur ? -> {allowed, reason} */
+    public CompletableFuture<JsonNode> checkAccess(String velocityName, UUID uuid) {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(config.getApiUrl() + "/api/v1/access/check?server="
+                        + java.net.URLEncoder.encode(velocityName, java.nio.charset.StandardCharsets.UTF_8)
+                        + "&uuid=" + uuid))
+                .header("X-API-Key", config.getApiKey())
+                .timeout(Duration.ofSeconds(3))
+                .GET()
+                .build();
+        return sendAsync(request);
+    }
+
+    /** Prévient l'API qu'un joueur est arrivé sur un serveur (OP auto des admins) */
+    public void notifyConnected(String velocityName, UUID uuid) {
+        String body;
+        try {
+            body = objectMapper.writeValueAsString(java.util.Map.of("server", velocityName, "uuid", uuid.toString()));
+        } catch (Exception e) {
+            return;
+        }
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(config.getApiUrl() + "/api/v1/access/connected"))
+                .header("Content-Type", "application/json")
+                .header("X-API-Key", config.getApiKey())
+                .timeout(Duration.ofSeconds(5))
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+        sendAsync(request).exceptionally(e -> null);
+    }
+
     private CompletableFuture<JsonNode> sendAsync(HttpRequest request) {
         return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
                 .thenApply(response -> {

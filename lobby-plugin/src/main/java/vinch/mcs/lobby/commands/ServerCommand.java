@@ -71,11 +71,16 @@ public class ServerCommand implements CommandExecutor {
             case "list" -> handleList(player);
             case "delete" -> handleDelete(player, args);
             case "join" -> handleJoin(player, args);
-            case "start" -> handleStart(player, args);
-            case "stop" -> handleStop(player, args);
-            case "restart" -> handleRestart(player, args);
+            case "start", "stop", "restart" -> handlePower(player, args);
             case "quota" -> handleQuota(player);
             case "info" -> handleInfo(player, args);
+            case "members", "membres" -> handleMembers(player, args);
+            case "invite" -> handleInvite(player, args);
+            case "remove" -> handleRemove(player, args);
+            case "leave" -> handleLeave(player, args);
+            case "public", "private" -> handleVisibility(player, args);
+            case "console" -> handleConsole(player, args);
+            case "move" -> handleMove(player, args);
             default -> sendUsage(player);
         }
     }
@@ -219,10 +224,7 @@ public class ServerCommand implements CommandExecutor {
 
     /** Message lisible à partir d'une erreur de l'API (sans "java.lang...", ni code HTTP) */
     private static String errorText(Throwable error) {
-        Throwable t = error;
-        while ((t instanceof CompletionException || t instanceof ExecutionException) && t.getCause() != null) {
-            t = t.getCause();
-        }
+        Throwable t = unwrap(error);
         if (t instanceof java.net.http.HttpTimeoutException) {
             return "Pas de réponse à temps. Réessaie dans un instant.";
         }
@@ -231,11 +233,22 @@ public class ServerCommand implements CommandExecutor {
         }
         String msg = t.getMessage() == null ? "erreur inconnue" : t.getMessage();
         return msg.replaceFirst("^API erreur \\(\\d+\\) : ", "")
-                .replaceFirst("^(Erreur démarrage|Erreur arrêt|Échec création côté agent) : ", "");
+                .replaceFirst("^(Erreur démarrage|Erreur arrêt|Échec création côté agent) : ", "")
+                .trim();
     }
 
-    private static boolean notFound(String msg) {
-        return msg.contains("introuvable") || msg.contains("non trouvé") || msg.contains("(404)");
+    private static Throwable unwrap(Throwable error) {
+        Throwable t = error;
+        while ((t instanceof CompletionException || t instanceof ExecutionException) && t.getCause() != null) {
+            t = t.getCause();
+        }
+        return t;
+    }
+
+    /** Refus normal de l'API (4xx avec une explication) : rien à écrire dans la console */
+    private static boolean apiRefusal(Throwable error) {
+        String m = unwrap(error).getMessage();
+        return m != null && m.matches("(?s)^API erreur \\(4\\d\\d\\) : .+");
     }
 
     /**
@@ -245,7 +258,8 @@ public class ServerCommand implements CommandExecutor {
     private void reportError(Player player, Throwable error, String serverName) {
         String msg = errorText(error);
 
-        if (msg.contains("Joueur") && notFound(msg)) {
+        if (msg.isEmpty() || msg.startsWith("Joueur non trouvé")) {
+            // Profil absent de l'API (404 sans corps)
             failure(player, text("Ton profil MCS est introuvable. Reconnecte-toi au réseau."));
         } else if (msg.contains("Limite de serveurs atteinte")) {
             failure(player, text("Tu as atteint ta limite de serveurs."));
@@ -271,23 +285,21 @@ public class ServerCommand implements CommandExecutor {
                     + "Essaie avec moins de RAM ou de CPU, ou réessaie plus tard."));
         } else if (msg.contains("Aucune node disponible")) {
             failure(player, text("Aucune machine n'est en ligne pour le moment. Réessaie plus tard."));
-        } else if (msg.contains("déjà en marche")) {
+        } else if (msg.contains("déjà en marche") && serverName != null) {
             notice(player, text("").append(serverName(serverName)).append(text(" est déjà en ligne.")));
             player.sendMessage(buttons(joinButton(serverName), infoButton(serverName)));
-        } else if (msg.contains("déjà arrêté")) {
+        } else if (msg.contains("déjà arrêté") && serverName != null) {
             notice(player, text("").append(serverName(serverName)).append(text(" est déjà arrêté.")));
             player.sendMessage(buttons(startButton(serverName)));
-        } else if (msg.contains("propriétaire")) {
-            failure(player, text("Ce serveur ne t'appartient pas."));
-        } else if (notFound(msg)) {
-            failure(player, text(serverName == null ? "Introuvable." : "Tu n'as pas de serveur nommé " + serverName + "."));
+        } else if (msg.startsWith("Serveur '") && msg.endsWith("introuvable")) {
+            failure(player, text("Aucun serveur « " + serverName + " » trouvé parmi les tiens et ceux où tu es invité."));
             player.sendMessage(buttons(listButton()));
         } else {
+            // Les refus de l'API sont déjà des phrases en français (droits, joueur inconnu...)
             failure(player, text(msg));
-            if (serverName != null) {
-                player.sendMessage(buttons(infoButton(serverName)));
+            if (!apiRefusal(error)) {
+                plugin.getLogger().warning("/mcs (" + player.getName() + ") : " + msg);
             }
-            plugin.getLogger().warning("/mcs (" + player.getName() + ") : " + msg);
         }
     }
 
@@ -310,17 +322,34 @@ public class ServerCommand implements CommandExecutor {
                         + "RAM : 2G par défaut, 1G minimum (en Go « 4G » ou en Mo « 4096 »)\n"
                         + "CPU : 1 cœur par défaut\n"
                         + "Limités par ton quota (/mcs quota)"));
-        player.sendMessage(helpLine("/mcs list", "/mcs list", "Tes serveurs", "Liste de tes serveurs et leur état"));
-        player.sendMessage(helpLine("/mcs info <nom>", "/mcs info ", "État et ressources",
+        player.sendMessage(helpLine("/mcs list", "/mcs list", "Tes serveurs",
+                "Tes serveurs et ceux où tu es invité"));
+        player.sendMessage(helpLine("/mcs info <serveur>", "/mcs info ", "État et ressources",
                 "Joueurs, CPU, RAM et disque d'un serveur"));
-        player.sendMessage(helpLine("/mcs join <nom>", "/mcs join ", "Rejoindre", "Aller sur un de tes serveurs"));
-        player.sendMessage(helpLine("/mcs start|stop|restart <nom>", "/mcs start ", "Allumer, éteindre",
+        player.sendMessage(helpLine("/mcs join <serveur>", "/mcs join ", "Rejoindre", "Aller sur un serveur"));
+        player.sendMessage(helpLine("/mcs start|stop|restart <serveur>", "/mcs start ", "Allumer, éteindre",
                 "Démarrer, arrêter ou redémarrer un serveur"));
-        player.sendMessage(helpLine("/mcs delete <nom>", "/mcs delete ", "Supprimer",
+        player.sendMessage(helpLine("/mcs members <serveur>", "/mcs members ", "Invités et accès",
+                "Qui a accès au serveur, avec quel rôle"));
+        player.sendMessage(helpLine("/mcs invite <serveur> <joueur> [rôle]", "/mcs invite ", "Inviter",
+                "Rôles : membre (rejoindre), gerant (+ démarrer/arrêter),\n"
+                        + "technicien (+ console et fichiers). Membre par défaut.\n"
+                        + "Relancer la commande change le rôle."));
+        player.sendMessage(helpLine("/mcs remove <serveur> <joueur>", "/mcs remove ", "Retirer un invité",
+                "Le joueur n'a plus accès au serveur"));
+        player.sendMessage(helpLine("/mcs public|private <serveur>", "/mcs public ", "Ouvert ou privé",
+                "Public : tout le monde peut entrer\nPrivé (par défaut) : seulement toi et tes invités"));
+        player.sendMessage(helpLine("/mcs console <serveur> <commande>", "/mcs console ", "Console",
+                "Exécute une commande sur le serveur, ex. : op TonPseudo"));
+        player.sendMessage(helpLine("/mcs move <joueur> <serveur>", "/mcs move ", "Amener un joueur",
+                "Hébergeur de la machine et admins : envoie un joueur\nsur le serveur, une seule fois (sans lui donner d'accès)"));
+        player.sendMessage(helpLine("/mcs delete <serveur>", "/mcs delete ", "Supprimer",
                 "Supprime le serveur et son monde, définitivement\n(une confirmation est demandée)"));
         player.sendMessage(helpLine("/mcs quota", "/mcs quota", "Tes limites",
                 "Serveurs, RAM et CPU que tu peux encore utiliser"));
-        player.sendMessage(Component.text(" Exemple : ", NamedTextColor.DARK_GRAY)
+        player.sendMessage(Component.text(" Serveur d'un autre joueur : ", NamedTextColor.DARK_GRAY)
+                .append(Component.text("pseudo/nom", NamedTextColor.GRAY))
+                .append(Component.text("  ·  Exemple : ", NamedTextColor.DARK_GRAY))
                 .append(Component.text("/mcs create paper 1.21.4 survie 4G 2", NamedTextColor.GRAY)
                         .clickEvent(ClickEvent.suggestCommand("/mcs create paper 1.21.4 survie 4G 2"))
                         .hoverEvent(HoverEvent.showText(Component.text(
@@ -422,6 +451,84 @@ public class ServerCommand implements CommandExecutor {
                 }));
     }
 
+    // ============================================================ résolution ====
+
+    private record Target(long playerId, JsonNode server) {
+        long id() {
+            return server.path("id").asLong();
+        }
+
+        /** Nom à afficher et à réutiliser dans les commandes : "survie" ou "bob/survie" */
+        String ref() {
+            return server.path("ref").asText(server.path("name").asText());
+        }
+
+        boolean can(String right) {
+            for (JsonNode r : server.path("rights")) {
+                if (right.equals(r.asText())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    /**
+     * Trouve le serveur désigné par le joueur ("nom" ou "pseudo/nom") avec ses droits,
+     * puis lance l'action sur le thread principal. Les erreurs sont affichées.
+     */
+    private void withServer(Player player, String ref, java.util.function.Consumer<Target> action) {
+        plugin.getApiClient().getPlayerByUuid(player.getUniqueId())
+                .thenCompose(info -> {
+                    long playerId = info.get("id").asLong();
+                    return plugin.getApiClient().resolveServer(playerId, ref).thenApply(s -> new Target(playerId, s));
+                })
+                .whenComplete((target, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
+                    if (!player.isOnline()) {
+                        return;
+                    }
+                    if (error != null) {
+                        reportError(player, error, ref.toLowerCase(Locale.ROOT));
+                        return;
+                    }
+                    action.accept(target);
+                }));
+    }
+
+    /** Réponse d'une action lancée au nom du joueur, affichée sur le thread principal */
+    private void afterApi(Player player, java.util.concurrent.CompletableFuture<JsonNode> call, String ref,
+                          java.util.function.Consumer<JsonNode> onSuccess) {
+        call.whenComplete((result, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
+            if (!player.isOnline()) {
+                return;
+            }
+            if (error != null) {
+                reportError(player, error, ref);
+                return;
+            }
+            onSuccess.accept(result);
+        }));
+    }
+
+    private static final Pattern PLAYER_PATTERN = Pattern.compile("^[A-Za-z0-9_]{3,16}$");
+
+    private static boolean validPlayerName(Player player, String name) {
+        if (PLAYER_PATTERN.matcher(name).matches()) {
+            return true;
+        }
+        failure(player, text("Pseudo invalide : " + name));
+        return false;
+    }
+
+    private static String relationLabel(String relation) {
+        return switch (relation) {
+            case "proprietaire" -> "propriétaire";
+            case "gerant" -> "gérant";
+            case "hebergeur" -> "hébergeur (ta machine)";
+            default -> relation;
+        };
+    }
+
     // ============================================================ list ====
 
     private void handleList(Player player) {
@@ -434,205 +541,390 @@ public class ServerCommand implements CommandExecutor {
                     }
 
                     JsonNode servers = result.path("servers");
+                    JsonNode shared = result.path("shared");
                     player.sendMessage(Component.empty());
                     player.sendMessage(header("Tes serveurs"));
 
                     if (servers.size() == 0) {
                         player.sendMessage(Component.text(" Tu n'as encore aucun serveur.", NamedTextColor.GRAY));
-                        player.sendMessage(buttons(createButton(), quotaButton()));
-                        return;
+                    }
+                    for (JsonNode s : servers) {
+                        player.sendMessage(listLine(s, s.path("name").asText(), null, true));
                     }
 
-                    for (JsonNode s : servers) {
-                        String name = s.path("name").asText();
-                        String status = s.path("status").asText("?");
-                        Component line = Component.text(" ")
-                                .append(stateIcon(status))
-                                .append(text(" "))
-                                .append(serverName(name))
-                                .append(Component.text("  " + capitalize(s.path("serverType").asText("")) + " "
-                                        + s.path("minecraftVersion").asText("")
-                                        + (s.has("allocatedRamMb") ? "  ·  " + size(s.path("allocatedRamMb").asLong()) : "")
-                                        + (s.has("allocatedCpuCores") ? "  ·  " + cores(s.path("allocatedCpuCores").asLong()) : ""),
-                                        NamedTextColor.GRAY))
-                                .append(text("  "));
-                        if ("RUNNING".equals(status)) {
-                            line = line.append(joinButton(name));
-                        } else if ("STOPPED".equals(status) || "ERROR".equals(status)) {
-                            line = line.append(startButton(name));
+                    if (shared.size() > 0) {
+                        player.sendMessage(Component.text(" Partagés avec toi", NamedTextColor.GOLD));
+                        for (JsonNode s : shared) {
+                            boolean canJoin = false;
+                            boolean canPower = false;
+                            for (JsonNode r : s.path("rights")) {
+                                canJoin |= "JOIN".equals(r.asText());
+                                canPower |= "POWER".equals(r.asText());
+                            }
+                            player.sendMessage(listLine(s, s.path("ref").asText(),
+                                    relationLabel(s.path("relation").asText("")), canJoin || canPower));
                         }
-                        player.sendMessage(line);
                     }
-                    player.sendMessage(Component.text(" Clique sur un nom pour voir ses infos.  ", NamedTextColor.DARK_GRAY)
-                            .append(quotaButton()));
+
+                    if (servers.size() == 0 && shared.size() == 0) {
+                        player.sendMessage(buttons(createButton(), quotaButton()));
+                    } else {
+                        player.sendMessage(Component.text(" Clique sur un nom pour voir ses infos.  ", NamedTextColor.DARK_GRAY)
+                                .append(quotaButton()));
+                    }
                 }));
+    }
+
+    /** "● survie  Paper 1.21.4 · 4 Go · 2 cœurs  [Rejoindre]" (+ rôle pour un serveur partagé) */
+    private static Component listLine(JsonNode s, String ref, String role, boolean withButton) {
+        String status = s.path("status").asText("?");
+        Component line = Component.text(" ")
+                .append(stateIcon(status))
+                .append(text(" "))
+                .append(serverName(ref))
+                .append(Component.text("  " + capitalize(s.path("serverType").asText("")) + " "
+                        + s.path("minecraftVersion").asText("")
+                        + (s.has("allocatedRamMb") ? "  ·  " + size(s.path("allocatedRamMb").asLong()) : "")
+                        + (s.has("allocatedCpuCores") ? "  ·  " + cores(s.path("allocatedCpuCores").asLong()) : ""),
+                        NamedTextColor.GRAY));
+        if (role != null) {
+            line = line.append(Component.text("  " + role, NamedTextColor.DARK_AQUA));
+        }
+        if (s.path("isPublic").asBoolean(false)) {
+            line = line.append(Component.text("  public", NamedTextColor.DARK_GREEN));
+        }
+        line = line.append(text("  "));
+        if (withButton) {
+            if ("RUNNING".equals(status)) {
+                line = line.append(joinButton(ref));
+            } else if ("STOPPED".equals(status) || "ERROR".equals(status)) {
+                line = line.append(startButton(ref));
+            }
+        }
+        return line;
     }
 
     // ============================================================ delete ====
 
     private void handleDelete(Player player, String[] args) {
         if (args.length < 2 || args.length > 3) {
-            usage(player, "/mcs delete <nom>", "/mcs delete ");
+            usage(player, "/mcs delete <serveur>", "/mcs delete ");
             return;
         }
-        String name = args[1].toLowerCase();
+        boolean confirmed = args.length == 3 && "confirm".equalsIgnoreCase(args[2]);
 
-        // Suppression définitive : on demande d'abord une confirmation
-        if (args.length == 2 || !"confirm".equalsIgnoreCase(args[2])) {
-            notice(player, text("⚠ Supprimer ").append(serverName(name))
-                    .append(text(" ? Son monde, ses plugins et ses mods seront effacés définitivement.")));
-            player.sendMessage(buttons(
-                    button("Oui, supprimer", NamedTextColor.RED, "/mcs delete " + name + " confirm",
-                            "Supprimer " + name + " pour de bon"),
-                    button("Annuler", NamedTextColor.GRAY, "/mcs info " + name, "Garder " + name)));
-            return;
-        }
-
-        pending(player, text("Suppression de ").append(Component.text(name, NamedTextColor.WHITE)).append(text("…")));
-
-        plugin.getApiClient().getPlayerByUuid(player.getUniqueId())
-                .thenCompose(playerInfo -> plugin.getApiClient().deleteServer(name, playerInfo.get("id").asLong()))
-                .whenComplete((result, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (error != null) {
-                        reportError(player, error, name);
-                        return;
-                    }
-                    success(player, text("Serveur ").append(Component.text(name, NamedTextColor.WHITE))
-                            .append(text(" supprimé.")));
-                }));
+        withServer(player, args[1], t -> {
+            String ref = t.ref();
+            if (!t.can("DELETE")) {
+                failure(player, text("Seul le propriétaire du serveur peut le supprimer."));
+                return;
+            }
+            // Suppression définitive : on demande d'abord une confirmation
+            if (!confirmed) {
+                notice(player, text("⚠ Supprimer ").append(serverName(ref))
+                        .append(text(" ? Son monde, ses plugins et ses mods seront effacés définitivement.")));
+                player.sendMessage(buttons(
+                        button("Oui, supprimer", NamedTextColor.RED, "/mcs delete " + ref + " confirm",
+                                "Supprimer " + ref + " pour de bon"),
+                        button("Annuler", NamedTextColor.GRAY, "/mcs info " + ref, "Garder " + ref)));
+                return;
+            }
+            pending(player, text("Suppression de ").append(Component.text(ref, NamedTextColor.WHITE)).append(text("…")));
+            afterApi(player, plugin.getApiClient().serverAction(t.id(), "delete", t.playerId()), ref,
+                    r -> success(player, text("Serveur ").append(Component.text(ref, NamedTextColor.WHITE))
+                            .append(text(" supprimé."))));
+        });
     }
 
     // ============================================================ join ====
 
     private void handleJoin(Player player, String[] args) {
         if (args.length != 2) {
-            usage(player, "/mcs join <nom>", "/mcs join ");
+            usage(player, "/mcs join <serveur>", "/mcs join ");
             return;
         }
-        String name = args[1].toLowerCase();
-
-        plugin.getApiClient().getPlayerByUuid(player.getUniqueId())
-                .thenCompose(playerInfo -> plugin.getApiClient().getServerByOwnerAndName(playerInfo.get("id").asLong(), name))
-                .whenComplete((result, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (error != null) {
-                        reportError(player, error, name);
-                        return;
+        withServer(player, args[1], t -> {
+            String ref = t.ref();
+            if (!t.can("JOIN")) {
+                failure(player, text("Ce serveur est privé : demande une invitation à son propriétaire."));
+                return;
+            }
+            String status = t.server().path("status").asText("?");
+            switch (status) {
+                case "RUNNING" -> {
+                    pending(player, text("Connexion à ").append(Component.text(ref, NamedTextColor.WHITE)).append(text("…")));
+                    sendToServer(player, t.server().path("velocityName").asText());
+                }
+                case "STARTING", "CREATING" -> {
+                    notice(player, text("").append(serverName(ref)).append(text(" démarre encore, réessaie dans un instant.")));
+                    player.sendMessage(buttons(joinButton(ref), infoButton(ref)));
+                }
+                default -> {
+                    failure(player, text("").append(serverName(ref)).append(text(" n'est pas en ligne ("))
+                            .append(state(status, null)).append(Component.text(").", NamedTextColor.RED)));
+                    if (t.can("POWER") && ("STOPPED".equals(status) || "ERROR".equals(status))) {
+                        player.sendMessage(buttons(startButton(ref)));
                     }
-
-                    String status = result.path("status").asText("?");
-                    switch (status) {
-                        case "RUNNING" -> {
-                            pending(player, text("Connexion à ").append(Component.text(name, NamedTextColor.WHITE))
-                                    .append(text("…")));
-                            sendToServer(player, result.get("velocityName").asText());
-                        }
-                        case "STARTING", "CREATING" -> {
-                            notice(player, text("").append(serverName(name)).append(text(" démarre encore, réessaie dans un instant.")));
-                            player.sendMessage(buttons(joinButton(name), infoButton(name)));
-                        }
-                        default -> {
-                            failure(player, text("").append(serverName(name)).append(text(" n'est pas en ligne (")).append(state(status, null))
-                                    .append(Component.text(").", NamedTextColor.RED)));
-                            if ("STOPPED".equals(status) || "ERROR".equals(status)) {
-                                player.sendMessage(buttons(startButton(name)));
-                            }
-                        }
-                    }
-                }));
+                }
+            }
+        });
     }
 
     // ============================================================ start / stop / restart ====
 
-    private void handleStart(Player player, String[] args) {
+    private void handlePower(Player player, String[] args) {
+        String action = args[0].toLowerCase(Locale.ROOT);
         if (args.length != 2) {
-            usage(player, "/mcs start <nom>", "/mcs start ");
+            usage(player, "/mcs " + action + " <serveur>", "/mcs " + action + " ");
             return;
         }
-        String name = args[1].toLowerCase();
-        pending(player, text("Démarrage de ").append(Component.text(name, NamedTextColor.WHITE))
-                .append(text("… (jusqu'à 2 minutes)")));
-
-        plugin.getApiClient().getPlayerByUuid(player.getUniqueId())
-                .thenCompose(playerInfo -> plugin.getApiClient().startServer(name, playerInfo.get("id").asLong()))
-                .whenComplete((result, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (!player.isOnline()) {
-                        return;
+        withServer(player, args[1], t -> {
+            String ref = t.ref();
+            if (!t.can("POWER")) {
+                failure(player, text("Tu n'as pas le droit de démarrer ou d'arrêter ce serveur."));
+                return;
+            }
+            String doing = switch (action) {
+                case "start" -> "Démarrage de ";
+                case "stop" -> "Arrêt de ";
+                default -> "Redémarrage de ";
+            };
+            pending(player, text(doing).append(Component.text(ref, NamedTextColor.WHITE))
+                    .append(text("stop".equals(action) ? "…" : "… (jusqu'à 2 minutes)")));
+            afterApi(player, plugin.getApiClient().serverAction(t.id(), action, t.playerId()), ref, r -> {
+                // L'agent ne répond qu'une fois le serveur prêt à accueillir des joueurs
+                switch (action) {
+                    case "start" -> {
+                        success(player, text("").append(serverName(ref)).append(text(" est en ligne !")));
+                        player.sendMessage(buttons(joinButton(ref), infoButton(ref)));
                     }
-                    if (error != null) {
-                        reportError(player, error, name);
-                        return;
+                    case "stop" -> {
+                        success(player, text("").append(serverName(ref)).append(text(" est arrêté.")));
+                        player.sendMessage(buttons(startButton(ref)));
                     }
-                    // L'agent ne répond qu'une fois le serveur prêt à accueillir des joueurs
-                    success(player, text("").append(serverName(name)).append(text(" est en ligne !")));
-                    player.sendMessage(buttons(joinButton(name), infoButton(name)));
-                }));
-    }
-
-    private void handleStop(Player player, String[] args) {
-        if (args.length != 2) {
-            usage(player, "/mcs stop <nom>", "/mcs stop ");
-            return;
-        }
-        String name = args[1].toLowerCase();
-        pending(player, text("Arrêt de ").append(Component.text(name, NamedTextColor.WHITE)).append(text("…")));
-
-        plugin.getApiClient().getPlayerByUuid(player.getUniqueId())
-                .thenCompose(playerInfo -> plugin.getApiClient().stopServer(name, playerInfo.get("id").asLong()))
-                .whenComplete((result, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (error != null) {
-                        reportError(player, error, name);
-                        return;
+                    default -> {
+                        success(player, text("").append(serverName(ref)).append(text(" a redémarré !")));
+                        player.sendMessage(buttons(joinButton(ref), infoButton(ref)));
                     }
-                    success(player, text("").append(serverName(name)).append(text(" est arrêté.")));
-                    player.sendMessage(buttons(startButton(name)));
-                }));
-    }
-
-    private void handleRestart(Player player, String[] args) {
-        if (args.length != 2) {
-            usage(player, "/mcs restart <nom>", "/mcs restart ");
-            return;
-        }
-        String name = args[1].toLowerCase();
-        pending(player, text("Redémarrage de ").append(Component.text(name, NamedTextColor.WHITE))
-                .append(text("… (jusqu'à 2 minutes)")));
-
-        plugin.getApiClient().getPlayerByUuid(player.getUniqueId())
-                .thenCompose(playerInfo -> plugin.getApiClient().restartServer(name, playerInfo.get("id").asLong()))
-                .whenComplete((result, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (!player.isOnline()) {
-                        return;
-                    }
-                    if (error != null) {
-                        reportError(player, error, name);
-                        return;
-                    }
-                    success(player, text("").append(serverName(name)).append(text(" a redémarré !")));
-                    player.sendMessage(buttons(joinButton(name), infoButton(name)));
-                }));
+                }
+            });
+        });
     }
 
     // ============================================================ info ====
 
     private void handleInfo(Player player, String[] args) {
         if (args.length != 2) {
-            usage(player, "/mcs info <nom>", "/mcs info ");
+            usage(player, "/mcs info <serveur>", "/mcs info ");
             return;
         }
-        String name = args[1].toLowerCase();
-
-        plugin.getApiClient().getPlayerByUuid(player.getUniqueId())
-                .thenCompose(playerInfo -> plugin.getApiClient()
-                        .getServerByOwnerAndName(playerInfo.get("id").asLong(), name))
-                .thenCompose(server -> plugin.getApiClient().getServerStats(server.get("id").asLong()))
-                .whenComplete((stats, error) -> Bukkit.getScheduler().runTask(plugin, () -> {
-                    if (error != null) {
-                        reportError(player, error, name);
-                        return;
-                    }
-                    sendInfo(player, stats);
-                }));
+        withServer(player, args[1], t -> afterApi(player, plugin.getApiClient().getServerStats(t.id()), t.ref(),
+                stats -> sendInfo(player, stats, t)));
     }
+
+    // ============================================================ membres ====
+
+    private void handleMembers(Player player, String[] args) {
+        if (args.length != 2) {
+            usage(player, "/mcs members <serveur>", "/mcs members ");
+            return;
+        }
+        withServer(player, args[1], t -> afterApi(player, plugin.getApiClient().getMembers(t.id(), t.playerId()),
+                t.ref(), result -> sendMembers(player, t, result.path("members"))));
+    }
+
+    private static final String[] LEVELS = {"membre", "gerant", "technicien"};
+
+    private static String levelHover(String level) {
+        return switch (level) {
+            case "gerant" -> "Gérant : rejoindre, démarrer, arrêter, redémarrer";
+            case "technicien" -> "Technicien : gérant + console et fichiers";
+            default -> "Membre : rejoindre le serveur";
+        };
+    }
+
+    private void sendMembers(Player player, Target t, JsonNode members) {
+        String ref = t.ref();
+        JsonNode s = t.server();
+        player.sendMessage(Component.empty());
+        player.sendMessage(header("Accès à " + ref));
+
+        boolean isPublic = s.path("isPublic").asBoolean(false);
+        Component access = Component.text(" Accès : ", NamedTextColor.GRAY)
+                .append(isPublic
+                        ? Component.text("Public", NamedTextColor.GREEN)
+                                .hoverEvent(HoverEvent.showText(Component.text("Tout le monde peut entrer", NamedTextColor.GRAY)))
+                        : Component.text("Privé", NamedTextColor.GOLD)
+                                .hoverEvent(HoverEvent.showText(Component.text(
+                                        "Seuls le propriétaire, ses invités, l'hébergeur et les admins", NamedTextColor.GRAY))))
+                .append(Component.text("  ·  propriétaire " + s.path("ownerUsername").asText("?"), NamedTextColor.GRAY));
+        if (t.can("VISIBILITY")) {
+            access = access.append(text("  ")).append(isPublic
+                    ? button("Rendre privé", NamedTextColor.GOLD, "/mcs private " + ref, "Réserver " + ref + " à tes invités")
+                    : button("Rendre public", NamedTextColor.GREEN, "/mcs public " + ref, "Ouvrir " + ref + " à tout le monde"));
+        }
+        player.sendMessage(access);
+
+        if (members.size() == 0) {
+            player.sendMessage(Component.text(" Aucun invité pour l'instant.", NamedTextColor.GRAY));
+        }
+        for (JsonNode m : members) {
+            String name = m.path("username").asText();
+            String level = m.path("level").asText("membre");
+            Component line = Component.text(" • ", NamedTextColor.DARK_GRAY)
+                    .append(Component.text(name, NamedTextColor.WHITE))
+                    .append(Component.text("  " + relationLabel(level), NamedTextColor.DARK_AQUA)
+                            .hoverEvent(HoverEvent.showText(Component.text(levelHover(level), NamedTextColor.GRAY))));
+            if (t.can("INVITE")) {
+                for (String l : LEVELS) {
+                    if (!l.equals(level)) {
+                        line = line.append(text(" ")).append(button(relationLabel(l), NamedTextColor.AQUA,
+                                "/mcs invite " + ref + " " + name + " " + l, "Passer " + name + " en " + levelHover(l)));
+                    }
+                }
+            }
+            if (t.can("REMOVE")) {
+                line = line.append(text(" ")).append(button("Retirer", NamedTextColor.RED,
+                        "/mcs remove " + ref + " " + name, "Retirer l'accès de " + name));
+            }
+            player.sendMessage(line);
+        }
+
+        if (t.can("INVITE")) {
+            player.sendMessage(buttons(suggestButton("Inviter", NamedTextColor.GREEN, "/mcs invite " + ref + " ",
+                    "Écris le pseudo, puis le rôle : membre, gerant ou technicien")));
+        } else if (!"proprietaire".equals(s.path("relation").asText()) && members.size() > 0) {
+            player.sendMessage(Component.text(" Seul le propriétaire invite des joueurs.", NamedTextColor.DARK_GRAY));
+        }
+    }
+
+    private void handleInvite(Player player, String[] args) {
+        if (args.length < 3 || args.length > 4) {
+            usage(player, "/mcs invite <serveur> <joueur> [membre|gerant|technicien]", "/mcs invite ");
+            return;
+        }
+        String target = args[2];
+        String level = args.length == 4 ? args[3].toLowerCase(Locale.ROOT).replace('é', 'e') : "membre";
+        if (!validPlayerName(player, target)) {
+            return;
+        }
+        if (!java.util.Arrays.asList(LEVELS).contains(level)) {
+            failure(player, text("Rôle inconnu : " + args[3] + ". Choisis membre, gerant ou technicien."));
+            return;
+        }
+        withServer(player, args[1], t -> {
+            String ref = t.ref();
+            afterApi(player, plugin.getApiClient().invite(t.id(), t.playerId(), target, level), ref, r -> {
+                String role = relationLabel(r.path("level").asText(level));
+                if (r.path("created").asBoolean(true)) {
+                    success(player, text(target + " est invité sur ").append(serverName(ref))
+                            .append(text(" (" + role + ").")));
+                    Player invited = Bukkit.getPlayerExact(target);
+                    if (invited != null) {
+                        notice(invited, text(player.getName() + " t'a invité sur ").append(serverName(ref))
+                                .append(text(" (" + role + ").")));
+                        invited.sendMessage(buttons(joinButton(ref), infoButton(ref)));
+                    }
+                } else {
+                    success(player, text(target + " est maintenant " + role + " de ").append(serverName(ref)).append(text(".")));
+                }
+                player.sendMessage(buttons(button("Voir les accès", NamedTextColor.AQUA, "/mcs members " + ref,
+                        "Invités de " + ref)));
+            });
+        });
+    }
+
+    private void handleRemove(Player player, String[] args) {
+        if (args.length != 3) {
+            usage(player, "/mcs remove <serveur> <joueur>", "/mcs remove ");
+            return;
+        }
+        String target = args[2];
+        if (!validPlayerName(player, target)) {
+            return;
+        }
+        withServer(player, args[1], t -> afterApi(player,
+                plugin.getApiClient().removeMember(t.id(), t.playerId(), target), t.ref(),
+                r -> success(player, text(target + " n'a plus accès à ").append(serverName(t.ref())).append(text(".")))));
+    }
+
+    private void handleLeave(Player player, String[] args) {
+        if (args.length != 2) {
+            usage(player, "/mcs leave <serveur>", "/mcs leave ");
+            return;
+        }
+        withServer(player, args[1], t -> afterApi(player,
+                plugin.getApiClient().removeMember(t.id(), t.playerId(), player.getName()), t.ref(),
+                r -> success(player, text("Tu n'as plus accès à " + t.ref() + "."))));
+    }
+
+    private void handleVisibility(Player player, String[] args) {
+        boolean makePublic = "public".equalsIgnoreCase(args[0]);
+        if (args.length != 2) {
+            usage(player, "/mcs " + (makePublic ? "public" : "private") + " <serveur>",
+                    "/mcs " + (makePublic ? "public " : "private "));
+            return;
+        }
+        withServer(player, args[1], t -> afterApi(player,
+                plugin.getApiClient().setVisibility(t.id(), t.playerId(), makePublic), t.ref(),
+                r -> success(player, text("").append(serverName(t.ref())).append(text(makePublic
+                        ? " est public : tout le monde peut y entrer."
+                        : " est privé : seuls tes invités peuvent y entrer.")))));
+    }
+
+    // ============================================================ console / move ====
+
+    private void handleConsole(Player player, String[] args) {
+        if (args.length < 3) {
+            usage(player, "/mcs console <serveur> <commande>", "/mcs console ");
+            return;
+        }
+        String command = String.join(" ", java.util.Arrays.copyOfRange(args, 2, args.length));
+        withServer(player, args[1], t -> {
+            if (!t.can("CONSOLE")) {
+                failure(player, text("Tu n'as pas accès à la console de ce serveur."));
+                return;
+            }
+            send(player, Component.text(t.ref() + " > ", NamedTextColor.DARK_GRAY)
+                    .append(Component.text(command, NamedTextColor.WHITE)));
+            afterApi(player, plugin.getApiClient().console(t.id(), t.playerId(), command), t.ref(), r -> {
+                String output = r.path("output").asText("").strip();
+                if (output.isEmpty()) {
+                    player.sendMessage(Component.text("   (pas de réponse)", NamedTextColor.DARK_GRAY));
+                    return;
+                }
+                String[] lines = output.split("\n");
+                for (int i = 0; i < Math.min(lines.length, 20); i++) {
+                    player.sendMessage(Component.text("   " + lines[i], NamedTextColor.GRAY));
+                }
+                if (lines.length > 20) {
+                    player.sendMessage(Component.text("   … (" + (lines.length - 20) + " lignes de plus)", NamedTextColor.DARK_GRAY));
+                }
+            });
+        });
+    }
+
+    private void handleMove(Player player, String[] args) {
+        if (args.length != 3) {
+            usage(player, "/mcs move <joueur> <serveur>", "/mcs move ");
+            return;
+        }
+        String target = args[1];
+        if (!validPlayerName(player, target)) {
+            return;
+        }
+        withServer(player, args[2], t -> {
+            if (!t.can("MOVE")) {
+                failure(player, text("Seuls l'hébergeur de la machine et les admins peuvent amener un joueur ici."));
+                return;
+            }
+            afterApi(player, plugin.getApiClient().move(t.id(), t.playerId(), target), t.ref(),
+                    r -> success(player, text(target + " est envoyé sur ").append(serverName(t.ref()))
+                            .append(text(" (une seule fois : il ne pourra pas revenir seul)."))));
+        });
+    }
+
+    // ============================================================ affichage des infos ====
 
     private static final int BAR_LENGTH = 20;
 
@@ -682,8 +974,8 @@ public class ServerCommand implements CommandExecutor {
         }
     }
 
-    private void sendInfo(Player player, JsonNode s) {
-        String name = s.path("name").asText();
+    private void sendInfo(Player player, JsonNode s, Target t) {
+        String name = t.ref();
         String status = s.path("status").asText("?");
         boolean running = "RUNNING".equals(status);
 
@@ -698,6 +990,23 @@ public class ServerCommand implements CommandExecutor {
             line = line.append(Component.text("  ·  depuis " + up, NamedTextColor.GRAY));
         }
         player.sendMessage(line);
+
+        // Accès : public/privé, invités, rôle du joueur s'il n'est pas le propriétaire
+        JsonNode srv = t.server();
+        String relation = srv.path("relation").asText("");
+        int members = srv.path("members").asInt(0);
+        Component access = Component.text(" Accès : ", NamedTextColor.GRAY)
+                .append(srv.path("isPublic").asBoolean(false)
+                        ? Component.text("public", NamedTextColor.GREEN)
+                        : Component.text("privé", NamedTextColor.GOLD))
+                .append(Component.text("  ·  " + members + (members > 1 ? " invités" : " invité"), NamedTextColor.GRAY)
+                        .clickEvent(ClickEvent.runCommand("/mcs members " + name))
+                        .hoverEvent(HoverEvent.showText(Component.text("Voir les accès", NamedTextColor.GRAY))));
+        if (!"proprietaire".equals(relation)) {
+            access = access.append(Component.text("  ·  à " + srv.path("ownerUsername").asText("?")
+                    + ", tu es " + relationLabel(relation), NamedTextColor.DARK_AQUA));
+        }
+        player.sendMessage(access);
 
         // Joueurs
         int players = s.path("players").asInt(0);
@@ -754,21 +1063,34 @@ public class ServerCommand implements CommandExecutor {
             player.sendMessage(Component.text(" Mesures disponibles dans moins de 30 s", NamedTextColor.DARK_GRAY));
         }
 
-        // Actions
+        // Actions, selon les droits du joueur
         Component actions = Component.text(" ");
         if (running) {
-            actions = actions.append(joinButton(name))
-                    .append(text(" "))
-                    .append(button("Redémarrer", NamedTextColor.YELLOW, "/mcs restart " + name, "Redémarrer " + name))
-                    .append(text(" "))
-                    .append(button("Arrêter", NamedTextColor.RED, "/mcs stop " + name, "Arrêter " + name));
+            if (t.can("JOIN")) {
+                actions = actions.append(joinButton(name)).append(text(" "));
+            }
+            if (t.can("POWER")) {
+                actions = actions
+                        .append(button("Redémarrer", NamedTextColor.YELLOW, "/mcs restart " + name, "Redémarrer " + name))
+                        .append(text(" "))
+                        .append(button("Arrêter", NamedTextColor.RED, "/mcs stop " + name, "Arrêter " + name))
+                        .append(text(" "));
+            }
+            if (t.can("CONSOLE")) {
+                actions = actions.append(suggestButton("Console", NamedTextColor.LIGHT_PURPLE, "/mcs console " + name + " ",
+                        "Écris une commande pour le serveur, ex. : op TonPseudo")).append(text(" "));
+            }
         } else if ("STOPPED".equals(status) || "ERROR".equals(status)) {
-            actions = actions.append(startButton(name))
-                    .append(text(" "))
-                    .append(button("Supprimer", NamedTextColor.DARK_RED, "/mcs delete " + name,
-                            "Supprimer " + name + " (une confirmation est demandée)"));
+            if (t.can("POWER")) {
+                actions = actions.append(startButton(name)).append(text(" "));
+            }
+            if (t.can("DELETE")) {
+                actions = actions.append(button("Supprimer", NamedTextColor.DARK_RED, "/mcs delete " + name,
+                        "Supprimer " + name + " (une confirmation est demandée)")).append(text(" "));
+            }
         }
-        actions = actions.append(text(" "))
+        actions = actions.append(button("Accès", NamedTextColor.GOLD, "/mcs members " + name, "Invités, public ou privé"))
+                .append(text(" "))
                 .append(button("Actualiser", NamedTextColor.AQUA, "/mcs info " + name, "Mettre à jour ces informations"));
         player.sendMessage(actions);
     }

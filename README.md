@@ -88,7 +88,8 @@ sudo mcs-admin TonPseudo
 |---|---|
 | `sudo mcs-deploy [étapes]` | Récupère GitHub, compile, installe |
 | `sudo mcs-status` | État des services, ports et machines volontaires |
-| `sudo mcs-add-node [--ssh] [nom]` | Code de jumelage pour une nouvelle machine |
+| `sudo mcs-add-node [--ssh] [--owner <pseudo>] [nom]` | Code de jumelage pour une nouvelle machine |
+| `sudo mcs-node-owner [<id> <pseudo>\|--none]` | Joueur propriétaire (hébergeur) d'une machine |
 | `sudo mcs-add-node --renew <id>` | Nouveau code pour une machine existante |
 | `sudo mcs-disk-quota [<nom> <Mo>]` | Quotas disque des serveurs |
 | `sudo mcs-remove-node <id>` | Révoque une machine (jeton refusé, tunnels supprimés) |
@@ -173,6 +174,35 @@ code (`sudo mcs-add-node --renew <id>`) pour passer en HTTPS.
 Tout fonctionne sans configuration. Pour changer un réglage commun à la plateforme
 (versions, mémoire, quotas...), copie `deploy/mcs.env.example` vers `/etc/mcs/mcs.env`
 sur le VPS, modifie-le, puis relance `sudo mcs-deploy`.
+
+## Accès aux serveurs
+
+Un serveur est **privé** à sa création. Le proxy vérifie auprès de l'API chaque
+connexion à un serveur joueur (`/mcs join`, `/goto`, `/server`...) : impossible à
+contourner, et refusé si l'API ne répond pas.
+
+| | rejoindre | start/stop | console, fichiers | inviter | retirer | public/privé | supprimer | amener un joueur |
+|---|---|---|---|---|---|---|---|---|
+| propriétaire (créateur) | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ | ✔ |
+| admin (`mcs.admin`) | ✔ | ✔ | ✔ | | ✔ | ✔ | ✔ | ✔ |
+| hébergeur (sa machine) | ✔ | ✔ | ✔ | | | | | ✔ |
+| technicien (invité) | ✔ | ✔ | ✔ | | | | | |
+| gérant (invité) | ✔ | ✔ | | | | | | |
+| membre (invité) | ✔ | | | | | | | |
+| tout le monde | ✔ si public | | | | | | | |
+
+- Invités : `/mcs invite <serveur> <joueur> [membre|gerant|technicien]` (relancer change
+  le rôle), `/mcs remove`, `/mcs members`, `/mcs leave` ; `/mcs public|private`.
+- Serveur d'un autre joueur : `pseudo/nom` (ex. `/mcs join bob/survie`) ; le nom seul
+  suffit s'il n'y a pas d'ambiguïté.
+- Console : `/mcs console <serveur> <commande>` (rcon-cli dans le conteneur, rien
+  d'exposé). Le propriétaire et l'hébergeur s'y mettent OP (`op <pseudo>`) ; les
+  **admins sont OP automatiquement** en arrivant sur un serveur.
+- `/mcs move <joueur> <serveur>` (hébergeur, admins) : envoie un joueur connecté sur le
+  serveur avec un laissez-passer d'une minute, à usage unique. Il ne peut pas revenir seul.
+- L'hébergeur d'une machine se définit sur le VPS : `sudo mcs-node-owner <id> <pseudo>`
+  (le joueur doit s'être connecté une fois).
+- Les fichiers (rôle technicien, hébergeur) arriveront avec le panneau web.
 
 ## Limites connues
 

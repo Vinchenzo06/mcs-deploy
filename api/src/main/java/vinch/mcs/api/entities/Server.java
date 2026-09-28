@@ -72,6 +72,11 @@ public class Server {
     @Column(name = "last_stopped_at")
     private LocalDateTime lastStoppedAt;
 
+    // Privé par défaut : voir AccessService
+    @Column(name = "is_public", nullable = false)
+    @Builder.Default
+    private Boolean isPublic = false;
+
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) createdAt = LocalDateTime.now();

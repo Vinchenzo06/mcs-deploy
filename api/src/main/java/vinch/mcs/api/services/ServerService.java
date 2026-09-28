@@ -29,6 +29,7 @@ public class ServerService {
     private final AgentWebSocketHandler agentWebSocketHandler;
     private final VelocityClient velocityClient;
     private final ServerMetricsService metricsService;
+    private final AccessService accessService;
 
     @Transactional
     public CreateServerResponse createServer(CreateServerRequest request) throws Exception {
@@ -365,9 +366,7 @@ public class ServerService {
         Server server = serverRepository.findById(serverId)
                 .orElseThrow(() -> new RuntimeException("Serveur non trouvé : " + serverId));
 
-        if (!server.getOwner().getId().equals(requestedByPlayerId)) {
-            throw new RuntimeException("Tu n'es pas le propriétaire de ce serveur");
-        }
+        accessService.require(accessService.player(requestedByPlayerId), server, AccessService.Right.POWER);
 
         if (server.getStatus() == ServerStatus.RUNNING) {
             throw new RuntimeException("Le serveur est déjà en marche");
@@ -414,9 +413,7 @@ public class ServerService {
         Server server = serverRepository.findById(serverId)
                 .orElseThrow(() -> new RuntimeException("Serveur non trouvé : " + serverId));
 
-        if (!server.getOwner().getId().equals(requestedByPlayerId)) {
-            throw new RuntimeException("Tu n'es pas le propriétaire de ce serveur");
-        }
+        accessService.require(accessService.player(requestedByPlayerId), server, AccessService.Right.POWER);
 
         if (server.getStatus() == ServerStatus.STOPPED) {
             throw new RuntimeException("Le serveur est déjà arrêté");
@@ -480,6 +477,127 @@ public class ServerService {
         restartServer(server.getId(), requestedByPlayerId);
     }
 
+    /** Suppression demandée par un joueur (propriétaire ou admin) */
+    public void deleteServerFor(Long serverId, Long requestedByPlayerId) throws Exception {
+        Server server = serverRepository.findById(serverId)
+                .orElseThrow(() -> new RuntimeException("Serveur introuvable"));
+        accessService.require(accessService.player(requestedByPlayerId), server, AccessService.Right.DELETE);
+        deleteServer(serverId, true);
+    }
+
+    // ------------------------------------------------------------ console ----
+
+    /** Commande dans la console du serveur (rcon-cli dans le conteneur) ; renvoie la réponse */
+    public String console(Long serverId, Long requestedByPlayerId, String command) throws Exception {
+        Server server = serverRepository.findById(serverId)
+                .orElseThrow(() -> new RuntimeException("Serveur introuvable"));
+        Player requester = accessService.player(requestedByPlayerId);
+        accessService.require(requester, server, AccessService.Right.CONSOLE);
+        if (command == null || command.isBlank()) {
+            throw new RuntimeException("Commande vide");
+        }
+        log.info("Console {} par {} : {}", server.getVelocityName(), requester.getMinecraftUsername(), command);
+        return runConsole(server, command);
+    }
+
+    private String runConsole(Server server, String command) throws Exception {
+        if (server.getStatus() != ServerStatus.RUNNING) {
+            throw new RuntimeException("Le serveur n'est pas en marche");
+        }
+        Node node = server.getNode();
+        return sendConsole(node == null ? null : node.getId(), server.getId(), command);
+    }
+
+    // Sans entité : utilisable hors de la requête (pas de chargement paresseux)
+    private String sendConsole(Long nodeId, Long serverId, String command) throws Exception {
+        if (nodeId == null || !agentWebSocketHandler.isNodeOnline(nodeId)) {
+            throw new RuntimeException("La machine qui héberge ce serveur est hors ligne");
+        }
+        Map<String, Object> data = new HashMap<>();
+        data.put("server_id", serverId);
+        data.put("command", command);
+        JsonNode result;
+        try {
+            result = agentWebSocketHandler.sendCommand(nodeId, "console", data)
+                    .get(20, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new RuntimeException("pas de réponse de la machine (délai dépassé)");
+        }
+        requireSuccess(result);
+        return result.path("result").path("output").asText("");
+    }
+
+    /**
+     * Un joueur vient d'arriver sur un serveur (prévenu par le proxy) : les admins
+     * y sont OP automatiquement. Ne bloque pas le proxy.
+     */
+    public void onPlayerConnected(String velocityName, UUID uuid) {
+        Optional<Server> server = serverRepository.findByVelocityName(velocityName);
+        Optional<Player> player = playerRepository.findByMinecraftUuid(uuid);
+        if (server.isEmpty() || player.isEmpty() || !AccessService.isAdmin(player.get())) {
+            return;
+        }
+        Server s = server.get();
+        if (s.getStatus() != ServerStatus.RUNNING || s.getNode() == null) {
+            return;
+        }
+        String name = player.get().getMinecraftUsername();
+        Long nodeId = s.getNode().getId();
+        Long serverId = s.getId();
+        CompletableFuture.runAsync(() -> {
+            try {
+                sendConsole(nodeId, serverId, "op " + name);
+                log.info("Admin {} OP sur {}", name, velocityName);
+            } catch (Exception e) {
+                log.warn("OP de l'admin {} sur {} impossible : {}", name, velocityName, e.getMessage());
+            }
+        });
+    }
+
+    // ------------------------------------------------------------ move ----
+
+    /**
+     * Amène un joueur connecté au réseau sur ce serveur, une seule fois : il reçoit
+     * un laissez-passer d'une minute, consommé à son arrivée. S'il repart, il ne
+     * peut pas revenir seul (sauf s'il a un accès par ailleurs).
+     */
+    public void movePlayer(Long serverId, Long requestedByPlayerId, String username) throws Exception {
+        Server server = serverRepository.findById(serverId)
+                .orElseThrow(() -> new RuntimeException("Serveur introuvable"));
+        Player requester = accessService.player(requestedByPlayerId);
+        accessService.require(requester, server, AccessService.Right.MOVE);
+        if (server.getStatus() != ServerStatus.RUNNING) {
+            throw new RuntimeException("Le serveur n'est pas en marche");
+        }
+        Player target = accessService.playerByName(username);
+        accessService.grantPass(server.getId(), target.getMinecraftUuid());
+        velocityClient.connectPlayer(target.getMinecraftUuid(), server.getVelocityName());
+        log.info("{} amène {} sur {}", requester.getMinecraftUsername(), target.getMinecraftUsername(),
+                server.getVelocityName());
+    }
+
+    /** Serveurs des autres où le joueur a un rôle, et serveurs hébergés sur ses machines */
+    @Transactional(readOnly = true)
+    public Map<String, Object> getOtherServers(Long playerId) {
+        Player p = accessService.player(playerId);
+        Map<Long, Server> servers = new LinkedHashMap<>();
+        for (Server s : accessService.sharedWith(p)) {
+            servers.put(s.getId(), s);
+        }
+        for (Server s : serverRepository.findHostedByPlayerId(playerId)) {
+            if (!AccessService.isOwner(p, s)) {
+                servers.put(s.getId(), s);
+            }
+        }
+        List<Map<String, Object>> shared = new ArrayList<>();
+        for (Server s : servers.values()) {
+            Map<String, Object> m = accessService.describeFor(p, s);
+            m.put("hosted", AccessService.isHost(p, s));
+            shared.add(m);
+        }
+        return Map.of("shared", shared);
+    }
+
     public List<Map<String, Object>> getServersByOwnerId(Long ownerId) {
         return serverRepository.findByOwnerId(ownerId).stream()
                 .map(s -> {
@@ -494,6 +612,7 @@ public class ServerService {
                     m.put("port", s.getTunnelPort());
                     m.put("allocatedRamMb", s.getAllocatedRamMb());
                     m.put("allocatedCpuCores", s.getAllocatedCpuCores());
+                    m.put("isPublic", Boolean.TRUE.equals(s.getIsPublic()));
                     return m;
                 })
                 .toList();

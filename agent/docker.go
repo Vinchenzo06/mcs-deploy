@@ -80,6 +80,8 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 		"-e", "VERSION=" + req.Version,
 		"-e", fmt.Sprintf("MEMORY=%dM", javaHeapMb(req.RamMb)),
 		"-e", "ENABLE_QUERY=false",
+		// RCON local au conteneur (port non publié) : /mcs console via rcon-cli
+		"-e", "ENABLE_RCON=true",
 		"--cpus", fmt.Sprintf("%d", req.CpuCores),
 	}
 	args = append(args, hardeningArgs(req.RamMb)...)

@@ -8,6 +8,7 @@ import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
 import com.velocitypowered.api.event.player.ServerPostConnectEvent;
+import com.velocitypowered.api.event.player.ServerPreConnectEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
@@ -298,17 +299,47 @@ public class Proxymanager {
         }
     }
 
+    /**
+     * Contrôle d'accès : avant toute connexion à un serveur joueur (/mcs join,
+     * /goto, /server, move...), l'API dit si ce joueur y a droit. En cas de doute
+     * (API muette), l'accès est refusé. Le lobby reste toujours ouvert.
+     * Les handlers Velocity sont asynchrones par défaut : l'attente (3 s au plus)
+     * ne bloque pas le réseau.
+     */
+    @Subscribe
+    public void onServerPreConnect(ServerPreConnectEvent event) {
+        Optional<RegisteredServer> target = event.getResult().getServer();
+        if (target.isEmpty()) {
+            return;
+        }
+        String name = target.get().getServerInfo().getName();
+        if (LOBBY_SERVER.equals(name)) {
+            return;
+        }
+        Player player = event.getPlayer();
+        String reason;
+        try {
+            JsonNode answer = apiClient.checkAccess(name, player.getUniqueId()).get(4, java.util.concurrent.TimeUnit.SECONDS);
+            if (answer.path("allowed").asBoolean(false)) {
+                return;
+            }
+            reason = answer.path("reason").asText("Accès refusé.");
+        } catch (Exception e) {
+            logger.warn("Contrôle d'accès de {} vers {} impossible : {}", player.getUsername(), name, e.getMessage());
+            reason = "Vérification d'accès impossible pour le moment, réessaie.";
+        }
+        event.setResult(ServerPreConnectEvent.ServerResult.denied());
+        player.sendMessage(Component.text("MCS » ✖ " + reason).color(NamedTextColor.RED));
+    }
+
     @Subscribe
     public void onServerSwitch(ServerPostConnectEvent event) {
         Player player = event.getPlayer();
-        Optional<RegisteredServer> currentServer = player.getCurrentServer().map(s -> s.getServer());
-
-        if (currentServer.isPresent()) {
-            String serverName = currentServer.get().getServerInfo().getName();
-            player.sendMessage(
-                    Component.text("Tu es maintenant sur : " + serverName)
-                            .color(NamedTextColor.GREEN)
-            );
-        }
+        player.getCurrentServer().ifPresent(current -> {
+            String serverName = current.getServerInfo().getName();
+            if (!LOBBY_SERVER.equals(serverName)) {
+                apiClient.notifyConnected(serverName, player.getUniqueId());
+            }
+        });
     }
 }

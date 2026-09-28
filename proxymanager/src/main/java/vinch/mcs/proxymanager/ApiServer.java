@@ -46,6 +46,7 @@ public class ApiServer {
 
         httpServer.createContext("/servers", new ServersHandler());
         httpServer.createContext("/health", new HealthHandler());
+        httpServer.createContext("/players", new PlayersHandler());
 
         httpServer.setExecutor(null); // par défaut, single threaded, suffisant
         httpServer.start();
@@ -168,6 +169,49 @@ public class ApiServer {
         logger.info("Serveur retiré de Velocity : {}", name);
 
         sendResponse(exchange, 200, "{\"success\":true}");
+    }
+
+    /**
+     * POST /players/connect {uuid, server} : envoie un joueur connecté vers un
+     * serveur (/mcs move). L'accès est quand même vérifié par le proxy (laissez-passer).
+     */
+    private class PlayersHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            try {
+                String auth = exchange.getRequestHeaders().getFirst("X-Plugin-Key");
+                if (auth == null || !auth.equals(config.getLocalApiKey())) {
+                    sendResponse(exchange, 401, "{\"error\":\"Unauthorized\"}");
+                    return;
+                }
+                if (!exchange.getRequestMethod().equals("POST") || !exchange.getRequestURI().getPath().equals("/players/connect")) {
+                    sendResponse(exchange, 404, "{\"error\":\"Not found\"}");
+                    return;
+                }
+                JsonNode json = objectMapper.readTree(readBody(exchange));
+                java.util.UUID uuid = java.util.UUID.fromString(json.path("uuid").asText());
+                String target = json.path("server").asText();
+
+                Optional<com.velocitypowered.api.proxy.Player> player = proxyServer.getPlayer(uuid);
+                if (player.isEmpty()) {
+                    sendResponse(exchange, 404, "{\"error\":\"Joueur non connecté\"}");
+                    return;
+                }
+                Optional<RegisteredServer> server = proxyServer.getServer(target);
+                if (server.isEmpty()) {
+                    sendResponse(exchange, 409, "{\"error\":\"Serveur non enregistré dans le proxy\"}");
+                    return;
+                }
+                player.get().createConnectionRequest(server.get()).fireAndForget();
+                logger.info("{} envoyé vers {} (move)", player.get().getUsername(), target);
+                sendResponse(exchange, 200, "{\"success\":true}");
+            } catch (IllegalArgumentException e) {
+                sendResponse(exchange, 400, "{\"error\":\"uuid invalide\"}");
+            } catch (Exception e) {
+                logger.error("Erreur API /players : ", e);
+                sendResponse(exchange, 500, "{\"error\":\"" + escapeJson(e.getMessage()) + "\"}");
+            }
+        }
     }
 
     /**

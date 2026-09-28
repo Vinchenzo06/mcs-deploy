@@ -19,4 +19,7 @@ public class UpdatePlayerLimitsRequest {
 
     @NotNull
     private Integer totalCpuCores;
+
+    // Permission LuckPerms mcs.admin (null : ne change pas le rôle)
+    private Boolean admin;
 }

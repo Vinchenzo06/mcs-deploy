@@ -36,6 +36,12 @@ public interface ServerRepository extends JpaRepository<Server, Long> {
 
     Optional<Server> findByName(String name);
 
+    // Le nom n'est unique que par propriétaire
+    List<Server> findAllByName(String name);
+
+    @Query("SELECT s FROM Server s WHERE s.node.ownerPlayer.id = :playerId")
+    List<Server> findHostedByPlayerId(Long playerId);
+
     Optional<Server> findByVelocityName(String velocityName);
 
     Optional<Server> findByOwnerIdAndName(Long ownerId, String name);
