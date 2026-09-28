@@ -1092,7 +1092,8 @@ User=$MC_USER
 WorkingDirectory=$VELOCITY_DIR
 EnvironmentFile=-$LP_ENV_FILE
 ExecStart=$JAVA_BIN -Xms256M -Xmx$VELOCITY_XMX -XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:+ParallelRefProcEnabled -jar velocity.jar
-Restart=on-failure
+# always : /end ou /restart en jeu arrêtent "proprement" ; systemd relance quand même
+Restart=always
 RestartSec=10
 SuccessExitStatus=143
 
@@ -1204,7 +1205,8 @@ User=$MC_USER
 WorkingDirectory=$LOBBY_DIR
 EnvironmentFile=-$LP_ENV_FILE
 ExecStart=$JAVA_BIN -Xms256M -Xmx$LOBBY_XMX -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -jar paper.jar nogui
-Restart=on-failure
+# always : /stop ou /restart en jeu arrêtent "proprement" ; systemd relance quand même
+Restart=always
 RestartSec=10
 SuccessExitStatus=143
 
@@ -1310,10 +1312,14 @@ bootstrap_luckperms() {
   cmds+=("lp creategroup host")
   lp_has host "weight." || cmds+=("lp group host setweight 50")
   lp_has host "prefix." || cmds+=("lp group host meta setprefix 50 \"&bʜᴏsᴛ \"")
-  # Couleur du pseudo par rang (chat, Tab, au-dessus de la tête) ; gris par défaut
-  local -A name_color=([default]=gray [vip]=green [premium]=gold [host]=aqua [admin]=red)
+  # Couleur du pseudo (chat, Tab, au-dessus de la tête) : gris pour tout le monde,
+  # seul le titre est en couleur. Les couleurs par rang du lot 22 passent en gris ;
+  # une couleur choisie à la main (autre que celles-là) est gardée.
+  local -A old_color=([vip]=green [premium]=gold [host]=aqua [admin]=red)
   for g in default vip premium host admin; do
-    lp_has "$g" "meta.name-color." || cmds+=("lp group $g meta set name-color ${name_color[$g]}")
+    if ! lp_has "$g" "meta.name-color." || { [[ -n "${old_color[$g]:-}" ]] && lp_has "$g" "meta.name-color.${old_color[$g]}"; }; then
+      cmds+=("lp group $g meta set name-color gray")
+    fi
   done
   cmds+=("lp group admin permission set mcs.admin true"
          "lp group admin permission set luckperms.* true")

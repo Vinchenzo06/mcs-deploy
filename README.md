@@ -214,8 +214,8 @@ contourner, et refusé si l'API ne répond pas.
   tête) grâce aux équipes vanilla `mcs_<ordre><titre>` : `ᴀᴅᴍɪɴ` passe avant `ᴏᴡɴᴇʀ` (créateur du
   serveur), qui passe avant le rang réseau (`ʜᴏsᴛ`, `ᴘʀᴇᴍɪᴜᴍ`, `ᴠɪᴘ`). Même titre dans le lobby. Le Tab est trié dans cet ordre. Les commandes de
   MCS ne s'affichent pas aux OP (`broadcast-rcon-to-ops=false`). Paper, Fabric, Forge, Vanilla.
-- Couleur du pseudo par rang : méta LuckPerms `name-color` (ex. `lp group vip meta set name-color green`),
-  gris par défaut. Limite : **Paper n'affiche pas les équipes dans le chat** (seulement Tab et
+- Couleur du pseudo : gris pour tout le monde (seul le titre est coloré) ; modifiable par groupe
+  avec la méta LuckPerms `name-color` (ex. `lp group vip meta set name-color green`). Limite : **Paper n'affiche pas les équipes dans le chat** (seulement Tab et
   au-dessus de la tête) ; Fabric, Forge et Vanilla les affichent aussi dans le chat. Le lobby,
   lui, affiche titre et couleur partout.
 - Le propriétaire garde la main sur son serveur (son propre LuckPerms, ses rôles...). S'il
