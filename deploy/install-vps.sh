@@ -515,6 +515,7 @@ SHEOF
 #   qui est visible, jamais celle du volontaire.
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
+trap 'echo "✘ mcs-add-backup : échec ligne $LINENO : $BASH_COMMAND" >&2' ERR
 # shellcheck disable=SC1091
 source /etc/mcs/runtime.env
 nodes_dir=/etc/mcs/nodes
@@ -800,7 +801,8 @@ fi
 : "${MCS_REPO:=Vinchenzo06/mcs-deploy}" "${MCS_BRANCH:=main}"
 dir=/etc/mcs/backup
 listen=10.99.0.1:8100
-ip -4 addr show wg-mcs 2>/dev/null | grep -q '10\.99\.0\.1/' \
+# (grep sans -q : il lit tout, pas de SIGPIPE qui ferait échouer le tuyau avec pipefail)
+ip -4 addr show wg-mcs 2>/dev/null | grep '10\.99\.0\.1/' >/dev/null \
   || { echo "Tunnel wg-mcs absent : lance d'abord 'sudo mcs-deploy egress'"; exit 1; }
 
 # Utilisateur SSH dédié : il ne peut que publier 10.99.0.1:8100 et lire l'export
@@ -837,10 +839,12 @@ if ! sshd -t 2>/tmp/mcs-sshd.err; then
   echo "Configuration SSH refusée, rien n'est changé :"; cat /tmp/mcs-sshd.err; exit 1
 fi
 systemctl reload ssh 2>/dev/null || systemctl reload sshd
-if sshd -T -C user=mcs-backup,host=x,addr=127.0.0.1 2>/dev/null | grep -qi '^allowusers'; then
+if sshd -T -C user=mcs-backup,host=x,addr=127.0.0.1 2>/dev/null | grep -i '^allowusers' >/dev/null; then
   echo "! AllowUsers est utilisé dans ta config SSH : ajoute-y mcs-backup, sinon le tunnel sera refusé"
 fi
-port=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')
+# awk lit tout (pas de "exit") : sinon sshd reçoit SIGPIPE et, avec pipefail,
+# le script s'arrêtait ici sans rien afficher
+port=$( { sshd -T 2>/dev/null || true; } | awk '$1 == "port" && !seen {print $2; seen = 1}')
 : "${port:=22}"
 
 ufw allow in on wg-mcs to 10.99.0.1 port 8100 proto tcp comment 'sauvegardes des machines' >/dev/null 2>&1 || true
@@ -916,7 +920,7 @@ command -v restic >/dev/null || { echo "restic absent : sudo mcs-deploy system";
 dumps=/var/backups/mcs
 install -d -m 700 "$dumps"
 for db in mcs_db luckperms; do
-  if runuser -u postgres -- psql -qtA -c "SELECT 1 FROM pg_database WHERE datname = '$db'" | grep -q 1; then
+  if runuser -u postgres -- psql -qtA -c "SELECT 1 FROM pg_database WHERE datname = '$db'" | grep 1 >/dev/null; then
     runuser -u postgres -- pg_dump -Fc "$db" > "$dumps/$db.dump.tmp" && mv "$dumps/$db.dump.tmp" "$dumps/$db.dump"
   fi
 done
