@@ -264,6 +264,17 @@ Mise en place, une fois :
   | manuelle | 2 max, 3 jours | propriétaire, gérants, techniciens, hôte, admins |
   | permanente | 1 max, gardée tant que le serveur existe, puis 24 h | propriétaire, admins |
 
+- **Sur la machine (lot 30)** : si le volontaire l'accepte (question de `node-setup.sh`,
+  à changer avec `node-setup.sh --capacity`), les **quotidiennes** sont gardées en double
+  (machine + central) et les **manuelles** sur la machine ; hebdomadaires, mensuelles et
+  permanentes restent au central. Dépôt restic par serveur dans `<données>/.backups/<id>`,
+  compté dans le **disque du serveur** : l'agent supprime les plus vieilles pour faire de
+  la place, sinon la manuelle part au central (le serveur n'est jamais arrêté pour ça).
+  Réglages : l'admin fixe le minimum que chaque hôte offre (`/mcs backup defaults local`),
+  l'hôte fixe le plafond de sa machine (`/mcs host backups [machine] [type max durée]`),
+  le propriétaire choisit en dessous (`/mcs backup set <serveur> local <type> <max> [durée]`).
+- **Minimum au central** : `/mcs backup minimum` (défaut : 2 hebdomadaires gardées 14 jours) ;
+  un propriétaire ne descend pas en dessous.
 - **Qui règle quoi** : les admins fixent les défauts du réseau et les limites de chaque
   rôle ; le propriétaire règle son serveur sans dépasser les limites de son rôle ; les
   admins règlent tout. Invités et hôte ne changent rien (ils peuvent lancer une manuelle).

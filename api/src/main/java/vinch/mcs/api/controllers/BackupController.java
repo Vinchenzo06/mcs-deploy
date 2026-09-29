@@ -20,7 +20,10 @@ public class BackupController {
     private final BackupService backupService;
 
     /** kind : quotidienne, hebdomadaire, mensuelle, manuelle, permanente */
-    public record RuleBody(Long playerId, String kind, Integer max, Integer duration, Boolean reset) {}
+    /** local : sur la machine (sinon au central) */
+    public record RuleBody(Long playerId, String kind, Integer max, Integer duration, Boolean reset, Boolean local) {}
+
+    public record HostRuleBody(Long playerId, String kind, Integer max, Integer duration, Boolean reset) {}
 
     public record ScopeRuleBody(Long playerId, String scope, String kind, Integer max, Integer duration, Boolean reset) {}
 
@@ -81,13 +84,16 @@ public class BackupController {
         try {
             boolean reset = Boolean.TRUE.equals(body.reset());
             return ResponseEntity.ok(backupService.setServerRule(id, body.playerId(), kind(body.kind(), !reset),
-                    body.max(), body.duration(), reset));
+                    body.max(), body.duration(), reset, Boolean.TRUE.equals(body.local())));
         } catch (Exception e) {
             return error(e);
         }
     }
 
-    /** scope : "network" (défauts du réseau) ou le nom d'un rôle LuckPerms (limites) */
+    /**
+     * scope : "network" (défauts du réseau), "min" (minimum au central), "local"
+     * (minimum que les hôtes offrent) ou le nom d'un rôle LuckPerms (limites)
+     */
     @GetMapping("/api/v1/backup-settings")
     public ResponseEntity<?> getScope(@RequestParam Long playerId, @RequestParam(defaultValue = "network") String scope) {
         try {
@@ -103,6 +109,27 @@ public class BackupController {
             boolean reset = Boolean.TRUE.equals(body.reset());
             return ResponseEntity.ok(backupService.setScopeRule(body.playerId(), body.scope(),
                     kind(body.kind(), false), body.max(), body.duration(), reset));
+        } catch (Exception e) {
+            return error(e);
+        }
+    }
+
+    /** Machines de l'hôte (toutes pour un admin) et leurs réglages de sauvegardes locales */
+    @GetMapping("/api/v1/hosts/backup-settings")
+    public ResponseEntity<?> hostSettings(@RequestParam Long playerId, @RequestParam(required = false) Long machine) {
+        try {
+            return ResponseEntity.ok(backupService.hostSettings(playerId, machine));
+        } catch (Exception e) {
+            return error(e);
+        }
+    }
+
+    @PostMapping("/api/v1/hosts/{machine}/backup-settings")
+    public ResponseEntity<?> hostRule(@PathVariable Long machine, @RequestBody HostRuleBody body) {
+        try {
+            boolean reset = Boolean.TRUE.equals(body.reset());
+            return ResponseEntity.ok(backupService.setHostRule(body.playerId(), machine, kind(body.kind(), !reset),
+                    body.max(), body.duration(), reset));
         } catch (Exception e) {
             return error(e);
         }

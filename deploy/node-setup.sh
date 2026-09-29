@@ -9,7 +9,7 @@
 #  Mettre à jour seulement l'agent (machine déjà jumelée) :
 #    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh -o node-setup.sh && sudo bash node-setup.sh --update-agent
 #
-#  Changer la part de la machine prêtée à MCS (RAM, CPU, disque) :
+#  Changer la part de la machine prêtée à MCS (RAM, CPU, disque, sauvegardes) :
 #    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh -o node-setup.sh && sudo bash node-setup.sh --capacity
 #
 #  Tout ce qui est propre à cette machine (port SSH, nom...) est détecté ici :
@@ -155,7 +155,7 @@ show_agent_log() {
 # rester au moins 10 % de sa RAM et de son disque, et au moins un cœur CPU.
 # L'agent applique les mêmes limites (même si config.yaml est modifié à la main).
 
-CAP_RAM=; CAP_CPU=; CAP_DISK=
+CAP_RAM=; CAP_CPU=; CAP_DISK=; CAP_LOCAL=
 MIN_RAM_MB=2048    # le plus petit serveur prend ~1,2 Go ; 2 Go laissent un peu de marge
 MIN_DISK_MB=5120   # quota disque par défaut d'un serveur
 
@@ -214,6 +214,8 @@ load_capacity() {
   CAP_RAM=$(awk '$1 == "ram_mb:" { print $2 }' "$AGENT_CFG" || true)
   CAP_CPU=$(awk '$1 == "cpu_cores:" { print $2 }' "$AGENT_CFG" || true)
   CAP_DISK=$(awk '$1 == "disk_mb:" { print $2 }' "$AGENT_CFG" || true)
+  # Section "backups:" -> "  local: true|false"
+  CAP_LOCAL=$(awk '/^backups:/ { b = 1; next } b && $1 == "local:" { print $2; exit } /^[^[:space:]]/ { b = 0 }' "$AGENT_CFG" || true)
 }
 
 choose_capacity() {  # dossier des données des serveurs
@@ -266,7 +268,29 @@ choose_capacity() {  # dossier des données des serveurs
   CAP_DISK=$(ask_amount "Disque prêté" "$CAP_DISK" "$MIN_DISK_MB" "$disk_max" mb)
 
   echo
+  echo "    Sauvegardes : chaque serveur est sauvegardé chaque jour sur le serveur de sauvegarde"
+  echo "          de MCS. Tu peux aussi en garder une copie ici : restauration plus rapide, et"
+  echo "          moins de charge pour le réseau. Elles restent dans l'espace disque de chaque"
+  echo "          serveur (déjà compté dans le disque prêté) : rien de plus à prévoir."
+  local def=o answer
+  [[ "${CAP_LOCAL:-}" == "false" ]] && def=n
+  CAP_LOCAL=true
+  [[ "$def" == "n" ]] && CAP_LOCAL=false
+  if has_tty; then
+    read -r -p "    Garder des sauvegardes des serveurs sur cette machine ? [$( [[ $def == o ]] && echo O/n || echo o/N )] " answer </dev/tty || answer=""
+    case "${answer,,}" in
+      o | oui | y | yes) CAP_LOCAL=true ;;
+      n | non | no) CAP_LOCAL=false ;;
+    esac
+  fi
+
+  echo
   ok "Prêté à MCS : $(fmt_mb "$CAP_RAM") de RAM, $CAP_CPU cœur(s), $(fmt_mb "$CAP_DISK") de disque"
+  if [[ "$CAP_LOCAL" == "true" ]]; then
+    ok "Sauvegardes gardées aussi sur cette machine"
+  else
+    ok "Sauvegardes seulement sur le serveur de sauvegarde MCS"
+  fi
 }
 
 # Remplace (ou ajoute) la section capacity de config.yaml
@@ -274,7 +298,8 @@ write_capacity() {
   local tmp
   tmp=$(mktemp)
   awk '/^# Part de la machine prêtée à MCS/ { next }
-       /^capacity:/ { skip = 1; next }
+       /^# Sauvegardes gardées sur cette machine/ { next }
+       /^(capacity|backups):/ { skip = 1; next }
        skip && /^[[:space:]]/ { next }
        { skip = 0; print }' "$AGENT_CFG" > "$tmp"
   cat >> "$tmp" <<EOF
@@ -284,6 +309,10 @@ capacity:
   ram_mb: $CAP_RAM
   cpu_cores: $CAP_CPU
   disk_mb: $CAP_DISK
+
+# Sauvegardes gardées sur cette machine (comptées dans le disque de chaque serveur)
+backups:
+  local: ${CAP_LOCAL:-false}
 EOF
   install -m 600 "$tmp" "$AGENT_CFG"
   rm -f "$tmp"
@@ -493,6 +522,10 @@ capacity:
   ram_mb: $CAP_RAM
   cpu_cores: $CAP_CPU
   disk_mb: $CAP_DISK
+
+# Sauvegardes gardées sur cette machine (comptées dans le disque de chaque serveur)
+backups:
+  local: ${CAP_LOCAL:-false}
 EOF
 chmod 600 "$AGENT_CFG"
 write_agent_unit
@@ -509,7 +542,7 @@ if [[ "$PREVIOUS_NODE_ID" != "$NODE_ID" && -n "$(docker ps -aq --filter label=mc
      && [[ "$rep" =~ ^[oOyY]$ ]]; then
     docker ps -aq --filter label=mcs.managed=true | xargs -r docker rm -f >/dev/null
     if [[ -n "$DATA_PATH" && -d "$DATA_PATH" ]]; then
-      rm -rf "${DATA_PATH:?}"/*
+      rm -rf "${DATA_PATH:?}"/* "${DATA_PATH:?}/.backups"
     fi
     ok "Nettoyé"
   else

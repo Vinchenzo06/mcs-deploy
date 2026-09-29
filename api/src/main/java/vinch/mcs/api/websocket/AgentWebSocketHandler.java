@@ -231,6 +231,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
             node.setHostDiskTotalMb((int) host.path("disk_total_mb").asLong(0));
             node.setHostDiskFreeMb((int) host.path("disk_free_mb").asLong(0));
         }
+        // Sauvegardes gardées sur la machine (agent >= 0.11.0, choix du volontaire)
+        boolean acceptsLocal = json.path("local_backups").asBoolean(false);
+        if (acceptsLocal != Boolean.TRUE.equals(node.getAcceptsLocalBackups())) {
+            log.info("Node {} : sauvegardes sur la machine {}", node.getId(), acceptsLocal ? "acceptées" : "refusées");
+        }
+        node.setAcceptsLocalBackups(acceptsLocal);
         nodeRepository.save(node);
 
         log.info("Node {} authentifié et connecté (volontaire {})", node.getId(), node.getVolunteer().getId());

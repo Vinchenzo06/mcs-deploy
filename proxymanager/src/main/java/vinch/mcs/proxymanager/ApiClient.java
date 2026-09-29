@@ -258,9 +258,10 @@ public class ApiClient {
 
     /** Réglage d'un type de sauvegarde pour un serveur ; reset : réglages du réseau */
     public CompletableFuture<JsonNode> setBackupRule(long serverId, long playerId, String kind, Integer max,
-                                                     Integer duration, boolean reset) {
+                                                     Integer duration, boolean reset, boolean local) {
         java.util.Map<String, Object> body = new java.util.HashMap<>();
         body.put("playerId", playerId);
+        body.put("local", local);
         body.put("kind", kind);
         body.put("max", max);
         body.put("duration", duration);
@@ -284,6 +285,23 @@ public class ApiClient {
         body.put("duration", duration);
         body.put("reset", reset);
         return call("POST", "/api/v1/backup-settings", body, Duration.ofSeconds(10));
+    }
+
+    /** Machines de l'hôte (toutes pour un admin) et plafond des sauvegardes gardées dessus */
+    public CompletableFuture<JsonNode> getHostBackups(long playerId, Long machine) {
+        return call("GET", "/api/v1/hosts/backup-settings?playerId=" + playerId
+                + (machine == null ? "" : "&machine=" + machine), null, Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> setHostBackupRule(long machine, long playerId, String kind, Integer max,
+                                                         Integer duration, boolean reset) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("playerId", playerId);
+        body.put("kind", kind);
+        body.put("max", max);
+        body.put("duration", duration);
+        body.put("reset", reset);
+        return call("POST", "/api/v1/hosts/" + machine + "/backup-settings", body, Duration.ofSeconds(10));
     }
 
     /** Machines et leur hôte (admins seulement, vérifié par l'API) */

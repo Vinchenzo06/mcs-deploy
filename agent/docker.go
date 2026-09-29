@@ -342,6 +342,10 @@ func DeleteServer(dataPath string, serverID int64, deleteData bool) error {
 			return fmt.Errorf("suppression des données : %w", err)
 		}
 		log.Printf("Données du serveur %d supprimées", serverID)
+		// Ses sauvegardes gardées sur la machine partent avec lui
+		if err := os.RemoveAll(localRepoPath(dataPath, serverID)); err != nil {
+			log.Printf("Sauvegardes locales du serveur %d : %v", serverID, err)
+		}
 	}
 
 	return nil

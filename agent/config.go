@@ -22,7 +22,12 @@ type Config struct {
 	} `yaml:"docker"`
 	// Part de la machine prêtée à MCS (0 = moitié de la ressource)
 	Capacity Capacity `yaml:"capacity"`
-	Network  struct {
+	// Sauvegardes des serveurs gardées sur cette machine (choix du volontaire,
+	// node-setup.sh --capacity) ; elles comptent dans le quota disque de chaque serveur
+	Backups struct {
+		Local bool `yaml:"local"`
+	} `yaml:"backups"`
+	Network struct {
 		// "vps" : les serveurs sortent sur Internet par le tunnel WireGuard du VPS
 		Egress string `yaml:"egress"`
 	} `yaml:"network"`

@@ -6,6 +6,13 @@ package main
 // sauvegarde : cette machine ne peut ni lire les autres dépôts ni effacer ses
 // anciennes sauvegardes. Les identifiants arrivent avec chaque commande (rien
 // n'est gardé sur le disque).
+//
+// Sauvegardes locales (si le volontaire l'accepte, backups.local dans config.yaml) :
+// un dépôt restic par serveur dans <data>/.backups/<id>, hors de la vue des
+// conteneurs. Elles comptent dans le quota disque du serveur : avant la copie,
+// l'agent supprime les instantanés expirés (liste de l'API), puis, s'il manque de
+// la place, les plus anciens que l'API l'autorise à supprimer ; sinon il saute la
+// sauvegarde ("no_space") et l'API l'envoie au central.
 
 import (
 	"bufio"
@@ -18,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +49,12 @@ type backupRequest struct {
 	RepoPassword string `json:"repo_password"`
 	Tag          string `json:"tag"`
 	Host         string `json:"host"`
+	// Sauvegarde sur cette machine
+	Local      bool     `json:"local"`
+	QuotaMB    int64    `json:"quota_mb"`
+	EstimateMB int64    `json:"estimate_mb"`
+	Forget     []string `json:"forget"`
+	Evict      []string `json:"evict"`
 }
 
 type backupResult struct {
@@ -49,6 +63,129 @@ type backupResult struct {
 	TotalBytes int64  `json:"total_bytes"`
 	Files      int64  `json:"files"`
 	Seconds    int64  `json:"seconds"`
+	// Sauvegardes locales
+	Skipped string    `json:"skipped,omitempty"`
+	Evicted []string  `json:"evicted"`
+	Present *[]string `json:"present,omitempty"`
+	RepoMB  int64     `json:"repo_mb"`
+	DataMB  int64     `json:"data_mb,omitempty"`
+	QuotaMB int64     `json:"quota_mb,omitempty"`
+}
+
+var snapshotIDPattern = regexp.MustCompile(`^[0-9a-f]{8,64}$`)
+
+// localRepoPath : dépôt des sauvegardes locales d'un serveur
+func localRepoPath(dataPath string, serverID int64) string {
+	return filepath.Join(dataPath, ".backups", fmt.Sprintf("%d", serverID))
+}
+
+func localEnv(repo, password string) ([]string, error) {
+	if password == "" {
+		return nil, fmt.Errorf("mot de passe du dépôt manquant")
+	}
+	_ = os.MkdirAll(resticCacheDir, 0o700)
+	return append(os.Environ(),
+		"RESTIC_REPOSITORY="+repo,
+		"RESTIC_PASSWORD="+password,
+		"RESTIC_CACHE_DIR="+resticCacheDir,
+	), nil
+}
+
+// snapshotIDs : identifiants complets des instantanés du dépôt
+func snapshotIDs(ctx context.Context, env []string) ([]string, error) {
+	out, err := runRestic(ctx, env, "snapshots", "--json")
+	if err != nil {
+		return nil, err
+	}
+	var list []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(out, &list); err != nil {
+		return nil, fmt.Errorf("liste des instantanés illisible : %v", err)
+	}
+	ids := make([]string, 0, len(list))
+	for _, s := range list {
+		ids = append(ids, s.ID)
+	}
+	return ids, nil
+}
+
+// resolveIDs : identifiants demandés (courts ou longs) présents dans le dépôt
+func resolveIDs(wanted, present []string) []string {
+	var out []string
+	for _, w := range wanted {
+		if !snapshotIDPattern.MatchString(w) {
+			continue
+		}
+		for _, p := range present {
+			if strings.HasPrefix(p, w) {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func forgetIDs(ctx context.Context, env []string, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	args := append([]string{"forget", "--prune"}, ids...)
+	_, err := runRestic(ctx, env, args...)
+	return err
+}
+
+// prepareLocal : supprime les instantanés expirés, puis fait de la place dans le
+// quota du serveur. Renvoie skip = true s'il n'y a pas assez de place.
+func prepareLocal(ctx context.Context, env []string, dir, repo string, req backupRequest, res *backupResult) (bool, error) {
+	present, err := snapshotIDs(ctx, env)
+	if err != nil {
+		return false, err
+	}
+	if expired := resolveIDs(req.Forget, present); len(expired) > 0 {
+		if err := forgetIDs(ctx, env, expired); err != nil {
+			return false, err
+		}
+		log.Printf("Sauvegarde %d : %d instantané(s) local(aux) expiré(s) supprimé(s)", req.ServerID, len(expired))
+		if present, err = snapshotIDs(ctx, env); err != nil {
+			return false, err
+		}
+	}
+	res.DataMB = dataUsedMB(dir)
+	res.RepoMB = dataUsedMB(repo)
+	res.QuotaMB = req.QuotaMB
+	if req.QuotaMB <= 0 {
+		return false, nil
+	}
+	estimate := func() int64 {
+		if len(present) == 0 || req.EstimateMB <= 0 {
+			return res.DataMB // premier instantané : au plus la taille des données
+		}
+		return req.EstimateMB
+	}
+	evict := resolveIDs(req.Evict, present)
+	for res.DataMB+res.RepoMB+estimate() > req.QuotaMB && len(evict) > 0 {
+		id := evict[0]
+		evict = evict[1:]
+		if err := forgetIDs(ctx, env, []string{id}); err != nil {
+			return false, err
+		}
+		res.Evicted = append(res.Evicted, id)
+		log.Printf("Sauvegarde %d : instantané local %s supprimé pour faire de la place", req.ServerID, id[:8])
+		if present, err = snapshotIDs(ctx, env); err != nil {
+			return false, err
+		}
+		res.RepoMB = dataUsedMB(repo)
+	}
+	if res.DataMB+res.RepoMB+estimate() > req.QuotaMB {
+		res.Skipped = "no_space"
+		res.Present = &present
+		log.Printf("Sauvegarde %d : pas assez de place dans le quota (%d Mo de données, %d Mo de sauvegardes, quota %d Mo)",
+			req.ServerID, res.DataMB, res.RepoMB, req.QuotaMB)
+		return true, nil
+	}
+	return false, nil
 }
 
 // Dossiers régénérés par l'image itzg : inutile de les sauvegarder
@@ -158,19 +295,41 @@ func BackupServer(dataPath string, req backupRequest) (backupResult, error) {
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return backupResult{}, fmt.Errorf("dossier du serveur introuvable : %s", dir)
 	}
-	env, err := resticEnv(req)
-	if err != nil {
-		return backupResult{}, err
-	}
-
-	if err := ensureBackupRoute(req.Repository); err != nil {
-		return backupResult{}, err
-	}
-
+	var env []string
+	var err error
+	var res backupResult
+	res.Evicted = []string{}
+	repo := ""
 	ctx, cancel := context.WithTimeout(context.Background(), backupTimeout)
 	defer cancel()
-	if err := ensureRepo(ctx, env); err != nil {
-		return backupResult{}, err
+	if req.Local {
+		repo = localRepoPath(dataPath, req.ServerID)
+		if err := os.MkdirAll(filepath.Dir(repo), 0o700); err != nil {
+			return backupResult{}, err
+		}
+		if env, err = localEnv(repo, req.RepoPassword); err != nil {
+			return backupResult{}, err
+		}
+		if err := ensureRepo(ctx, env); err != nil {
+			return backupResult{}, err
+		}
+		skip, err := prepareLocal(ctx, env, dir, repo, req, &res)
+		if err != nil {
+			return backupResult{}, err
+		}
+		if skip {
+			return res, nil
+		}
+	} else {
+		if env, err = resticEnv(req); err != nil {
+			return backupResult{}, err
+		}
+		if err := ensureBackupRoute(req.Repository); err != nil {
+			return backupResult{}, err
+		}
+		if err := ensureRepo(ctx, env); err != nil {
+			return backupResult{}, err
+		}
 	}
 
 	running := containerRunning(req.ServerID)
@@ -200,12 +359,20 @@ func BackupServer(dataPath string, req backupRequest) (backupResult, error) {
 	if err != nil {
 		return backupResult{}, err
 	}
-	res, err := parseBackupSummary(out)
+	sum, err := parseBackupSummary(out)
 	if err != nil {
 		return backupResult{}, err
 	}
+	res.SnapshotID, res.DataAdded, res.TotalBytes, res.Files, res.Seconds =
+		sum.SnapshotID, sum.DataAdded, sum.TotalBytes, sum.Files, sum.Seconds
 	if res.Seconds == 0 {
 		res.Seconds = int64(time.Since(start).Seconds())
+	}
+	if req.Local {
+		if present, err := snapshotIDs(ctx, env); err == nil {
+			res.Present = &present
+		}
+		res.RepoMB = dataUsedMB(repo)
 	}
 	log.Printf("Sauvegarde du serveur %d : instantané %s, %d octets nouveaux", req.ServerID, res.SnapshotID, res.DataAdded)
 	return res, nil
@@ -255,4 +422,20 @@ func handleBackupServer(conn *websocket.Conn, config *Config, commandId string, 
 		return
 	}
 	sendCommandResult(conn, commandId, res)
+}
+
+// localBackupsStartup : le volontaire ne garde plus de sauvegardes -> on rend la place
+func localBackupsStartup(config *Config) {
+	dir := filepath.Join(config.Docker.DataPath, ".backups")
+	if config.Backups.Local {
+		log.Printf("Sauvegardes des serveurs gardées sur cette machine : oui (%s)", dir)
+		return
+	}
+	if _, err := os.Stat(dir); err == nil {
+		if err := os.RemoveAll(dir); err != nil {
+			log.Printf("Suppression des anciennes sauvegardes locales : %v", err)
+		} else {
+			log.Printf("Sauvegardes locales désactivées : %s supprimé", dir)
+		}
+	}
 }

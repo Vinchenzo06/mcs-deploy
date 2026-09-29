@@ -11,7 +11,7 @@ import (
 )
 
 // Version de l'agent (fait foi, indépendamment du fichier de config)
-const AgentVersion = "0.10.0"
+const AgentVersion = "0.11.0"
 
 // Vérifie régulièrement que l'isolation réseau est toujours en place
 // (un redémarrage de Docker ou un rechargement du pare-feu peut l'effacer).
@@ -53,6 +53,7 @@ func main() {
 	log.Printf("MCS Agent v%s démarrage...", AgentVersion)
 	log.Printf("Connexion à l'API : %s", config.API.URL)
 	log.Printf("Dossier de données : %s", config.Docker.DataPath)
+	localBackupsStartup(config)
 
 	egressMode = config.Network.Egress
 	if egressMode == "vps" {

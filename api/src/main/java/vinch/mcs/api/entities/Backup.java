@@ -96,6 +96,11 @@ public class Backup {
     @Builder.Default
     private Boolean isPermanent = false;
 
+    // CENTRAL (serveur de sauvegarde) ou LOCAL (sur la machine qui héberge le serveur)
+    @Column(name = "location", nullable = false, length = 10)
+    @Builder.Default
+    private String location = "CENTRAL";
+
     // Quand elle est devenue permanente : au-delà du max, c'est la plus
     // anciennement marquée qui cesse d'être permanente
     @Column(name = "permanent_at")

@@ -94,6 +94,11 @@ public class Node {
     @Column(name = "backup_repo_password", length = 64)
     private String backupRepoPassword;
 
+    // Le volontaire accepte de garder des sauvegardes des serveurs (node-setup, lot 30)
+    @Column(name = "accepts_local_backups", nullable = false)
+    @Builder.Default
+    private Boolean acceptsLocalBackups = false;
+
     // Joueur propriétaire de la machine (mcs-node-owner), null si inconnu
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "owner_player_id")
