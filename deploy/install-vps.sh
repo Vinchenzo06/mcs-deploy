@@ -814,7 +814,7 @@ mkdir -p "$dir" && chmod 700 "$dir"
 rm -f "$dir/id_ed25519" "$dir/id_ed25519.pub"
 ssh-keygen -q -t ed25519 -N '' -C mcs-backup -f "$dir/id_ed25519"
 install -d -o mcs-backup -g mcs-backup -m 700 /home/mcs-backup/.ssh
-printf 'restrict,port-forwarding,command="cat /home/mcs-backup/export.json" %s\n' "$(cat "$dir/id_ed25519.pub")" \
+printf 'restrict,port-forwarding,command="/usr/local/bin/mcs-backup-gateway" %s\n' "$(cat "$dir/id_ed25519.pub")" \
   > /home/mcs-backup/.ssh/authorized_keys
 chown mcs-backup:mcs-backup /home/mcs-backup/.ssh/authorized_keys
 chmod 600 /home/mcs-backup/.ssh/authorized_keys
@@ -872,8 +872,33 @@ echo "Ce code contient la clé du tunnel : ne le donne à personne. En cas de fu
 SHEOF
   chmod 755 /usr/local/bin/mcs-add-backup
 
-  # mcs-backup-export : identifiants des dépôts et politique de rétention, lus
-  # par le serveur de sauvegarde (clé SSH, commande forcée). Toutes les 2 min.
+  # mcs-backup-gateway : seule commande permise à la clé du serveur de sauvegarde
+  #   (vide ou "export") -> lit l'export ; "ack" -> dépose la liste des instantanés
+  #   encore présents (traitée par mcs-backup-export, en root)
+  cat > /usr/local/bin/mcs-backup-gateway <<'SHEOF'
+#!/bin/sh
+set -eu
+case "${SSH_ORIGINAL_COMMAND:-export}" in
+  export) exec cat /home/mcs-backup/export.json ;;
+  ack)
+    umask 077
+    head -c 8000000 > /home/mcs-backup/ack.json.tmp
+    mv -f /home/mcs-backup/ack.json.tmp /home/mcs-backup/ack.json
+    echo ok ;;
+  *) echo "commande refusée" >&2; exit 1 ;;
+esac
+SHEOF
+  chmod 755 /usr/local/bin/mcs-backup-gateway
+  # Clé déjà installée (lot 26) : passe de "cat export.json" à la passerelle
+  if [[ -f /home/mcs-backup/.ssh/authorized_keys ]]; then
+    sed -i 's|command="cat /home/mcs-backup/export.json"|command="/usr/local/bin/mcs-backup-gateway"|' \
+      /home/mcs-backup/.ssh/authorized_keys
+  fi
+
+  # mcs-backup-export : identifiants des dépôts et instantanés à supprimer (ceux que
+  # l'API a marqués EXPIRED), lus par le serveur de sauvegarde. Traite aussi son
+  # accusé : une sauvegarde expirée dont l'instantané n'existe plus -> DELETED.
+  # Toutes les 2 min.
   cat > /usr/local/bin/mcs-backup-export <<'SHEOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -882,26 +907,48 @@ set -euo pipefail
 source /etc/mcs/secrets.env
 id mcs-backup &>/dev/null || exit 0
 psql=(runuser -u postgres -- psql -qtA -d mcs_db -v ON_ERROR_STOP=1)
-# Rétention par serveur : réglage du serveur > méta du rôle du propriétaire > défaut (3 dernières, 4 semaines)
+
+# 1. Accusé du serveur de sauvegarde
+ack=/home/mcs-backup/ack.json
+if [[ -s "$ack" ]]; then
+  if jq -e '(.generated | type == "string") and (.repos | type == "object")' "$ack" >/dev/null 2>&1; then
+    gen=$(jq -r .generated "$ack")
+    while IFS=$'\t' read -r repo ids; do
+      [[ "$repo" =~ ^[a-z0-9]+$ ]] || continue
+      "${psql[@]}" -v repo="$repo" -v ids="$ids" -v gen="$gen" >/dev/null <<'SQL'
+UPDATE backups b SET status = 'DELETED'
+WHERE b.status = 'EXPIRED' AND b.storage_path = :'repo'
+  AND b.snapshot_id IS NOT NULL
+  AND b.completed_at < (:'gen'::timestamptz)::timestamp
+  AND NOT EXISTS (SELECT 1 FROM json_array_elements_text(:'ids'::json) x
+                  WHERE x LIKE b.snapshot_id || '%');
+SQL
+    done < <(jq -r '.repos | to_entries[]
+                    | [.key, ([.value[] | strings | select(test("^[0-9a-f]{8,64}$"))] | tojson)] | @tsv' "$ack")
+  fi
+  mv -f "$ack" /home/mcs-backup/ack.done.json
+fi
+# Expirées sans instantané (échec d'enregistrement) : rien à supprimer
+"${psql[@]}" -c "UPDATE backups SET status = 'DELETED' WHERE status = 'EXPIRED' AND snapshot_id IS NULL" >/dev/null
+
+# 2. Export
 nodes=$("${psql[@]}" -c "
   SELECT COALESCE(json_agg(json_build_object(
       'user', 'node' || n.id,
       'http_password', n.backup_http_password,
       'repo_password', n.backup_repo_password,
-      'policies', COALESCE((
-          SELECT json_agg(json_build_object(
-              'tag', 'server-' || s.id,
-              'keep_last', COALESCE(s.backup_keep_last, p.backup_keep_last, 3),
-              'keep_weekly', COALESCE(s.backup_keep_weekly, p.backup_keep_weekly, 4)))
-          FROM servers s JOIN players p ON p.id = s.owner_id
-          WHERE s.node_id = n.id), '[]'::json)) ORDER BY n.id), '[]'::json)
+      'forget', COALESCE((SELECT json_agg(b.snapshot_id) FROM backups b
+          WHERE b.storage_path = 'node' || n.id AND b.status = 'EXPIRED' AND b.snapshot_id IS NOT NULL), '[]'::json),
+      'known', COALESCE((SELECT json_agg(b.snapshot_id) FROM backups b
+          WHERE b.storage_path = 'node' || n.id AND b.status IN ('SUCCESS', 'RUNNING') AND b.snapshot_id IS NOT NULL), '[]'::json)
+      ) ORDER BY n.id), '[]'::json)
   FROM nodes n
   WHERE n.backup_http_password IS NOT NULL AND n.backup_repo_password IS NOT NULL")
 tmp=$(mktemp)
 jq -n --argjson nodes "$nodes" --arg vh "$BACKUP_VPS_HTTP_PASSWORD" --arg vr "$BACKUP_VPS_REPO_PASSWORD" \
-  '{version: 1, generated: (now | todate),
+  '{version: 2, generated: (now | todate),
     repos: ($nodes + [{user: "vps", http_password: $vh, repo_password: $vr,
-      policies: [{tag: "vps", keep_last: 3, keep_daily: 7, keep_weekly: 4}]}])}' > "$tmp"
+      policy: {keep_last: 3, keep_daily: 7, keep_weekly: 4}}])}' > "$tmp"
 install -o root -g mcs-backup -m 640 "$tmp" /home/mcs-backup/export.json
 rm -f "$tmp"
 SHEOF
@@ -958,9 +1005,13 @@ fi
 echo
 echo "=== Dernières sauvegardes des serveurs ==="
 runuser -u postgres -- psql -qtA -d mcs_db -c "
-  SELECT '  ' || to_char(b.created_at, 'MM-DD HH24:MI') || '  ' || rpad(s.velocity_name, 28) || ' ' || rpad(b.status, 8)
+  SELECT '  ' || to_char(b.created_at, 'MM-DD HH24:MI') || '  ' || rpad(COALESCE(s.velocity_name, b.server_ref, '?'), 28) || ' ' || rpad(b.status, 8)
       || COALESCE(' +' || b.size_mb || ' Mo / ' || b.total_mb || ' Mo', '') || COALESCE('  ' || left(b.message, 60), '')
-  FROM backups b JOIN servers s ON s.id = b.server_id ORDER BY b.created_at DESC LIMIT 15" 2>/dev/null
+  FROM backups b LEFT JOIN servers s ON s.id = b.server_id ORDER BY b.created_at DESC LIMIT 15" 2>/dev/null
+echo
+echo "=== Par état ==="
+runuser -u postgres -- psql -qtA -d mcs_db -c "
+  SELECT '  ' || rpad(status, 9) || count(*) FROM backups GROUP BY status ORDER BY status" 2>/dev/null
 echo
 echo "=== Sauvegarde du VPS ==="
 journalctl -u mcs-backup-vps --no-pager -n 3 -o cat 2>/dev/null | sed 's/^/  /'
@@ -1552,10 +1603,11 @@ bootstrap_luckperms() {
       cmds+=("lp group $g meta set name-color gray")
     fi
   done
-  # Sauvegardes par rôle : fréquence (h), dernières gardées, semaines gardées
-  lp_has default "meta.backup-interval." || cmds+=("lp group default meta set backup-interval 24")
-  lp_has default "meta.backup-keep-last." || cmds+=("lp group default meta set backup-keep-last 3")
-  lp_has default "meta.backup-keep-weekly." || cmds+=("lp group default meta set backup-keep-weekly 4")
+  # Sauvegardes : réglées dans l'API depuis le lot 29 (/mcs backup defaults|limits) ;
+  # on retire les anciennes méta du lot 26
+  for k in backup-interval backup-keep-last backup-keep-weekly; do
+    lp_has default "meta.$k." && cmds+=("lp group default meta unset $k")
+  done
   cmds+=("lp group admin permission set mcs.admin true"
          "lp group admin permission set luckperms.* true")
 

@@ -251,12 +251,35 @@ Mise en place, une fois :
   autres dépôts ni effacer ses sauvegardes. Le tri se fait sur le serveur de sauvegarde.
 - Pendant la copie, l'écriture du monde est suspendue quelques secondes (`save-off`), le
   serveur ne s'arrête pas. Un serveur arrêté est sauvegardé une fois après son arrêt.
-- **Politique** : réglage du serveur (admins) > rôle du propriétaire (méta LuckPerms
-  `backup-interval` en heures, `backup-keep-last`, `backup-keep-weekly`) > défaut : chaque
-  jour, les 3 dernières + 1 par semaine pendant 4 semaines. Serveur supprimé : ses
-  sauvegardes restent 30 jours.
-- En jeu : `/mcs backup <serveur>` (maintenant), `/mcs backups <serveur>` (historique),
-  admins : `/mcs backup policy <serveur> <heures|auto> [dernières] [semaines]`.
+- **Types** : chacun a un nombre max (au-delà, la plus ancienne est supprimée) et une
+  durée de vie. Une sauvegarde peut compter pour plusieurs types (la quotidienne du lundi
+  est aussi l'hebdomadaire) ; elle part quand plus aucun ne la retient. La plus récente
+  d'un serveur n'est jamais supprimée.
+
+  | Type | Défaut du réseau | Qui la lance |
+  |---|---|---|
+  | quotidienne | 1 par jour, 3 max, 3 jours | automatique |
+  | hebdomadaire | 1 par semaine, 2 max, 14 jours | automatique |
+  | mensuelle | coupée | automatique |
+  | manuelle | 2 max, 3 jours | propriétaire, gérants, techniciens, hôte, admins |
+  | permanente | 1 max, gardée tant que le serveur existe, puis 24 h | propriétaire, admins |
+
+- **Qui règle quoi** : les admins fixent les défauts du réseau et les limites de chaque
+  rôle ; le propriétaire règle son serveur sans dépasser les limites de son rôle ; les
+  admins règlent tout. Invités et hôte ne changent rien (ils peuvent lancer une manuelle).
+- **Suppression** : c'est l'API qui décide ce qui expire. Le serveur de sauvegarde
+  supprime chaque nuit les instantanés expirés, puis confirme au VPS ce qui reste
+  (EXPIRED → DELETED). Un instantané inconnu de l'API part après 14 jours.
+- En jeu :
+  - `/mcs backup <serveur>` : sauvegarde manuelle ;
+  - `/mcs backups <serveur>` : historique (n°, types, expiration ; ☆/★ pour garder) ;
+  - `/mcs backup keep <serveur> [n°]` / `unkeep <serveur> <n°>` : permanente ;
+  - `/mcs backup settings <serveur>`, `/mcs backup set <serveur> <type> <max> [durée]`
+    (ex. `quotidienne 5 7j`, `permanente 1 48h`, `0` = coupée) ou `set <serveur> reset` ;
+  - admins : `/mcs backup defaults [type max durée]`,
+    `/mcs backup limits <rôle> [type max durée | reset]`.
+- Mise à jour du serveur de sauvegarde (sans code) :
+  `curl ... backup-setup.sh -o backup-setup.sh && sudo bash backup-setup.sh --update`.
 - Le VPS (bases, `/etc/mcs`, lobby, proxy) est sauvegardé chaque nuit (`sudo mcs-backup-vps`).
 - État : `sudo mcs-backup-status` (sur le VPS et sur le serveur de sauvegarde).
 - **À garder précieusement** : `/etc/mcs-backup` sur le serveur de sauvegarde (mots de

@@ -237,24 +237,53 @@ public class ApiClient {
     // ------------------------------------------------------------ sauvegardes ----
 
     /** Sauvegarde immédiate (l'API attend la fin, jusqu'à 20 min) */
-    public CompletableFuture<JsonNode> backupNow(long serverId, long playerId) {
-        return call("POST", "/api/v1/servers/" + serverId + "/backup?playerId=" + playerId, null, Duration.ofMinutes(21));
+    /** Sauvegarde maintenant : manuelle, ou permanente (propriétaire et admins) */
+    public CompletableFuture<JsonNode> backupNow(long serverId, long playerId, boolean permanent) {
+        return call("POST", "/api/v1/servers/" + serverId + "/backup?playerId=" + playerId + "&permanent=" + permanent,
+                null, Duration.ofMinutes(21));
     }
 
     public CompletableFuture<JsonNode> listBackups(long serverId, long playerId) {
         return call("GET", "/api/v1/servers/" + serverId + "/backups?playerId=" + playerId, null, Duration.ofSeconds(10));
     }
 
-    /** Politique propre à un serveur (admins) ; reset : revient à celle du rôle */
-    public CompletableFuture<JsonNode> setBackupPolicy(long serverId, long playerId, Integer intervalHours,
-                                                       Integer keepLast, Integer keepWeekly, boolean reset) {
+    /** Rendre permanente (ou non) une sauvegarde existante */
+    public CompletableFuture<JsonNode> setBackupPermanent(long serverId, long backupId, long playerId, boolean permanent) {
         java.util.Map<String, Object> body = new java.util.HashMap<>();
         body.put("playerId", playerId);
-        body.put("intervalHours", intervalHours);
-        body.put("keepLast", keepLast);
-        body.put("keepWeekly", keepWeekly);
+        body.put("permanent", permanent);
+        return call("POST", "/api/v1/servers/" + serverId + "/backups/" + backupId + "/permanent", body,
+                Duration.ofSeconds(10));
+    }
+
+    /** Réglage d'un type de sauvegarde pour un serveur ; reset : réglages du réseau */
+    public CompletableFuture<JsonNode> setBackupRule(long serverId, long playerId, String kind, Integer max,
+                                                     Integer duration, boolean reset) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("playerId", playerId);
+        body.put("kind", kind);
+        body.put("max", max);
+        body.put("duration", duration);
         body.put("reset", reset);
-        return call("POST", "/api/v1/servers/" + serverId + "/backup-policy", body, Duration.ofSeconds(10));
+        return call("POST", "/api/v1/servers/" + serverId + "/backup-settings", body, Duration.ofSeconds(10));
+    }
+
+    /** Réglages du réseau ("network") ou limites d'un rôle (admins) */
+    public CompletableFuture<JsonNode> getBackupScope(long playerId, String scope) {
+        return call("GET", "/api/v1/backup-settings?playerId=" + playerId + "&scope="
+                + java.net.URLEncoder.encode(scope, java.nio.charset.StandardCharsets.UTF_8), null, Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> setBackupScopeRule(long playerId, String scope, String kind, Integer max,
+                                                          Integer duration, boolean reset) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("playerId", playerId);
+        body.put("scope", scope);
+        body.put("kind", kind);
+        body.put("max", max);
+        body.put("duration", duration);
+        body.put("reset", reset);
+        return call("POST", "/api/v1/backup-settings", body, Duration.ofSeconds(10));
     }
 
     /** Machines et leur hôte (admins seulement, vérifié par l'API) */

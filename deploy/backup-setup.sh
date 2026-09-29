@@ -5,6 +5,9 @@
 #  Le code vient de "sudo mcs-add-backup" sur le VPS, qui affiche la commande :
 #    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/backup-setup.sh -o backup-setup.sh && sudo bash backup-setup.sh <CODE>
 #
+#  Mise à jour des outils (sans code, garde la clé et le dossier) :
+#    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/backup-setup.sh -o backup-setup.sh && sudo bash backup-setup.sh --update
+#
 #  État : sudo mcs-backup-status   ·   Tri des vieilles sauvegardes : sudo mcs-backup-prune
 #
 #  Fonctionnement :
@@ -14,7 +17,9 @@
 #     sur 10.99.0.1:8100 : rien à ouvrir sur ta box, et ton IP n'est jamais donnée
 #     aux volontaires (ils ne voient que le VPS) ;
 #   - toutes les 2 min, il récupère sur le VPS les identifiants des dépôts et la
-#     politique de rétention ; chaque nuit, il trie (restic forget + prune).
+#     liste des instantanés expirés (c'est l'API qui décide, selon les types de
+#     sauvegardes) ; chaque nuit, il les supprime (restic forget + prune) puis
+#     confirme au VPS ce qui reste.
 #  Les données sont chiffrées par restic : les mots de passe des dépôts sont
 #  gardés ici (/etc/mcs-backup) et sur le VPS.
 # =============================================================================
@@ -34,6 +39,11 @@ die()  { echo -e "${C_ERR}    ✘ $*${C_OFF}" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "Lance avec sudo"
 CODE="${1:-}"
+UPDATE=false
+if [[ "$CODE" == "--update" ]]; then
+  UPDATE=true
+  [[ -f "$ETC/config.env" ]] || die "Pas encore installé ici : lance d'abord avec le code de 'sudo mcs-add-backup'"
+fi
 [[ -n "$CODE" ]] || die "Code manquant (obtiens-le avec 'sudo mcs-add-backup' sur le VPS)"
 
 # Questions posées au clavier (pas via "curl | sudo bash", voir en-tête)
@@ -127,7 +137,7 @@ EOF
 install_tools() {
   step "Outils (synchronisation, tri, état)"
 
-  # Identifiants des dépôts et rétention, lus sur le VPS (commande forcée de la clé)
+  # Identifiants des dépôts et instantanés expirés, lus sur le VPS (commande forcée de la clé)
   cat > /usr/local/bin/mcs-backup-sync <<'SHEOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -139,7 +149,7 @@ trap 'rm -f "$tmp" "$tmp.h"' EXIT
 ssh -T -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=yes \
     -o UserKnownHostsFile="$ETC/known_hosts" -i "$ETC/id_ed25519" -p "$SSH_PORT" \
     "$SSH_USER@$VPS" > "$tmp"
-jq -e '.version == 1 and (.repos | type == "array")' "$tmp" >/dev/null || { echo "Export du VPS invalide" >&2; exit 1; }
+jq -e '(.version == 1 or .version == 2) and (.repos | type == "array")' "$tmp" >/dev/null || { echo "Export du VPS invalide" >&2; exit 1; }
 install -m 600 -o root -g root "$tmp" "$ETC/export.json"
 # htpasswd (bcrypt) régénéré seulement si les identifiants ont changé
 sum=$(jq -r '.repos[] | .user + ":" + .http_password' "$ETC/export.json" | sha256sum | cut -d' ' -f1)
@@ -157,8 +167,10 @@ fi
 SHEOF
   chmod 700 /usr/local/bin/mcs-backup-sync
 
-  # Rétention : garde les N dernières + 1 par semaine pendant W semaines (par serveur).
-  # Serveur supprimé : ses sauvegardes sont gardées 30 jours après la dernière.
+  # Tri : supprime les instantanés que l'API a marqués expirés (liste "forget"),
+  # puis envoie au VPS la liste de ceux qui restent (accusé). Filet de sécurité :
+  # un instantané inconnu de l'API (sauvegarde non enregistrée) part après 14 jours.
+  # Dépôt "vps" : règles restic classiques.
   cat > /usr/local/bin/mcs-backup-prune <<'SHEOF'
 #!/usr/bin/env bash
 set -uo pipefail
@@ -166,8 +178,17 @@ ETC=/etc/mcs-backup
 # shellcheck disable=SC1091
 source "$ETC/config.env"
 [[ -f "$ETC/export.json" ]] || { echo "Pas encore d'export du VPS (mcs-backup-sync)"; exit 0; }
+if ! jq -e '.version == 2' "$ETC/export.json" >/dev/null; then
+  echo "Export du VPS trop ancien : mets le VPS à jour (sudo mcs-deploy), rien n'est supprimé"; exit 0
+fi
 export RESTIC_CACHE_DIR=/var/cache/mcs-backup
 now=$(date +%s)
+started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+ack=$(mktemp)
+trap 'rm -f "$ack" "$ack.n"' EXIT
+echo '{}' > "$ack"
+# Date restic -> secondes (fuseau ignoré : précision suffisante pour des jours)
+TO_EPOCH='sub("\\.[0-9]+"; "") | sub("([+-][0-9]{2}:[0-9]{2}|Z)$"; "Z") | fromdateiso8601'
 while IFS= read -r repo; do
   user=$(jq -r .user <<<"$repo")
   dir="$DATA_DIR/$user"
@@ -176,25 +197,57 @@ while IFS= read -r repo; do
   export RESTIC_PASSWORD
   echo "== $user"
   restic -r "$dir" unlock >/dev/null 2>&1 || true
-  # Politique de chaque serveur connu
-  while IFS= read -r pol; do
-    tag=$(jq -r .tag <<<"$pol")
-    args=(--tag "$tag" --group-by tags --keep-last "$(jq -r '.keep_last // 3' <<<"$pol")")
-    w=$(jq -r '.keep_weekly // 0' <<<"$pol"); (( w > 0 )) && args+=(--keep-within-weekly "$((w * 7))d")
-    d=$(jq -r '.keep_daily // 0' <<<"$pol"); (( d > 0 )) && args+=(--keep-within-daily "${d}d")
-    restic -r "$dir" forget -q "${args[@]}" || echo "  ! forget $tag a échoué"
-  done < <(jq -c '.policies[]' <<<"$repo")
-  # Serveurs qui n'existent plus : tout est oublié 30 jours après leur dernière sauvegarde
-  known=$(jq -c '[.policies[].tag]' <<<"$repo")
-  restic -r "$dir" snapshots --json 2>/dev/null | jq -r --argjson known "$known" --argjson now "$now" '
-      group_by(.tags[0])[]
-      | select((.[0].tags[0] // "") as $t | ($known | index($t)) | not)
-      | select(([.[].time | sub("\\.[0-9]+"; "") | sub("(?<tz>[+-][0-9]{2}:[0-9]{2}|Z)$"; "Z") | fromdateiso8601] | max) < ($now - 30 * 86400))
-      | .[].id' | xargs -r restic -r "$dir" forget -q
+  if ! snaps=$(restic -r "$dir" snapshots --json 2>/dev/null); then
+    echo "  ! lecture du dépôt impossible"; continue
+  fi
+  if jq -e 'has("policy")' <<<"$repo" >/dev/null; then
+    # Dépôt du VPS lui-même
+    restic -r "$dir" forget -q --group-by tags \
+      --keep-last "$(jq -r '.policy.keep_last // 3' <<<"$repo")" \
+      --keep-within-daily "$(jq -r '.policy.keep_daily // 7' <<<"$repo")d" \
+      --keep-within-weekly "$(( $(jq -r '.policy.keep_weekly // 4' <<<"$repo") * 7 ))d" \
+      || echo "  ! forget a échoué"
+  else
+    # Expirées selon l'API (identifiants courts ou longs)
+    ids=$(jq -r --argjson f "$(jq -c '[.forget // [] | .[] | strings | select(test("^[0-9a-f]{8,64}$"))]' <<<"$repo")" \
+      '.[] | .id as $id | select(any($f[]; . as $p | $id | startswith($p))) | $id' <<<"$snaps")
+    # Inconnues de l'API depuis plus de 14 jours (ni gardées ni expirées)
+    known=$(jq -c '[(.known // []), (.forget // []) | .[] | strings | select(test("^[0-9a-f]{8,64}$"))]' <<<"$repo")
+    unknown=$(jq -r --argjson k "$known" --argjson now "$now" "
+      .[] | .id as \$id | select(any(\$k[]; . as \$p | \$id | startswith(\$p)) | not)
+      | select((.time | $TO_EPOCH) < (\$now - 14 * 86400)) | \$id" <<<"$snaps")
+    n_known=$(jq 'length' <<<"$known")
+    n_unknown=$(grep -c . <<<"$unknown" || true)
+    if (( n_unknown > 0 )); then
+      if (( n_known == 0 || n_unknown > n_known + 5 )); then
+        echo "  ! $n_unknown instantané(s) inconnu(s) de l'API : gardés par prudence (vérifie l'export du VPS)"
+      else
+        echo "  $n_unknown instantané(s) inconnu(s) de l'API depuis 14 jours : supprimés"
+        ids=$(printf '%s\n%s\n' "$ids" "$unknown")
+      fi
+    fi
+    ids=$(grep . <<<"$ids" | sort -u || true)
+    if [[ -n "$ids" ]]; then
+      echo "  $(grep -c . <<<"$ids") instantané(s) expiré(s) supprimé(s)"
+      xargs -r restic -r "$dir" forget -q <<<"$ids" || echo "  ! forget a échoué"
+    fi
+  fi
   restic -r "$dir" prune -q --max-unused 10% || echo "  ! prune a échoué"
   chown -R mcs-backup:mcs-backup "$dir"
+  # Ce qui reste, pour l'accusé
+  if present=$(restic -r "$dir" snapshots --json 2>/dev/null | jq -c '[.[].id]'); then
+    jq --arg u "$user" --argjson p "$present" '.[$u] = $p' "$ack" > "$ack.n" && mv "$ack.n" "$ack"
+  fi
 done < <(jq -c '.repos[]' "$ETC/export.json")
-echo "Tri terminé"
+# Accusé au VPS : les sauvegardes expirées dont l'instantané n'existe plus passent en DELETED
+jq -n --arg g "$started" --slurpfile r "$ack" '{generated: $g, repos: $r[0]}' > "$ack.n"
+if ssh -T -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=yes \
+     -o UserKnownHostsFile="$ETC/known_hosts" -i "$ETC/id_ed25519" -p "$SSH_PORT" \
+     "$SSH_USER@$VPS" ack < "$ack.n" >/dev/null; then
+  echo "Tri terminé, accusé envoyé au VPS"
+else
+  echo "Tri terminé, mais accusé non envoyé (VPS injoignable ?)"
+fi
 SHEOF
   chmod 700 /usr/local/bin/mcs-backup-prune
 
@@ -339,10 +392,20 @@ summary() {
 EOF
 }
 
-decode_code
-prerequisites
-choose_storage
-setup_files
-install_tools
-install_services
-summary
+if $UPDATE; then
+  step "Mise à jour (configuration gardée : $ETC)"
+  # shellcheck disable=SC1091
+  source "$ETC/config.env"
+  prerequisites
+  install_tools
+  install_services
+  summary
+else
+  decode_code
+  prerequisites
+  choose_storage
+  setup_files
+  install_tools
+  install_services
+  summary
+fi

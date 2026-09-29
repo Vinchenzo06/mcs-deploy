@@ -30,6 +30,7 @@ public class ServerService {
     private final VelocityClient velocityClient;
     private final ServerMetricsService metricsService;
     private final AccessService accessService;
+    private final BackupService backupService;
 
     @Transactional
     public CreateServerResponse createServer(CreateServerRequest request) throws Exception {
@@ -338,7 +339,14 @@ public class ServerService {
             log.info("Machine révoquée : suppression en base uniquement");
         }
 
-        // 3. VRAIE suppression en base
+        // 3. Les sauvegardes survivent au serveur le temps de leur durée de vie
+        try {
+            backupService.onServerDeleting(serverId);
+        } catch (Exception e) {
+            log.warn("Sauvegardes du serveur {} : {}", serverId, e.getMessage());
+        }
+
+        // 4. VRAIE suppression en base
         serverRepository.delete(server);
         metricsService.forget(serverId);
         log.info("Serveur {} supprimé de la base", serverId);

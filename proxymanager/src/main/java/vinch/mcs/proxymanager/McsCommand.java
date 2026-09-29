@@ -382,8 +382,11 @@ public class McsCommand implements SimpleCommand {
         player.sendMessage(helpLine("/mcs move <joueur> <serveur>", "/mcs move ", "Amener un joueur",
                 "Hébergeur de la machine et admins : envoie un joueur\nsur le serveur, une seule fois (sans lui donner d'accès)"));
         player.sendMessage(helpLine("/mcs backup|backups <serveur>", "/mcs backups ", "Sauvegardes",
-                "Sauvegarder maintenant, ou voir l'historique.\n"
-                        + "Admins : /mcs backup policy <serveur> <heures|auto> [dernières] [semaines]"));
+                "/mcs backup <serveur> : sauvegarde manuelle\n"
+                        + "/mcs backups <serveur> : historique (n°, types, expiration)\n"
+                        + "/mcs backup keep <serveur> [n°] : permanente (propriétaire)\n"
+                        + "/mcs backup settings <serveur> : combien et combien de temps\n"
+                        + "Admins : /mcs backup defaults, /mcs backup limits <rôle>"));
         player.sendMessage(helpLine("/mcs host [list|set|remove]", "/mcs host ", "Hôtes (admins)",
                 "Admins : choisir le joueur hôte de chaque machine.\n"
                         + "Il gère les serveurs de SA machine seulement (titre ʜᴏsᴛ)."));
@@ -946,14 +949,180 @@ public class McsCommand implements SimpleCommand {
     // ============================================================ hôtes (admins) ====
 
     // ============================================================ sauvegardes ====
+    //
+    // Types : quotidienne, hebdomadaire, mensuelle (automatiques), manuelle,
+    // permanente. Chacun : un nombre max (au-delà, la plus ancienne part) et une
+    // durée de vie. L'API décide ; ici on affiche et on transmet.
+
+    private static final String[] KIND_ORDER = {"DAILY", "WEEKLY", "MONTHLY", "MANUAL", "PERMANENT"};
+
+    /** "quotidienne", "hebdo", "perma"... -> nom de l'API ; null si inconnu */
+    static String backupKind(String s) {
+        return switch (s == null ? "" : s.toLowerCase(Locale.ROOT)) {
+            case "quotidienne", "quotidien", "jour", "jours", "daily", "day" -> "DAILY";
+            case "hebdomadaire", "hebdo", "semaine", "weekly", "week" -> "WEEKLY";
+            case "mensuelle", "mensuel", "mois", "monthly", "month" -> "MONTHLY";
+            case "manuelle", "manuel", "manual" -> "MANUAL";
+            case "permanente", "permanent", "perma" -> "PERMANENT";
+            default -> null;
+        };
+    }
+
+    private static String kindLabel(String kind) {
+        return switch (kind) {
+            case "DAILY" -> "Quotidienne";
+            case "WEEKLY" -> "Hebdomadaire";
+            case "MONTHLY" -> "Mensuelle";
+            case "MANUAL" -> "Manuelle";
+            case "PERMANENT" -> "Permanente";
+            default -> kind;
+        };
+    }
+
+    private static String kindShort(String kind) {
+        return switch (kind) {
+            case "DAILY" -> "jour";
+            case "WEEKLY" -> "semaine";
+            case "MONTHLY" -> "mois";
+            case "MANUAL" -> "manuelle";
+            case "PERMANENT" -> "permanente";
+            default -> kind.toLowerCase(Locale.ROOT);
+        };
+    }
+
+    private static final Pattern DURATION_PATTERN =
+            Pattern.compile("^(\\d{1,5})(h|heures?|j|jours?|d|s|sem|semaines?|w|m|mois)?$");
+
+    /**
+     * "3", "3j", "2sem", "1mois", "24h" -> valeur dans l'unité du type (jours ;
+     * heures pour les permanentes). Sans unité : celle du type. null si invalide.
+     */
+    static Integer parseDuration(String raw, boolean hours) {
+        Matcher m = DURATION_PATTERN.matcher(raw.toLowerCase(Locale.ROOT));
+        if (!m.matches()) {
+            return null;
+        }
+        long n = Long.parseLong(m.group(1));
+        String u = m.group(2) == null ? "" : m.group(2);
+        if (u.isEmpty()) {
+            return (int) n;
+        }
+        long h;
+        if (u.startsWith("h")) {
+            h = n;
+        } else if (u.startsWith("j") || u.equals("d")) {
+            h = n * 24;
+        } else if (u.startsWith("s") || u.equals("w")) {
+            h = n * 24 * 7;
+        } else {
+            h = n * 24 * 30;
+        }
+        if (hours) {
+            return (int) h;
+        }
+        return h % 24 == 0 ? (int) (h / 24) : null;
+    }
+
+    /** "3" ou "off" (0) ; null si invalide */
+    private static Integer parseMax(String raw) {
+        if (raw.equalsIgnoreCase("off") || raw.equalsIgnoreCase("non")) {
+            return 0;
+        }
+        try {
+            return Integer.valueOf(raw);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static String days(int d) {
+        return d + (d > 1 ? " jours" : " jour");
+    }
+
+    /** "3 max · 3 jours", "coupée", "1 max · 24 h après la suppression du serveur" */
+    private static String ruleText(String kind, JsonNode rule) {
+        int max = rule.path("max").asInt(0);
+        int dur = rule.path("duration").asInt(0);
+        if (max <= 0) {
+            return "coupée";
+        }
+        if ("PERMANENT".equals(kind)) {
+            return max + " max · " + (dur <= 0 ? "supprimée avec le serveur"
+                    : "gardée " + (dur % 24 == 0 ? days(dur / 24) : dur + " h") + " après la suppression du serveur");
+        }
+        return max + " max · " + days(dur);
+    }
+
+    /** "dans 2 j 5 h" jusqu'à une date (heure du VPS) */
+    private static String remaining(String until) {
+        try {
+            java.time.Duration d = java.time.Duration.between(java.time.LocalDateTime.now(),
+                    java.time.LocalDateTime.parse(until));
+            long min = d.toMinutes();
+            if (min <= 0) {
+                return "bientôt";
+            }
+            if (min < 60) {
+                return "dans " + min + " min";
+            }
+            if (min < 24 * 60) {
+                return "dans " + (min / 60) + " h";
+            }
+            return "dans " + (min / (24 * 60)) + " j " + ((min / 60) % 24) + " h";
+        } catch (Exception e) {
+            return "?";
+        }
+    }
+
+    private void backupHelp(Player player) {
+        usage(player, "/mcs backup <serveur>", "/mcs backup ");
+        send(player, Component.text("Aussi : ", NamedTextColor.GRAY)
+                .append(Component.text("/mcs backups <serveur>", NamedTextColor.YELLOW)
+                        .clickEvent(ClickEvent.suggestCommand("/mcs backups ")))
+                .append(Component.text(" (historique)  ·  ", NamedTextColor.GRAY))
+                .append(Component.text("/mcs backup keep <serveur> [n°]", NamedTextColor.YELLOW)
+                        .clickEvent(ClickEvent.suggestCommand("/mcs backup keep ")))
+                .append(Component.text(" (permanente)  ·  ", NamedTextColor.GRAY))
+                .append(Component.text("/mcs backup settings <serveur>", NamedTextColor.YELLOW)
+                        .clickEvent(ClickEvent.suggestCommand("/mcs backup settings ")))
+                .append(Component.text(" (réglages)", NamedTextColor.GRAY)));
+    }
 
     private void handleBackup(Player player, String[] args) {
-        if (args.length >= 2 && "policy".equalsIgnoreCase(args[1])) {
-            handleBackupPolicy(player, args);
+        String sub = args.length >= 2 ? args[1].toLowerCase(Locale.ROOT) : "";
+        if (sub.equals("defaults")) {
+            handleBackupScope(player, "network", args, 2);
             return;
         }
+        if (sub.equals("limits")) {
+            if (args.length < 3) {
+                usage(player, "/mcs backup limits <rôle> [type max durée | reset]", "/mcs backup limits ");
+                return;
+            }
+            handleBackupScope(player, args[2].toLowerCase(Locale.ROOT), args, 3);
+            return;
+        }
+        if (args.length >= 3) {
+            switch (sub) {
+                case "keep", "unkeep" -> {
+                    handleBackupKeep(player, args, sub.equals("keep"));
+                    return;
+                }
+                case "settings" -> {
+                    withServer(player, args[2], t -> afterApi(player, apiClient.listBackups(t.id(), t.playerId()),
+                            t.ref(), r -> sendBackupSettings(player, t, r)));
+                    return;
+                }
+                case "set" -> {
+                    handleBackupSet(player, args);
+                    return;
+                }
+                default -> {
+                }
+            }
+        }
         if (args.length != 2) {
-            usage(player, "/mcs backup <serveur>", "/mcs backup ");
+            backupHelp(player);
             return;
         }
         withServer(player, args[1], t -> {
@@ -961,27 +1130,67 @@ public class McsCommand implements SimpleCommand {
                 failure(player, text("Tu n'as pas le droit de sauvegarder ce serveur."));
                 return;
             }
-            pending(player, text("Sauvegarde de ").append(Component.text(t.ref(), NamedTextColor.WHITE))
-                    .append(text("… (le monde est figé quelques secondes)")));
-            afterApi(player, apiClient.backupNow(t.id(), t.playerId()), t.ref(), r -> {
-                String status = r.path("status").asText("");
-                if ("SUCCESS".equals(status)) {
-                    success(player, text("").append(serverName(t.ref())).append(text(" est sauvegardé.")));
-                    player.sendMessage(Component.text("   " + sizeOrDash(r.path("addedMb")) + " nouveaux envoyés  ·  "
-                            + sizeOrDash(r.path("totalMb")) + " au total", NamedTextColor.GRAY));
-                } else if ("RUNNING".equals(status)) {
-                    notice(player, text("La sauvegarde de " + t.ref() + " continue en arrière-plan."));
-                } else {
-                    failure(player, text("Sauvegarde échouée : " + r.path("message").asText("erreur inconnue")));
-                }
-                player.sendMessage(buttons(button("Historique", NamedTextColor.AQUA, "/mcs backups " + t.ref(),
-                        "Sauvegardes de " + t.ref())));
-            });
+            runBackup(player, t, false);
+        });
+    }
+
+    /** Sauvegarde maintenant ; permanente : propriétaire et admins (vérifié par l'API) */
+    private void runBackup(Player player, Target t, boolean permanent) {
+        pending(player, text((permanent ? "Sauvegarde permanente de " : "Sauvegarde de "))
+                .append(Component.text(t.ref(), NamedTextColor.WHITE))
+                .append(text("… (le monde est figé quelques secondes)")));
+        afterApi(player, apiClient.backupNow(t.id(), t.playerId(), permanent), t.ref(), r -> {
+            String status = r.path("status").asText("");
+            if ("SUCCESS".equals(status)) {
+                success(player, text("").append(serverName(t.ref())).append(text(permanent
+                        ? " est sauvegardé (n°" + r.path("id").asLong() + ", permanente)."
+                        : " est sauvegardé (n°" + r.path("id").asLong() + ").")));
+                player.sendMessage(Component.text("   " + sizeOrDash(r.path("addedMb")) + " nouveaux envoyés  ·  "
+                        + sizeOrDash(r.path("totalMb")) + " au total", NamedTextColor.GRAY));
+            } else if ("RUNNING".equals(status)) {
+                notice(player, text("La sauvegarde de " + t.ref() + " continue en arrière-plan."));
+            } else {
+                failure(player, text("Sauvegarde échouée : " + r.path("message").asText("erreur inconnue")));
+            }
+            player.sendMessage(buttons(button("Historique", NamedTextColor.AQUA, "/mcs backups " + t.ref(),
+                    "Sauvegardes de " + t.ref())));
         });
     }
 
     private static String sizeOrDash(JsonNode mb) {
         return mb == null || mb.isNull() || mb.isMissingNode() ? "?" : size(mb.asLong());
+    }
+
+    /** /mcs backup keep <serveur> [n°]  ·  /mcs backup unkeep <serveur> <n°> */
+    private void handleBackupKeep(Player player, String[] args, boolean keep) {
+        if (args.length > 4 || (!keep && args.length != 4)) {
+            usage(player, keep ? "/mcs backup keep <serveur> [n°]" : "/mcs backup unkeep <serveur> <n°>",
+                    keep ? "/mcs backup keep " : "/mcs backup unkeep ");
+            return;
+        }
+        Long id = null;
+        if (args.length == 4) {
+            try {
+                id = Long.parseLong(args[3].replace("n°", "").replace("#", ""));
+            } catch (NumberFormatException e) {
+                failure(player, text("Numéro de sauvegarde invalide : " + args[3] + " (voir /mcs backups)."));
+                return;
+            }
+        }
+        Long backupId = id;
+        withServer(player, args[2], t -> {
+            if (backupId == null) {
+                runBackup(player, t, true);
+                return;
+            }
+            afterApi(player, apiClient.setBackupPermanent(t.id(), backupId, t.playerId(), keep), t.ref(), r -> {
+                success(player, text("Sauvegarde n°" + backupId + " de ").append(serverName(t.ref()))
+                        .append(text(keep ? " : permanente, gardée tant que le serveur existe."
+                                : " : n'est plus permanente, elle suit les autres règles.")));
+                player.sendMessage(buttons(button("Historique", NamedTextColor.AQUA, "/mcs backups " + t.ref(),
+                        "Sauvegardes de " + t.ref())));
+            });
+        });
     }
 
     private void handleBackups(Player player, String[] args) {
@@ -995,22 +1204,29 @@ public class McsCommand implements SimpleCommand {
 
     private void sendBackups(Player player, Target t, JsonNode r) {
         String ref = t.ref();
+        boolean canConfigure = r.path("canConfigure").asBoolean(false);
+        JsonNode rules = r.path("rules");
         player.sendMessage(Component.empty());
         player.sendMessage(header("Sauvegardes de " + ref));
         if (!r.path("enabled").asBoolean(false)) {
             player.sendMessage(Component.text(" Les sauvegardes ne sont pas encore configurées sur ce réseau.",
                     NamedTextColor.GOLD));
         }
-        int interval = r.path("intervalHours").asInt(24);
-        String every = interval <= 0 ? "jamais (automatique coupé)"
-                : interval % 24 == 0 ? (interval == 24 ? "chaque jour" : "tous les " + interval / 24 + " jours")
-                : "toutes les " + interval + " h";
+        // Règles en une ligne, détail au survol
+        StringBuilder auto = new StringBuilder();
+        StringBuilder detail = new StringBuilder();
+        for (String k : KIND_ORDER) {
+            JsonNode rule = rules.path(k);
+            detail.append(kindLabel(k)).append(" : ").append(ruleText(k, rule)).append('\n');
+            if (rule.path("max").asInt(0) > 0 && !k.equals("MANUAL") && !k.equals("PERMANENT")) {
+                auto.append(auto.length() == 0 ? "" : ", ").append("1 par ").append(kindShort(k))
+                        .append(" (").append(days(rule.path("duration").asInt())).append(")");
+            }
+        }
+        detail.append(r.path("customized").asBoolean(false) ? "Réglages propres à ce serveur" : "Réglages du réseau");
         player.sendMessage(Component.text(" Automatique : ", NamedTextColor.GRAY)
-                .append(Component.text(every, NamedTextColor.WHITE))
-                .append(Component.text("  ·  gardées : " + r.path("keepLast").asInt() + " dernières + 1 par semaine pendant "
-                        + r.path("keepWeekly").asInt() + " sem.", NamedTextColor.GRAY))
-                .hoverEvent(HoverEvent.showText(Component.text("Réglage : " + r.path("policySource").asText("défaut")
-                        + "\nLes admins peuvent le changer : /mcs backup policy", NamedTextColor.GRAY))));
+                .append(Component.text(auto.length() == 0 ? "coupée" : auto.toString(), NamedTextColor.WHITE))
+                .hoverEvent(HoverEvent.showText(Component.text(detail.toString(), NamedTextColor.GRAY))));
 
         JsonNode list = r.path("backups");
         if (list.size() == 0) {
@@ -1018,60 +1234,226 @@ public class McsCommand implements SimpleCommand {
         }
         for (JsonNode b : list) {
             String status = b.path("status").asText("?");
+            long id = b.path("id").asLong();
             String ago = b.hasNonNull("createdAt") ? uptime(b.get("createdAt").asText()) : null;
             Component icon = switch (status) {
                 case "SUCCESS" -> Component.text("✔", NamedTextColor.GREEN);
                 case "RUNNING" -> Component.text("◐", NamedTextColor.YELLOW);
+                case "EXPIRED" -> Component.text("⌛", NamedTextColor.DARK_GRAY);
                 default -> Component.text("✖", NamedTextColor.RED);
             };
+            boolean permanent = false;
+            StringBuilder kinds = new StringBuilder();
+            for (JsonNode k : b.path("kinds")) {
+                permanent |= "PERMANENT".equals(k.asText());
+                kinds.append(kinds.length() == 0 ? "" : "+").append(kindShort(k.asText()));
+            }
             Component line = Component.text(" ").append(icon)
-                    .append(Component.text(" il y a " + (ago == null ? "?" : ago), NamedTextColor.WHITE))
-                    .append(Component.text("  " + ("MANUAL".equals(b.path("type").asText()) ? "manuelle"
-                            + (b.hasNonNull("requestedBy") ? " (" + b.get("requestedBy").asText() + ")" : "")
-                            : "auto"), NamedTextColor.GRAY));
-            if ("SUCCESS".equals(status)) {
-                line = line.append(Component.text("  +" + sizeOrDash(b.path("addedMb")) + " / " + sizeOrDash(b.path("totalMb")),
-                        NamedTextColor.DARK_GRAY));
-            } else if ("FAILED".equals(status)) {
-                line = line.hoverEvent(HoverEvent.showText(Component.text(b.path("message").asText("erreur"),
-                        NamedTextColor.RED)));
+                    .append(Component.text(" n°" + id, NamedTextColor.DARK_AQUA))
+                    .append(Component.text("  il y a " + (ago == null ? "?" : ago), NamedTextColor.WHITE))
+                    .append(Component.text("  " + (kinds.length() == 0 ? "auto" : kinds), NamedTextColor.GRAY));
+            StringBuilder hover = new StringBuilder("Sauvegarde n°" + id);
+            if (b.hasNonNull("requestedBy")) {
+                hover.append("\nDemandée par ").append(b.get("requestedBy").asText());
+            }
+            switch (status) {
+                case "SUCCESS" -> {
+                    hover.append("\n+").append(sizeOrDash(b.path("addedMb"))).append(" envoyés, ")
+                            .append(sizeOrDash(b.path("totalMb"))).append(" au total");
+                    String until = b.hasNonNull("expiresAt") ? remaining(b.get("expiresAt").asText()) : null;
+                    line = line.append(Component.text("  " + (until != null ? "expire " + until
+                            : permanent ? "gardée" : "la plus récente"), NamedTextColor.DARK_GRAY));
+                }
+                case "EXPIRED" -> {
+                    hover.append("\nExpirée : supprimée au prochain nettoyage du serveur de sauvegarde");
+                    line = line.append(Component.text("  expirée", NamedTextColor.DARK_GRAY));
+                }
+                case "FAILED" -> hover.append("\n").append(b.path("message").asText("erreur"));
+                default -> {
+                }
+            }
+            line = line.hoverEvent(HoverEvent.showText(Component.text(hover.toString(),
+                    "FAILED".equals(status) ? NamedTextColor.RED : NamedTextColor.GRAY)));
+            if (canConfigure && "SUCCESS".equals(status)) {
+                line = line.append(text(" ")).append(permanent
+                        ? Component.text("★", NamedTextColor.GOLD)
+                                .clickEvent(ClickEvent.runCommand("/mcs backup unkeep " + ref + " " + id))
+                                .hoverEvent(HoverEvent.showText(Component.text(
+                                        "Permanente. Cliquer pour ne plus la garder", NamedTextColor.GRAY)))
+                        : Component.text("☆", NamedTextColor.DARK_GRAY)
+                                .clickEvent(ClickEvent.runCommand("/mcs backup keep " + ref + " " + id))
+                                .hoverEvent(HoverEvent.showText(Component.text(
+                                        "Garder (permanente, tant que le serveur existe)", NamedTextColor.GRAY))));
             }
             player.sendMessage(line);
         }
+        java.util.List<Component> actions = new java.util.ArrayList<>();
         if (t.can("POWER")) {
-            player.sendMessage(buttons(button("Sauvegarder maintenant", NamedTextColor.GREEN, "/mcs backup " + ref,
-                    "Sauvegarder " + ref + " maintenant")));
+            actions.add(button("Sauvegarder", NamedTextColor.GREEN, "/mcs backup " + ref,
+                    "Sauvegarde manuelle (" + ruleText("MANUAL", rules.path("MANUAL")) + ")"));
         }
+        if (canConfigure) {
+            actions.add(button("Permanente", NamedTextColor.GOLD, "/mcs backup keep " + ref,
+                    "Sauvegarde gardée tant que le serveur existe\n(" + ruleText("PERMANENT", rules.path("PERMANENT")) + ")"));
+        }
+        actions.add(button("Réglages", NamedTextColor.AQUA, "/mcs backup settings " + ref,
+                "Combien de sauvegardes et combien de temps"));
+        player.sendMessage(buttons(actions.toArray(new Component[0])));
     }
 
-    /** /mcs backup policy <serveur> <heures|auto> [dernières] [semaines] (admins) */
-    private void handleBackupPolicy(Player player, String[] args) {
-        if (args.length < 4 || args.length > 6) {
-            usage(player, "/mcs backup policy <serveur> <heures|auto> [dernières] [semaines]", "/mcs backup policy ");
-            send(player, Component.text("Ex. : /mcs backup policy survie 6 5 8  ·  0 heure = pas d'automatique  ·  "
-                    + "auto = politique du rôle du propriétaire", NamedTextColor.GRAY));
+    private void sendBackupSettings(Player player, Target t, JsonNode r) {
+        String ref = t.ref();
+        boolean canConfigure = r.path("canConfigure").asBoolean(false);
+        player.sendMessage(Component.empty());
+        player.sendMessage(header("Réglages des sauvegardes de " + ref));
+        player.sendMessage(Component.text(" Max : au-delà, la plus ancienne est supprimée. Durée : combien de temps "
+                + "chacune reste.", NamedTextColor.GRAY));
+        for (String k : KIND_ORDER) {
+            JsonNode rule = r.path("rules").path(k);
+            JsonNode limit = r.path("limits").path(k);
+            Component line = Component.text(" " + kindLabel(k) + " : ", NamedTextColor.GRAY)
+                    .append(Component.text(ruleText(k, rule), NamedTextColor.WHITE));
+            if (canConfigure) {
+                String unit = "PERMANENT".equals(k) ? "h" : "j";
+                line = line.append(text(" ")).append(suggestButton("Modifier", NamedTextColor.YELLOW,
+                        "/mcs backup set " + ref + " " + kindLabel(k).toLowerCase(Locale.ROOT) + " ",
+                        "Ton rôle permet au plus : " + ruleText(k, limit)
+                                + "\nEx. : /mcs backup set " + ref + " " + kindLabel(k).toLowerCase(Locale.ROOT)
+                                + " " + Math.max(1, limit.path("max").asInt(1)) + " " + limit.path("duration").asInt(1) + unit
+                                + "\n0 = coupée · durée en " + ("h".equals(unit) ? "heures (ou 2j)" : "jours (ou 2sem)")));
+            }
+            player.sendMessage(line);
+        }
+        boolean customized = r.path("customized").asBoolean(false);
+        Component footer = Component.text(customized ? " Réglages propres à ce serveur." : " Réglages du réseau.",
+                NamedTextColor.DARK_GRAY);
+        if (canConfigure && customized) {
+            footer = footer.append(text(" ")).append(button("Par défaut", NamedTextColor.AQUA,
+                    "/mcs backup set " + ref + " reset", "Revenir aux réglages du réseau"));
+        }
+        player.sendMessage(footer);
+        player.sendMessage(buttons(button("Historique", NamedTextColor.AQUA, "/mcs backups " + ref,
+                "Sauvegardes de " + ref)));
+    }
+
+    /** /mcs backup set <serveur> <type> <max> [durée]  ·  /mcs backup set <serveur> reset */
+    private void handleBackupSet(Player player, String[] args) {
+        boolean reset = args.length == 4 && args[3].equalsIgnoreCase("reset");
+        if (!reset && (args.length < 5 || args.length > 6)) {
+            usage(player, "/mcs backup set <serveur> <type> <max> [durée]", "/mcs backup set ");
+            send(player, Component.text("Types : quotidienne, hebdomadaire, mensuelle, manuelle, permanente. "
+                    + "Ex. : /mcs backup set survie quotidienne 5 7j  ·  0 = coupée  ·  reset = réglages du réseau",
+                    NamedTextColor.GRAY));
             return;
         }
-        boolean reset = "auto".equalsIgnoreCase(args[3]);
-        Integer hours;
-        Integer keepLast;
-        Integer keepWeekly;
-        try {
-            hours = reset ? null : Integer.valueOf(args[3]);
-            keepLast = args.length >= 5 ? Integer.valueOf(args[4]) : null;
-            keepWeekly = args.length == 6 ? Integer.valueOf(args[5]) : null;
-        } catch (NumberFormatException e) {
-            failure(player, text("Nombres attendus : heures, dernières sauvegardes gardées, semaines gardées."));
-            return;
+        String kind = reset ? null : backupKind(args[3]);
+        Integer max = reset ? null : parseMax(args[4]);
+        Integer duration = null;
+        if (!reset) {
+            if (kind == null) {
+                failure(player, text("Type inconnu : " + args[3]
+                        + " (quotidienne, hebdomadaire, mensuelle, manuelle, permanente)."));
+                return;
+            }
+            if (max == null) {
+                failure(player, text("Nombre max invalide : " + args[4] + " (0 = coupée)."));
+                return;
+            }
+            if (args.length == 6) {
+                duration = parseDuration(args[5], "PERMANENT".equals(kind));
+                if (duration == null) {
+                    failure(player, text("Durée invalide : " + args[5] + " (ex. 3, 3j, 2sem"
+                            + ("PERMANENT".equals(kind) ? ", 24h" : "") + ")."));
+                    return;
+                }
+            }
         }
+        Integer dur = duration;
         withServer(player, args[2], t -> afterApi(player,
-                apiClient.setBackupPolicy(t.id(), t.playerId(), hours, keepLast, keepWeekly, reset), t.ref(),
-                r -> {
-                    int h = r.path("intervalHours").asInt();
-                    success(player, text("Sauvegardes de ").append(serverName(t.ref())).append(text(" : "
-                            + (h <= 0 ? "pas d'automatique" : "toutes les " + h + " h") + ", "
-                            + r.path("keepLast").asInt() + " dernières + " + r.path("keepWeekly").asInt()
-                            + " semaines (" + r.path("policySource").asText() + ").")));
+                apiClient.setBackupRule(t.id(), t.playerId(), kind, max, dur, reset), t.ref(), r -> {
+                    if (reset) {
+                        success(player, text("Sauvegardes de ").append(serverName(t.ref()))
+                                .append(text(" : réglages du réseau.")));
+                    } else {
+                        success(player, text(kindLabel(kind) + " de ").append(serverName(t.ref()))
+                                .append(text(" : " + ruleText(kind, r.path("rules").path(kind)) + ".")));
+                    }
+                    player.sendMessage(buttons(button("Réglages", NamedTextColor.AQUA, "/mcs backup settings " + t.ref(),
+                            "Voir tous les réglages")));
+                }));
+    }
+
+    /**
+     * Admins : /mcs backup defaults [type max durée]  (défauts du réseau)
+     *          /mcs backup limits <rôle> [type max durée | reset]  (limites des propriétaires)
+     */
+    private void handleBackupScope(Player player, String scope, String[] args, int from) {
+        int rest = args.length - from;
+        boolean network = scope.equals("network");
+        String cmd = network ? "/mcs backup defaults" : "/mcs backup limits " + scope;
+        boolean reset = rest == 1 && args[from].equalsIgnoreCase("reset") && !network;
+        String kind = null;
+        Integer max = null;
+        Integer duration = null;
+        if (rest != 0 && !reset) {
+            if (rest < 2 || rest > 3) {
+                usage(player, cmd + " [type max durée" + (network ? "" : " | reset") + "]", cmd + " ");
+                return;
+            }
+            kind = backupKind(args[from]);
+            max = parseMax(args[from + 1]);
+            if (kind == null || max == null) {
+                failure(player, text("Ex. : " + cmd + " quotidienne 3 3j  ·  types : quotidienne, hebdomadaire, "
+                        + "mensuelle, manuelle, permanente"));
+                return;
+            }
+            if (rest == 3) {
+                duration = parseDuration(args[from + 2], "PERMANENT".equals(kind));
+                if (duration == null) {
+                    failure(player, text("Durée invalide : " + args[from + 2] + " (ex. 3, 3j, 2sem, 24h)."));
+                    return;
+                }
+            }
+        }
+        boolean change = rest != 0;
+        String fKind = kind;
+        Integer fMax = max;
+        Integer fDur = duration;
+        apiClient.getPlayerByUuid(player.getUniqueId())
+                .thenCompose(info -> {
+                    long id = info.get("id").asLong();
+                    return change ? apiClient.setBackupScopeRule(id, scope, fKind, fMax, fDur, reset)
+                            : apiClient.getBackupScope(id, scope);
+                })
+                .whenComplete((r, error) -> run(() -> {
+                    if (error != null) {
+                        reportError(player, error, null);
+                        return;
+                    }
+                    if (change) {
+                        success(player, text(reset ? "Limites du rôle " + scope + " : celles du réseau."
+                                : (network ? "Défaut du réseau" : "Limite du rôle " + scope) + " : "
+                                + kindLabel(fKind).toLowerCase(Locale.ROOT) + " = "
+                                + ruleText(fKind, r.path("rules").path(fKind)) + "."));
+                    }
+                    player.sendMessage(Component.empty());
+                    player.sendMessage(header(network ? "Sauvegardes : défauts du réseau"
+                            : "Sauvegardes : limites du rôle " + scope));
+                    player.sendMessage(Component.text(network
+                            ? " Réglages des serveurs qui n'ont rien changé."
+                            : " Le propriétaire (rôle " + scope + ") ne peut pas régler plus haut.", NamedTextColor.GRAY));
+                    for (String k : KIND_ORDER) {
+                        String unit = "PERMANENT".equals(k) ? "h" : "j";
+                        JsonNode rule = r.path("rules").path(k);
+                        player.sendMessage(Component.text(" " + kindLabel(k) + " : ", NamedTextColor.GRAY)
+                                .append(Component.text(ruleText(k, rule), NamedTextColor.WHITE))
+                                .append(text(" "))
+                                .append(suggestButton("Modifier", NamedTextColor.YELLOW,
+                                        cmd + " " + kindLabel(k).toLowerCase(Locale.ROOT) + " ",
+                                        "Ex. : " + cmd + " " + kindLabel(k).toLowerCase(Locale.ROOT) + " "
+                                                + Math.max(1, rule.path("max").asInt(1)) + " "
+                                                + rule.path("duration").asInt(1) + unit)));
+                    }
                 }));
     }
 

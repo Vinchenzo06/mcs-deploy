@@ -20,9 +20,17 @@ public class Backup {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "server_id", nullable = false)
+    // Null une fois le serveur supprimé (ses sauvegardes restent le temps de leur durée de vie)
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "server_id")
     private Server server;
+
+    // Id et nom du serveur, gardés après sa suppression
+    @Column(name = "server_tag_id")
+    private Long serverTagId;
+
+    @Column(name = "server_ref", length = 80)
+    private String serverRef;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "backup_type", nullable = false, length = 20)
@@ -66,6 +74,51 @@ public class Backup {
 
     @Column(name = "requested_by", length = 16)
     private String requestedBy;
+
+    // Types retenus (voir BackupKind)
+    @Column(name = "is_daily", nullable = false)
+    @Builder.Default
+    private Boolean isDaily = false;
+
+    @Column(name = "is_weekly", nullable = false)
+    @Builder.Default
+    private Boolean isWeekly = false;
+
+    @Column(name = "is_monthly", nullable = false)
+    @Builder.Default
+    private Boolean isMonthly = false;
+
+    @Column(name = "is_manual", nullable = false)
+    @Builder.Default
+    private Boolean isManual = false;
+
+    @Column(name = "is_permanent", nullable = false)
+    @Builder.Default
+    private Boolean isPermanent = false;
+
+    // Fixée à la suppression du serveur (sinon calculée à chaque passage)
+    @Column(name = "expires_at")
+    private LocalDateTime expiresAt;
+
+    public boolean is(BackupKind k) {
+        return Boolean.TRUE.equals(switch (k) {
+            case DAILY -> isDaily;
+            case WEEKLY -> isWeekly;
+            case MONTHLY -> isMonthly;
+            case MANUAL -> isManual;
+            case PERMANENT -> isPermanent;
+        });
+    }
+
+    public void mark(BackupKind k, boolean value) {
+        switch (k) {
+            case DAILY -> isDaily = value;
+            case WEEKLY -> isWeekly = value;
+            case MONTHLY -> isMonthly = value;
+            case MANUAL -> isManual = value;
+            case PERMANENT -> isPermanent = value;
+        }
+    }
 
     @PrePersist
     protected void onCreate() {

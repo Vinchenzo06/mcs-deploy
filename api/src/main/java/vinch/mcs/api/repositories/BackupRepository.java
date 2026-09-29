@@ -21,4 +21,11 @@ public interface BackupRepository extends JpaRepository<Backup, Long> {
     Optional<Backup> findFirstByServerIdAndStatusOrderByCreatedAtDesc(Long serverId, String status);
 
     Optional<Backup> findFirstByServerIdOrderByCreatedAtDesc(Long serverId);
+
+    List<Backup> findByServerTagIdAndStatusOrderByCreatedAtDesc(Long serverTagId, String status);
+
+    List<Backup> findTop30ByServerTagIdOrderByCreatedAtDesc(Long serverTagId);
+
+    // Sauvegardes de serveurs supprimés, encore gardées
+    List<Backup> findByServerIsNullAndStatus(String status);
 }
