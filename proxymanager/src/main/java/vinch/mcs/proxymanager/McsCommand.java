@@ -1147,6 +1147,7 @@ public class McsCommand implements SimpleCommand {
                         : " est sauvegardé (n°" + r.path("id").asLong() + ").")));
                 player.sendMessage(Component.text("   " + sizeOrDash(r.path("addedMb")) + " nouveaux envoyés  ·  "
                         + sizeOrDash(r.path("totalMb")) + " au total", NamedTextColor.GRAY));
+                sendRotation(player, r, -1);
             } else if ("RUNNING".equals(status)) {
                 notice(player, text("La sauvegarde de " + t.ref() + " continue en arrière-plan."));
             } else {
@@ -1155,6 +1156,21 @@ public class McsCommand implements SimpleCommand {
             player.sendMessage(buttons(button("Historique", NamedTextColor.AQUA, "/mcs backups " + t.ref(),
                     "Sauvegardes de " + t.ref())));
         });
+    }
+
+    /** Ce que les limites ont changé : permanentes rétrogradées, sauvegardes supprimées */
+    private static void sendRotation(Player player, JsonNode r, long except) {
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        int maxPerm = r.path("maxPermanent").asInt(-1);
+        for (JsonNode id : r.path("demoted")) {
+            parts.add("n°" + id.asLong() + " n'est plus permanente" + (maxPerm >= 0 ? " (" + maxPerm + " max)" : ""));
+        }
+        for (JsonNode id : r.path("expired")) {
+            parts.add(id.asLong() == except ? "elle expire (plus aucune règle ne la garde)" : "n°" + id.asLong() + " supprimée");
+        }
+        if (!parts.isEmpty()) {
+            notice(player, text("Limites : " + String.join(" · ", parts) + "."));
+        }
     }
 
     private static String sizeOrDash(JsonNode mb) {
@@ -1187,6 +1203,7 @@ public class McsCommand implements SimpleCommand {
                 success(player, text("Sauvegarde n°" + backupId + " de ").append(serverName(t.ref()))
                         .append(text(keep ? " : permanente, gardée tant que le serveur existe."
                                 : " : n'est plus permanente, elle suit les autres règles.")));
+                sendRotation(player, r, backupId);
                 player.sendMessage(buttons(button("Historique", NamedTextColor.AQUA, "/mcs backups " + t.ref(),
                         "Sauvegardes de " + t.ref())));
             });
@@ -1247,6 +1264,10 @@ public class McsCommand implements SimpleCommand {
             for (JsonNode k : b.path("kinds")) {
                 permanent |= "PERMANENT".equals(k.asText());
                 kinds.append(kinds.length() == 0 ? "" : "+").append(kindShort(k.asText()));
+            }
+            if (permanent) {
+                // Une permanente ne compte que comme permanente (elle ne prend la place d'aucune autre)
+                kinds = new StringBuilder("permanente");
             }
             Component line = Component.text(" ").append(icon)
                     .append(Component.text(" n°" + id, NamedTextColor.DARK_AQUA))

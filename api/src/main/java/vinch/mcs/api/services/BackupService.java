@@ -416,10 +416,22 @@ public class BackupService {
         LocalDateTime now = LocalDateTime.now();
         for (Server s : serverRepository.findAll()) {
             List<Backup> ok = backupRepository.findByServerTagIdAndStatusOrderByCreatedAtDesc(s.getId(), "SUCCESS");
+            Map<BackupKind, Rule> rules = effective(s);
+            // Au-delà du max de permanentes : la plus anciennement marquée ne l'est plus
+            // (elle retombe dans ses autres types, et peut donc expirer)
+            Set<Long> perm = keptPermanent(ok, rules.get(BackupKind.PERMANENT));
+            for (Backup b : ok) {
+                if (b.is(BackupKind.PERMANENT) && !perm.contains(b.getId())) {
+                    b.mark(BackupKind.PERMANENT, false);
+                    backupRepository.save(b);
+                    log.info("Sauvegarde {} de {} : n'est plus permanente (max {})", b.getId(), s.getVelocityName(),
+                            rules.get(BackupKind.PERMANENT).max());
+                }
+            }
             if (ok.size() <= 1) {
                 continue;
             }
-            Set<Long> kept = retained(ok, effective(s), now, false);
+            Set<Long> kept = retained(ok, rules, now, false);
             kept.add(ok.get(0).getId());
             for (Backup b : ok) {
                 if (!kept.contains(b.getId())) {
@@ -439,28 +451,86 @@ public class BackupService {
         }
     }
 
-    /** Ids retenus par au moins un type (ok : du plus récent au plus ancien) */
+    /** Permanentes retenues : les "max" plus récemment marquées */
+    private static Set<Long> keptPermanent(List<Backup> ok, Rule r) {
+        List<Backup> perm = new ArrayList<>();
+        for (Backup b : ok) {
+            if (b.is(BackupKind.PERMANENT)) {
+                perm.add(b);
+            }
+        }
+        perm.sort(Comparator.comparing((Backup b) -> b.getPermanentAt() != null ? b.getPermanentAt() : b.getCreatedAt())
+                .reversed());
+        Set<Long> ids = new HashSet<>();
+        for (int i = 0; i < Math.min(Math.max(r.max(), 0), perm.size()); i++) {
+            ids.add(perm.get(i).getId());
+        }
+        return ids;
+    }
+
+    /**
+     * Ids retenus par au moins un type (ok : du plus récent au plus ancien). Une
+     * permanente ne prend pas de place dans les autres types : faire une 3e manuelle
+     * ne touche jamais une permanente.
+     */
     private static Set<Long> retained(List<Backup> ok, Map<BackupKind, Rule> rules, LocalDateTime now,
                                       boolean serverDeleted) {
-        Set<Long> kept = new HashSet<>();
+        Set<Long> perm = keptPermanent(ok, rules.get(BackupKind.PERMANENT));
+        Set<Long> kept = new HashSet<>(serverDeleted ? Set.of() : perm);
         for (BackupKind k : BackupKind.values()) {
+            if (k == BackupKind.PERMANENT) {
+                continue;
+            }
             Rule r = rules.get(k);
             int rank = 0;
             for (Backup b : ok) {
-                if (!b.is(k)) {
+                if (!b.is(k) || perm.contains(b.getId())) {
                     continue;
                 }
                 boolean inCount = rank < r.max();
                 rank++;
-                boolean inTime = k == BackupKind.PERMANENT
-                        ? !serverDeleted
-                        : b.getCreatedAt().plusDays(r.duration()).isAfter(now);
-                if (inCount && inTime) {
+                if (inCount && b.getCreatedAt().plusDays(r.duration()).isAfter(now)) {
                     kept.add(b.getId());
                 }
             }
         }
         return kept;
+    }
+
+    /** Permanentes et sauvegardes valides d'un serveur, pour dire ce qu'une action a changé */
+    private record State(Set<Long> permanent, Set<Long> success) {}
+
+    private State state(long serverId) {
+        Set<Long> permanent = new HashSet<>();
+        Set<Long> success = new HashSet<>();
+        for (Backup b : backupRepository.findByServerTagIdAndStatusOrderByCreatedAtDesc(serverId, "SUCCESS")) {
+            success.add(b.getId());
+            if (b.is(BackupKind.PERMANENT)) {
+                permanent.add(b.getId());
+            }
+        }
+        return new State(permanent, success);
+    }
+
+    /** "demoted" : ne sont plus permanentes ; "expired" : supprimées par la rotation */
+    private void putChanges(Map<String, Object> m, State before, long serverId, Long except) {
+        State after = state(serverId);
+        List<Long> demoted = new ArrayList<>();
+        for (Long id : before.permanent()) {
+            if (!after.permanent().contains(id) && !id.equals(except)) {
+                demoted.add(id);
+            }
+        }
+        List<Long> expired = new ArrayList<>();
+        for (Long id : before.success()) {
+            if (!after.success().contains(id)) {
+                expired.add(id);
+            }
+        }
+        Collections.sort(demoted);
+        Collections.sort(expired);
+        m.put("demoted", demoted);
+        m.put("expired", expired);
     }
 
     /**
@@ -621,6 +691,7 @@ public class BackupService {
             return new Job(s.getId(), s.getNode().getId(), s.getVelocityName(),
                     EnumSet.of(permanent ? BackupKind.PERMANENT : BackupKind.MANUAL));
         });
+        State before = tx().execute(status -> state(serverId));
         String requestedBy = tx().execute(status -> accessService.player(playerId).getMinecraftUsername());
         if (!runningServers.add(job.serverId())) {
             throw new RuntimeException("Une sauvegarde de ce serveur est déjà en cours.");
@@ -636,7 +707,11 @@ public class BackupService {
         });
         try {
             Backup b = future.get(20, TimeUnit.MINUTES);
-            return tx().execute(status -> describe(backupRepository.findById(b.getId()).orElse(b)));
+            return tx().execute(status -> {
+                Map<String, Object> m = describe(backupRepository.findById(b.getId()).orElse(b));
+                putChanges(m, before, serverId, null);
+                return m;
+            });
         } catch (TimeoutException e) {
             return Map.of("status", "RUNNING", "message", "La sauvegarde continue en arrière-plan.");
         }
@@ -656,11 +731,16 @@ public class BackupService {
             if (permanent && effective(s).get(BackupKind.PERMANENT).max() <= 0) {
                 throw new RuntimeException("Les sauvegardes permanentes sont désactivées pour ce serveur.");
             }
+            State before = state(s.getId());
             b.mark(BackupKind.PERMANENT, permanent);
             backupRepository.save(b);
-            // Au-delà du max, la plus ancienne permanente n'est plus retenue
+            // Au-delà du max, la plus anciennement marquée n'est plus permanente ;
+            // retirer une permanente peut la faire expirer (autres types pleins)
             expire();
-            return describe(backupRepository.findById(backupId).orElse(b));
+            Map<String, Object> m = describe(backupRepository.findById(backupId).orElse(b));
+            m.put("maxPermanent", effective(s).get(BackupKind.PERMANENT).max());
+            putChanges(m, before, s.getId(), backupId);
+            return m;
         });
     }
 

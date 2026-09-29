@@ -96,6 +96,11 @@ public class Backup {
     @Builder.Default
     private Boolean isPermanent = false;
 
+    // Quand elle est devenue permanente : au-delà du max, c'est la plus
+    // anciennement marquée qui cesse d'être permanente
+    @Column(name = "permanent_at")
+    private LocalDateTime permanentAt;
+
     // Fixée à la suppression du serveur (sinon calculée à chaque passage)
     @Column(name = "expires_at")
     private LocalDateTime expiresAt;
@@ -116,7 +121,15 @@ public class Backup {
             case WEEKLY -> isWeekly = value;
             case MONTHLY -> isMonthly = value;
             case MANUAL -> isManual = value;
-            case PERMANENT -> isPermanent = value;
+            case PERMANENT -> {
+                if (value && !Boolean.TRUE.equals(isPermanent)) {
+                    permanentAt = LocalDateTime.now();
+                }
+                isPermanent = value;
+                if (!value) {
+                    permanentAt = null;
+                }
+            }
         }
     }
 
