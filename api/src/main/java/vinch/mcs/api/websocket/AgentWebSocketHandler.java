@@ -141,6 +141,12 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
     }
 
     public CompletableFuture<JsonNode> sendCommand(Long nodeId, String commandType, Map<String, Object> data) {
+        return sendCommand(nodeId, commandType, data, 300);
+    }
+
+    /** Comme sendCommand, avec un délai maximal choisi (sauvegardes : jusqu'à 2 h) */
+    public CompletableFuture<JsonNode> sendCommand(Long nodeId, String commandType, Map<String, Object> data,
+                                                   long timeoutSeconds) {
         WebSocketSession session = activeSessions.get(nodeId);
         if (session == null || !session.isOpen()) {
             CompletableFuture<JsonNode> failed = new CompletableFuture<>();
@@ -170,7 +176,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
         }
 
         // Timeout après 30 secondes
-        future.orTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
+        future.orTimeout(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)
                 .exceptionally(ex -> {
                     pendingCommands.remove(commandId);
                     return null;

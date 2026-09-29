@@ -173,7 +173,8 @@ public class ApiClient {
     /** Quotas, rôle admin et rang réseau (LuckPerms) -> API */
     public CompletableFuture<JsonNode> updatePlayerLimits(UUID uuid, int maxServers, int totalRamMb, int totalCpuCores,
                                                         boolean admin, String rank, String prefix,
-                                                        String nameColor) {
+                                                        String nameColor, Integer backupIntervalHours,
+                                                        Integer backupKeepLast, Integer backupKeepWeekly) {
         java.util.Map<String, Object> body = new java.util.HashMap<>();
         body.put("uuid", uuid.toString());
         body.put("maxServers", maxServers);
@@ -183,6 +184,9 @@ public class ApiClient {
         body.put("rank", rank == null ? "" : rank);
         body.put("prefix", prefix == null ? "" : prefix);
         body.put("nameColor", nameColor == null ? "" : nameColor);
+        body.put("backupIntervalHours", backupIntervalHours);
+        body.put("backupKeepLast", backupKeepLast);
+        body.put("backupKeepWeekly", backupKeepWeekly);
         return call("POST", "/api/v1/players/limits", body, Duration.ofSeconds(10));
     }
 
@@ -228,6 +232,29 @@ public class ApiClient {
     public CompletableFuture<JsonNode> console(long serverId, long playerId, String command) {
         return call("POST", "/api/v1/servers/" + serverId + "/console",
                 java.util.Map.of("playerId", playerId, "command", command), Duration.ofSeconds(30));
+    }
+
+    // ------------------------------------------------------------ sauvegardes ----
+
+    /** Sauvegarde immédiate (l'API attend la fin, jusqu'à 20 min) */
+    public CompletableFuture<JsonNode> backupNow(long serverId, long playerId) {
+        return call("POST", "/api/v1/servers/" + serverId + "/backup?playerId=" + playerId, null, Duration.ofMinutes(21));
+    }
+
+    public CompletableFuture<JsonNode> listBackups(long serverId, long playerId) {
+        return call("GET", "/api/v1/servers/" + serverId + "/backups?playerId=" + playerId, null, Duration.ofSeconds(10));
+    }
+
+    /** Politique propre à un serveur (admins) ; reset : revient à celle du rôle */
+    public CompletableFuture<JsonNode> setBackupPolicy(long serverId, long playerId, Integer intervalHours,
+                                                       Integer keepLast, Integer keepWeekly, boolean reset) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("playerId", playerId);
+        body.put("intervalHours", intervalHours);
+        body.put("keepLast", keepLast);
+        body.put("keepWeekly", keepWeekly);
+        body.put("reset", reset);
+        return call("POST", "/api/v1/servers/" + serverId + "/backup-policy", body, Duration.ofSeconds(10));
     }
 
     /** Machines et leur hôte (admins seulement, vérifié par l'API) */

@@ -62,7 +62,10 @@ public class PlayerController {
                     request.getAdmin(),
                     request.getRank(),
                     request.getPrefix(),
-                    request.getNameColor()
+                    request.getNameColor(),
+                    request.getBackupIntervalHours(),
+                    request.getBackupKeepLast(),
+                    request.getBackupKeepWeekly()
             );
             return ResponseEntity.ok(Map.of(
                     "success", true,

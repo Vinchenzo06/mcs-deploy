@@ -12,7 +12,8 @@ public class McsTabCompleter {
 
     private static final List<String> SUBCOMMANDS = List.of(
             "create", "list", "info", "join", "start", "stop", "restart", "members", "invite", "remove",
-            "leave", "public", "private", "display", "console", "move", "delete", "quota", "host"
+            "leave", "public", "private", "display", "console", "move", "delete", "quota", "host",
+            "backup", "backups"
     );
 
     private static final List<String> TYPES = List.of("PAPER", "SPIGOT", "FABRIC", "FORGE", "VANILLA");
@@ -25,7 +26,7 @@ public class McsTabCompleter {
 
     private static final Set<String> SERVER_ARG = Set.of(
             "delete", "join", "restart", "info", "members", "invite", "remove", "leave",
-            "public", "private", "display", "console", "start", "stop");
+            "public", "private", "display", "console", "start", "stop", "backup", "backups");
 
     // Serveurs du joueur (les siens + partagés en "pseudo/nom"), gardés 10 s
     private final Map<UUID, List<Cached>> cache = new ConcurrentHashMap<>();

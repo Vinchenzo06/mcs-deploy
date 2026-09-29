@@ -16,5 +16,5 @@ public interface RankSource {
      * nameColor : méta "name-color" (couleur du pseudo, ex. "green"), "" si aucune
      */
     record Meta(int maxServers, int totalRamMb, int totalCpuCores, boolean admin, String rank, String prefixJson,
-                String nameColor) {}
+                String nameColor, Integer backupIntervalHours, Integer backupKeepLast, Integer backupKeepWeekly) {}
 }

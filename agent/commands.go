@@ -31,6 +31,8 @@ func handleCommand(conn *websocket.Conn, config *Config, msgType, commandId stri
 		handleQuarantineServer(conn, commandId, msg)
 	case "console":
 		handleConsoleCommand(conn, commandId, msg)
+	case "backup_server":
+		handleBackupServer(conn, config, commandId, msg)
 	default:
 		log.Printf("Type de commande non géré : %s", msgType)
 		sendCommandError(conn, commandId, "unknown_command", "Commande inconnue : "+msgType)

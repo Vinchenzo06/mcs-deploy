@@ -27,4 +27,9 @@ public class UpdatePlayerLimitsRequest {
     private String rank;
     private String prefix;
     private String nameColor;
+
+    // Politique de sauvegarde du rôle (méta LuckPerms), null : défaut du réseau
+    private Integer backupIntervalHours;
+    private Integer backupKeepLast;
+    private Integer backupKeepWeekly;
 }

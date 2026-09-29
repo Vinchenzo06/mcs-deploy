@@ -65,7 +65,8 @@ public class PlayerService {
     }
 
     public Player updateLimits(UUID uuid, int maxServers, int totalRamMb, int totalCpuCores, Boolean admin,
-                               String rank, String prefix, String nameColor) {
+                               String rank, String prefix, String nameColor,
+                               Integer backupIntervalHours, Integer backupKeepLast, Integer backupKeepWeekly) {
         Player player = playerRepository.findByMinecraftUuid(uuid)
                 .orElseThrow(() -> new RuntimeException("Joueur introuvable : " + uuid));
 
@@ -77,6 +78,9 @@ public class PlayerService {
             player.setNetworkRank(r.isEmpty() ? null : r.substring(0, Math.min(32, r.length())));
             player.setNetworkPrefix(prefix == null || prefix.isBlank() || prefix.length() > 1024 ? null : prefix);
             player.setNameColor(ServerService.teamColor(nameColor));
+            player.setBackupIntervalHours(backupIntervalHours);
+            player.setBackupKeepLast(backupKeepLast);
+            player.setBackupKeepWeekly(backupKeepWeekly);
         }
         if (Boolean.TRUE.equals(admin) && player.getRole() != PlayerRole.ADMIN) {
             log.info("{} devient admin MCS", player.getMinecraftUsername());

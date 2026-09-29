@@ -87,6 +87,13 @@ public class Node {
     @Builder.Default
     private Boolean isRevoked = false;
 
+    // Sauvegardes : identifiants rest-server (utilisateur "node<id>") et chiffrement du dépôt
+    @Column(name = "backup_http_password", length = 64)
+    private String backupHttpPassword;
+
+    @Column(name = "backup_repo_password", length = 64)
+    private String backupRepoPassword;
+
     // Joueur propriétaire de la machine (mcs-node-owner), null si inconnu
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "owner_player_id")

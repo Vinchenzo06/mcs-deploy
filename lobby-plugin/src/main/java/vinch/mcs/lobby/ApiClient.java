@@ -205,18 +205,22 @@ public class ApiClient {
 
     public CompletableFuture<JsonNode> updatePlayerLimits(UUID uuid, int maxServers, int totalRamMb, int totalCpuCores,
                                                         boolean admin, String rank, String prefixJson,
-                                                        String nameColor) {
+                                                        String nameColor, Integer backupIntervalHours,
+                                                        Integer backupKeepLast, Integer backupKeepWeekly) {
         try {
-            Map<String, Object> body = Map.of(
-                    "uuid", uuid.toString(),
-                    "maxServers", maxServers,
-                    "totalRamMb", totalRamMb,
-                    "totalCpuCores", totalCpuCores,
-                    "admin", admin,
-                    "rank", rank == null ? "" : rank,
-                    "prefix", prefixJson == null ? "" : prefixJson,
-                    "nameColor", nameColor == null ? "" : nameColor
-            );
+            // HashMap : les valeurs de sauvegarde peuvent être nulles (Map.of les refuse)
+            Map<String, Object> body = new java.util.HashMap<>();
+            body.put("uuid", uuid.toString());
+            body.put("maxServers", maxServers);
+            body.put("totalRamMb", totalRamMb);
+            body.put("totalCpuCores", totalCpuCores);
+            body.put("admin", admin);
+            body.put("rank", rank == null ? "" : rank);
+            body.put("prefix", prefixJson == null ? "" : prefixJson);
+            body.put("nameColor", nameColor == null ? "" : nameColor);
+            body.put("backupIntervalHours", backupIntervalHours);
+            body.put("backupKeepLast", backupKeepLast);
+            body.put("backupKeepWeekly", backupKeepWeekly);
 
             String json = objectMapper.writeValueAsString(body);
 

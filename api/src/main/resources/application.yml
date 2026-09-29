@@ -43,4 +43,12 @@ mcs:
     reserve-percent: 10
   velocity:
     url: http://127.0.0.1:8082
-    plugin-key: ${VELOCITY_PLUGIN_KEY}
+    plugin-key: ${VELOCITY_PLUGIN_KEY}  backup:
+    # Activé par "sudo mcs-add-backup" sur le VPS (MCS_BACKUP_ENABLED dans api.env)
+    enabled: ${MCS_BACKUP_ENABLED:false}
+    # Serveur de sauvegarde, joint par les machines à travers le VPS (wg-mcs + tunnel SSH)
+    repo-base: http://10.99.0.1:8100
+    # Politique par défaut ; les rôles (méta LuckPerms) et les admins la remplacent
+    default-interval-hours: 24
+    default-keep-last: 3
+    default-keep-weekly: 4

@@ -231,9 +231,40 @@ seulement). Les serveurs de jeu n'y sont **jamais** branchés : leur propriétai
 fichiers, donc au mot de passe. Titre d'un groupe : `lp group vip meta setprefix 20 "&aᴠɪᴘ "`
 (dans `sudo mcs-rcon`). L'étape `bootstrap` ne réécrit plus les quotas et préfixes déjà réglés.
 
+## Sauvegardes
+
+Un **serveur de sauvegarde** (chez toi) garde des sauvegardes chiffrées (restic) de tous
+les serveurs joueurs et du VPS. Il ouvre lui-même un tunnel SSH vers le VPS : rien à
+ouvrir sur ta box, et les volontaires ne voient jamais son adresse.
+
+```
+machine volontaire ──wg-mcs──▶ VPS 10.99.0.1:8100 ──tunnel SSH──▶ serveur de sauvegarde (rest-server)
+```
+
+Mise en place, une fois :
+1. Sur le VPS : `sudo mcs-add-backup` (affiche une commande avec un code).
+2. Sur le serveur de sauvegarde (Ubuntu) : la commande affichée,
+   `curl ... backup-setup.sh -o backup-setup.sh && sudo bash backup-setup.sh <CODE>`.
+   Il demande le dossier de stockage (défaut `/srv/mcs-backup`).
+
+- Chaque machine a son dépôt (`node<id>`), en **ajout seul** : elle ne peut ni lire les
+  autres dépôts ni effacer ses sauvegardes. Le tri se fait sur le serveur de sauvegarde.
+- Pendant la copie, l'écriture du monde est suspendue quelques secondes (`save-off`), le
+  serveur ne s'arrête pas. Un serveur arrêté est sauvegardé une fois après son arrêt.
+- **Politique** : réglage du serveur (admins) > rôle du propriétaire (méta LuckPerms
+  `backup-interval` en heures, `backup-keep-last`, `backup-keep-weekly`) > défaut : chaque
+  jour, les 3 dernières + 1 par semaine pendant 4 semaines. Serveur supprimé : ses
+  sauvegardes restent 30 jours.
+- En jeu : `/mcs backup <serveur>` (maintenant), `/mcs backups <serveur>` (historique),
+  admins : `/mcs backup policy <serveur> <heures|auto> [dernières] [semaines]`.
+- Le VPS (bases, `/etc/mcs`, lobby, proxy) est sauvegardé chaque nuit (`sudo mcs-backup-vps`).
+- État : `sudo mcs-backup-status` (sur le VPS et sur le serveur de sauvegarde).
+- **À garder précieusement** : `/etc/mcs-backup` sur le serveur de sauvegarde (mots de
+  passe des dépôts). Le VPS en a aussi une copie.
+
 ## Limites connues
 
-- La base PostgreSQL et `/etc/mcs/secrets.env` ne sont que sur le VPS : **à sauvegarder ailleurs**.
+- Sans serveur de sauvegarde (`mcs-add-backup`), la base et `/etc/mcs/secrets.env` ne sont que sur le VPS.
 - L'API est en HTTP clair sur le port 8081 (protégée par clé). À terme : TLS.
 - Le code de jumelage contient des secrets et reste valable : à terme, un code
   à usage unique qui expire.

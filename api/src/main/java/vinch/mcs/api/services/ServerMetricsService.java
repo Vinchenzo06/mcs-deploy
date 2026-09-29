@@ -45,6 +45,7 @@ public class ServerMetricsService {
     private final ServerRepository serverRepository;
     private final VelocityClient velocityClient;
     private final AgentWebSocketHandler agentWebSocketHandler;
+    private final vinch.mcs.api.repositories.BackupRepository backupRepository;
 
     private final Map<Long, Metrics> metrics = new ConcurrentHashMap<>();
     private final Map<Long, String> health = new ConcurrentHashMap<>();
@@ -144,6 +145,8 @@ public class ServerMetricsService {
         out.put("allocatedRamMb", server.getAllocatedRamMb());
         out.put("allocatedCpuCores", server.getAllocatedCpuCores());
         out.put("allocatedStorageMb", server.getAllocatedStorageMb());
+        backupRepository.findFirstByServerIdAndStatusOrderByCreatedAtDesc(server.getId(), "SUCCESS")
+                .ifPresent(b -> out.put("lastBackupAt", b.getCreatedAt().toString()));
         out.put("nodeId", server.getNode() != null ? server.getNode().getId() : null);
         out.put("lastStartedAt", server.getLastStartedAt() != null ? server.getLastStartedAt().toString() : null);
         out.put("players", velocityClient.getPlayerCounts().getOrDefault(server.getVelocityName(), 0));

@@ -61,7 +61,8 @@ public final class McsLobbyPlugin extends JavaPlugin {
                 })
                 .thenCompose(meta -> apiClient.updatePlayerLimits(
                         uuid, meta.maxServers(), meta.totalRamMb(), meta.totalCpuCores(), meta.admin(),
-                        meta.rank(), meta.prefixJson(), meta.nameColor()))
+                        meta.rank(), meta.prefixJson(), meta.nameColor(),
+                        meta.backupIntervalHours(), meta.backupKeepLast(), meta.backupKeepWeekly()))
                 .handle((result, error) -> {
                     if (error != null) {
                         getLogger().warning("Synchronisation des limites de " + name + " : " + error.getMessage());

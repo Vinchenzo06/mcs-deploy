@@ -23,7 +23,7 @@ public class LuckPermsBridge implements RankSource {
     public CompletableFuture<Meta> load(UUID uuid) {
         return luckPerms.getUserManager().loadUser(uuid).thenApply(user -> {
             if (user == null) {
-                return new Meta(1, 1024, 1, false, "default", "", "");
+                return new Meta(1, 1024, 1, false, "default", "", "", null, null, null);
             }
             CachedMetaData meta = user.getCachedData().getMetaData();
             boolean admin = user.getCachedData().getPermissionData().checkPermission("mcs.admin").asBoolean();
@@ -34,7 +34,10 @@ public class LuckPermsBridge implements RankSource {
                     admin,
                     user.getPrimaryGroup(),
                     toJson(meta.getPrefix()),
-                    meta.getMetaValue("name-color") == null ? "" : meta.getMetaValue("name-color"));
+                    meta.getMetaValue("name-color") == null ? "" : meta.getMetaValue("name-color"),
+                    parseOrNull(meta.getMetaValue("backup-interval")),
+                    parseOrNull(meta.getMetaValue("backup-keep-last")),
+                    parseOrNull(meta.getMetaValue("backup-keep-weekly")));
         });
     }
 
@@ -59,6 +62,18 @@ public class LuckPermsBridge implements RankSource {
                 ? LegacyComponentSerializer.legacySection().deserialize(legacy)
                 : LegacyComponentSerializer.legacyAmpersand().deserialize(legacy);
         return GsonComponentSerializer.gson().serialize(c);
+    }
+
+    /** Méta entière facultative (politique de sauvegarde du rôle) */
+    private static Integer parseOrNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private static int parse(String value, int def) {

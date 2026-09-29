@@ -65,6 +65,16 @@ public class Player {
     @Column(name = "network_prefix", length = 1024)
     private String networkPrefix;
 
+    // Politique de sauvegarde de ses serveurs (méta LuckPerms de son rôle), null : défaut
+    @Column(name = "backup_interval_hours")
+    private Integer backupIntervalHours;
+
+    @Column(name = "backup_keep_last")
+    private Integer backupKeepLast;
+
+    @Column(name = "backup_keep_weekly")
+    private Integer backupKeepWeekly;
+
     // Couleur du pseudo (nom de couleur Minecraft : gray, green, gold...)
     @Column(name = "name_color", length = 16)
     private String nameColor;

@@ -15,4 +15,10 @@ public interface BackupRepository extends JpaRepository<Backup, Long> {
     Optional<Backup> findFirstByServerIdAndIsCompleteTrueOrderByCreatedAtDesc(Long serverId);
 
     long countByServerId(Long serverId);
+
+    List<Backup> findTop15ByServerIdOrderByCreatedAtDesc(Long serverId);
+
+    Optional<Backup> findFirstByServerIdAndStatusOrderByCreatedAtDesc(Long serverId, String status);
+
+    Optional<Backup> findFirstByServerIdOrderByCreatedAtDesc(Long serverId);
 }

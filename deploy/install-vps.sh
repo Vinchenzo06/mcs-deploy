@@ -267,7 +267,7 @@ load_config() {
     source "$SECRETS_FILE"
   fi
   local k
-  for k in DB_PASSWORD LOBBY_API_KEY VELOCITY_PLUGIN_KEY RCON_PASSWORD FORWARDING_SECRET IP_MASK_KEY LP_DB_PASSWORD; do
+  for k in DB_PASSWORD LOBBY_API_KEY VELOCITY_PLUGIN_KEY RCON_PASSWORD FORWARDING_SECRET IP_MASK_KEY LP_DB_PASSWORD BACKUP_VPS_HTTP_PASSWORD BACKUP_VPS_REPO_PASSWORD; do
     save_secret "$k" "${!k:-$(gen_secret)}"
   done
 
@@ -775,6 +775,230 @@ echo "✔ Machine $id révoquée : jeton refusé, tunnels supprimés."
 echo "  Ses serveurs restent en base : supprime-les avec /mcs delete."
 SHEOF
   chmod 755 /usr/local/bin/mcs-remove-node
+
+  # ===================================================== sauvegardes (lot 26) ==
+  # Serveur de sauvegarde à la maison : il ouvre lui-même un tunnel SSH vers le
+  # VPS (rien à ouvrir chez toi) et publie son rest-server sur 10.99.0.1:8100,
+  # joignable seulement par les machines (wg-mcs) et le VPS.
+  mkdir -p "$ETC_DIR/backup"
+  chmod 700 "$ETC_DIR/backup"
+
+  # mcs-add-backup : prépare le VPS et affiche le code pour backup-setup.sh
+  cat > /usr/local/bin/mcs-add-backup <<'SHEOF'
+#!/usr/bin/env bash
+# sudo mcs-add-backup
+#   Prépare le VPS pour le serveur de sauvegarde et affiche la commande à lancer
+#   sur ce serveur (à la maison). Relancer = nouvelle clé (l'ancienne ne marche plus).
+set -euo pipefail
+[[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
+# shellcheck disable=SC1091
+source /etc/mcs/runtime.env
+if [[ -f /etc/mcs/deploy.env ]]; then
+  # shellcheck disable=SC1091
+  source /etc/mcs/deploy.env
+fi
+: "${MCS_REPO:=Vinchenzo06/mcs-deploy}" "${MCS_BRANCH:=main}"
+dir=/etc/mcs/backup
+listen=10.99.0.1:8100
+ip -4 addr show wg-mcs 2>/dev/null | grep -q '10\.99\.0\.1/' \
+  || { echo "Tunnel wg-mcs absent : lance d'abord 'sudo mcs-deploy egress'"; exit 1; }
+
+# Utilisateur SSH dédié : il ne peut que publier 10.99.0.1:8100 et lire l'export
+if ! id mcs-backup &>/dev/null; then
+  useradd --system --create-home --home-dir /home/mcs-backup --shell /bin/sh mcs-backup
+fi
+passwd -l mcs-backup >/dev/null 2>&1 || true
+mkdir -p "$dir" && chmod 700 "$dir"
+rm -f "$dir/id_ed25519" "$dir/id_ed25519.pub"
+ssh-keygen -q -t ed25519 -N '' -C mcs-backup -f "$dir/id_ed25519"
+install -d -o mcs-backup -g mcs-backup -m 700 /home/mcs-backup/.ssh
+printf 'restrict,port-forwarding,command="cat /home/mcs-backup/export.json" %s\n' "$(cat "$dir/id_ed25519.pub")" \
+  > /home/mcs-backup/.ssh/authorized_keys
+chown mcs-backup:mcs-backup /home/mcs-backup/.ssh/authorized_keys
+chmod 600 /home/mcs-backup/.ssh/authorized_keys
+
+conf=/etc/ssh/sshd_config.d/60-mcs-backup.conf
+cat > "$conf" <<EOF
+# Généré par mcs-add-backup : le serveur de sauvegarde publie seulement $listen
+Match User mcs-backup
+    AllowTcpForwarding remote
+    GatewayPorts clientspecified
+    PermitListen $listen
+    PermitOpen none
+    X11Forwarding no
+    AllowAgentForwarding no
+    PermitTTY no
+    ClientAliveInterval 30
+    ClientAliveCountMax 3
+Match all
+EOF
+if ! sshd -t 2>/tmp/mcs-sshd.err; then
+  rm -f "$conf"
+  echo "Configuration SSH refusée, rien n'est changé :"; cat /tmp/mcs-sshd.err; exit 1
+fi
+systemctl reload ssh 2>/dev/null || systemctl reload sshd
+if sshd -T -C user=mcs-backup,host=x,addr=127.0.0.1 2>/dev/null | grep -qi '^allowusers'; then
+  echo "! AllowUsers est utilisé dans ta config SSH : ajoute-y mcs-backup, sinon le tunnel sera refusé"
+fi
+port=$(sshd -T 2>/dev/null | awk '$1 == "port" {print $2; exit}')
+: "${port:=22}"
+
+ufw allow in on wg-mcs to 10.99.0.1 port 8100 proto tcp comment 'sauvegardes des machines' >/dev/null 2>&1 || true
+
+touch "$dir/enabled"
+if grep -q '^MCS_BACKUP_ENABLED=' /etc/mcs/api.env 2>/dev/null; then
+  sed -i 's/^MCS_BACKUP_ENABLED=.*/MCS_BACKUP_ENABLED=true/' /etc/mcs/api.env
+else
+  echo "MCS_BACKUP_ENABLED=true" >> /etc/mcs/api.env
+fi
+systemctl restart mcs-api
+mcs-backup-export || true
+
+if [[ "$port" == "22" ]]; then host_id=$VPS_IP; else host_id="[$VPS_IP]:$port"; fi
+known=$(for f in /etc/ssh/ssh_host_*_key.pub; do printf '%s %s\n' "$host_id" "$(cut -d' ' -f1,2 "$f")"; done)
+code=$(jq -cn --arg vps "$VPS_IP" --argjson port "$port" --arg key "$(base64 -w0 "$dir/id_ed25519")" \
+  --arg known "$known" --arg listen "$listen" \
+  '{v: 1, vps: $vps, ssh_port: $port, user: "mcs-backup", key: $key, known_hosts: $known, listen: $listen}' | base64 -w0)
+echo
+echo "VPS prêt. Sur le serveur de sauvegarde (à la maison), lance :"
+echo
+echo "curl -fsSL https://raw.githubusercontent.com/$MCS_REPO/$MCS_BRANCH/deploy/backup-setup.sh -o backup-setup.sh && sudo bash backup-setup.sh $code"
+echo
+echo "Ce code contient la clé du tunnel : ne le donne à personne. En cas de fuite, relance sudo mcs-add-backup."
+SHEOF
+  chmod 755 /usr/local/bin/mcs-add-backup
+
+  # mcs-backup-export : identifiants des dépôts et politique de rétention, lus
+  # par le serveur de sauvegarde (clé SSH, commande forcée). Toutes les 2 min.
+  cat > /usr/local/bin/mcs-backup-export <<'SHEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ -f /etc/mcs/backup/enabled ]] || exit 0
+# shellcheck disable=SC1091
+source /etc/mcs/secrets.env
+id mcs-backup &>/dev/null || exit 0
+psql=(runuser -u postgres -- psql -qtA -d mcs_db -v ON_ERROR_STOP=1)
+# Rétention par serveur : réglage du serveur > méta du rôle du propriétaire > défaut (3 dernières, 4 semaines)
+nodes=$("${psql[@]}" -c "
+  SELECT COALESCE(json_agg(json_build_object(
+      'user', 'node' || n.id,
+      'http_password', n.backup_http_password,
+      'repo_password', n.backup_repo_password,
+      'policies', COALESCE((
+          SELECT json_agg(json_build_object(
+              'tag', 'server-' || s.id,
+              'keep_last', COALESCE(s.backup_keep_last, p.backup_keep_last, 3),
+              'keep_weekly', COALESCE(s.backup_keep_weekly, p.backup_keep_weekly, 4)))
+          FROM servers s JOIN players p ON p.id = s.owner_id
+          WHERE s.node_id = n.id), '[]'::json)) ORDER BY n.id), '[]'::json)
+  FROM nodes n
+  WHERE n.backup_http_password IS NOT NULL AND n.backup_repo_password IS NOT NULL")
+tmp=$(mktemp)
+jq -n --argjson nodes "$nodes" --arg vh "$BACKUP_VPS_HTTP_PASSWORD" --arg vr "$BACKUP_VPS_REPO_PASSWORD" \
+  '{version: 1, generated: (now | todate),
+    repos: ($nodes + [{user: "vps", http_password: $vh, repo_password: $vr,
+      policies: [{tag: "vps", keep_last: 3, keep_daily: 7, keep_weekly: 4}]}])}' > "$tmp"
+install -o root -g mcs-backup -m 640 "$tmp" /home/mcs-backup/export.json
+rm -f "$tmp"
+SHEOF
+  chmod 700 /usr/local/bin/mcs-backup-export
+
+  # mcs-backup-vps : sauvegarde du VPS lui-même (bases, secrets, lobby, proxy)
+  cat > /usr/local/bin/mcs-backup-vps <<'SHEOF'
+#!/usr/bin/env bash
+# sudo mcs-backup-vps : sauvegarde du VPS (automatique chaque nuit)
+set -euo pipefail
+[[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
+[[ -f /etc/mcs/backup/enabled ]] || { echo "Sauvegardes non configurées (sudo mcs-add-backup)"; exit 0; }
+# shellcheck disable=SC1091
+source /etc/mcs/secrets.env
+command -v restic >/dev/null || { echo "restic absent : sudo mcs-deploy system"; exit 1; }
+dumps=/var/backups/mcs
+install -d -m 700 "$dumps"
+for db in mcs_db luckperms; do
+  if runuser -u postgres -- psql -qtA -c "SELECT 1 FROM pg_database WHERE datname = '$db'" | grep -q 1; then
+    runuser -u postgres -- pg_dump -Fc "$db" > "$dumps/$db.dump.tmp" && mv "$dumps/$db.dump.tmp" "$dumps/$db.dump"
+  fi
+done
+export RESTIC_REPOSITORY="rest:http://vps:${BACKUP_VPS_HTTP_PASSWORD}@10.99.0.1:8100/vps/"
+export RESTIC_PASSWORD="$BACKUP_VPS_REPO_PASSWORD"
+export RESTIC_CACHE_DIR=/var/cache/mcs-restic
+restic cat config >/dev/null 2>&1 || restic init
+paths=(/etc/mcs "$dumps")
+for p in /opt/minecraft/lobby /opt/minecraft/velocity /etc/caddy /etc/ssh/sshd_config.d; do
+  [[ -e "$p" ]] && paths+=("$p")
+done
+restic backup --tag vps --host vps \
+  --exclude '/opt/minecraft/*/logs' --exclude '/opt/minecraft/*/cache' \
+  --exclude '/opt/minecraft/lobby/libraries' --exclude '/opt/minecraft/lobby/versions' \
+  --exclude '/opt/minecraft/*/*.jar' \
+  "${paths[@]}"
+echo "✔ Sauvegarde du VPS terminée"
+SHEOF
+  chmod 700 /usr/local/bin/mcs-backup-vps
+
+  # mcs-backup-status : état des sauvegardes vu du VPS
+  cat > /usr/local/bin/mcs-backup-status <<'SHEOF'
+#!/usr/bin/env bash
+set -uo pipefail
+[[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
+if [[ ! -f /etc/mcs/backup/enabled ]]; then
+  echo "Sauvegardes non configurées : sudo mcs-add-backup"; exit 0
+fi
+echo "=== Tunnel du serveur de sauvegarde ==="
+if ss -ltn 'sport = :8100' | grep -q '10.99.0.1:8100'; then
+  echo "  ● connecté (10.99.0.1:8100)"
+else
+  echo "  ○ déconnecté : vérifie le serveur de sauvegarde (sudo mcs-backup-status là-bas)"
+fi
+echo
+echo "=== Dernières sauvegardes des serveurs ==="
+runuser -u postgres -- psql -qtA -d mcs_db -c "
+  SELECT '  ' || to_char(b.created_at, 'MM-DD HH24:MI') || '  ' || rpad(s.velocity_name, 28) || ' ' || rpad(b.status, 8)
+      || COALESCE(' +' || b.size_mb || ' Mo / ' || b.total_mb || ' Mo', '') || COALESCE('  ' || left(b.message, 60), '')
+  FROM backups b JOIN servers s ON s.id = b.server_id ORDER BY b.created_at DESC LIMIT 15" 2>/dev/null
+echo
+echo "=== Sauvegarde du VPS ==="
+journalctl -u mcs-backup-vps --no-pager -n 3 -o cat 2>/dev/null | sed 's/^/  /'
+SHEOF
+  chmod 755 /usr/local/bin/mcs-backup-status
+
+  cat > /etc/systemd/system/mcs-backup-export.service <<'EOF'
+[Unit]
+Description=MCS - export des sauvegardes pour le serveur de sauvegarde
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mcs-backup-export
+EOF
+  cat > /etc/systemd/system/mcs-backup-export.timer <<'EOF'
+[Unit]
+Description=MCS - export des sauvegardes (toutes les 2 min)
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+[Install]
+WantedBy=timers.target
+EOF
+  cat > /etc/systemd/system/mcs-backup-vps.service <<'EOF'
+[Unit]
+Description=MCS - sauvegarde du VPS
+After=network-online.target postgresql.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mcs-backup-vps
+EOF
+  cat > /etc/systemd/system/mcs-backup-vps.timer <<'EOF'
+[Unit]
+Description=MCS - sauvegarde du VPS chaque nuit
+[Timer]
+OnCalendar=*-*-* 03:40
+RandomizedDelaySec=15min
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now mcs-backup-export.timer mcs-backup-vps.timer >/dev/null 2>&1 || true
 }
 
 # =============================================================== étapes =====
@@ -782,7 +1006,7 @@ step_system() {
   step "Système de base"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
-  apt-get install -y -qq git curl wget jq unzip gpg ca-certificates ufw python3 openssl iproute2 >/dev/null
+  apt-get install -y -qq git curl wget jq unzip gpg ca-certificates ufw python3 openssl iproute2 restic >/dev/null
   timedatectl set-timezone "$TIMEZONE" 2>/dev/null || warn "Fuseau horaire non modifié"
 
   id "$MC_USER" &>/dev/null || useradd --system --home-dir "$MC_ROOT" --shell /usr/sbin/nologin "$MC_USER"
@@ -912,6 +1136,7 @@ MCS_PORTS_START=$PORT_START
 MCS_PORTS_END=$PORT_END
 MCS_PORTS_PER_NODE=$NODE_PORTS
 SERVER_ADDRESS=$API_BIND
+MCS_BACKUP_ENABLED=$([[ -f "$ETC_DIR/backup/enabled" ]] && echo true || echo false)
 EOF
   chmod 600 "$ETC_DIR/api.env"
 
@@ -1276,6 +1501,8 @@ step_firewall() {
       ufw route insert 1 deny in on wg-mcs to "$net" comment 'pas de réseau privé depuis les serveurs' >/dev/null
     done
     ufw route allow in on wg-mcs out on "$pubif" comment 'sortie Internet des serveurs' >/dev/null
+    # Sauvegardes : les machines joignent le serveur de sauvegarde par le VPS
+    ufw allow in on wg-mcs to 10.99.0.1 port 8100 proto tcp comment 'sauvegardes des machines' >/dev/null
   else
     warn "Interface publique introuvable : sortie des serveurs non autorisée dans ufw"
   fi
@@ -1321,6 +1548,10 @@ bootstrap_luckperms() {
       cmds+=("lp group $g meta set name-color gray")
     fi
   done
+  # Sauvegardes par rôle : fréquence (h), dernières gardées, semaines gardées
+  lp_has default "meta.backup-interval." || cmds+=("lp group default meta set backup-interval 24")
+  lp_has default "meta.backup-keep-last." || cmds+=("lp group default meta set backup-keep-last 3")
+  lp_has default "meta.backup-keep-weekly." || cmds+=("lp group default meta set backup-keep-weekly 4")
   cmds+=("lp group admin permission set mcs.admin true"
          "lp group admin permission set luckperms.* true")
 
@@ -1364,6 +1595,7 @@ step_summary() {
     2. Te connecter une fois en jeu, puis : sudo mcs-admin <ton_pseudo>
 
   Outils : sudo mcs-status | sudo mcs-rcon "<commande>" | sudo mcs-remove-node <id>
+  Sauvegardes : sudo mcs-add-backup (une fois) | sudo mcs-backup-status | sudo mcs-backup-vps
 
 EOF
 }

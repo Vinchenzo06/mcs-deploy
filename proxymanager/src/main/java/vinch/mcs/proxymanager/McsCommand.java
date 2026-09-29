@@ -113,6 +113,8 @@ public class McsCommand implements SimpleCommand {
             case "console" -> handleConsole(player, args);
             case "display" -> handleDisplay(player, args);
             case "host" -> handleHost(player, args);
+            case "backup" -> handleBackup(player, args);
+            case "backups" -> handleBackups(player, args);
             case "move" -> handleMove(player, args);
             default -> sendUsage(player);
         }
@@ -379,6 +381,9 @@ public class McsCommand implements SimpleCommand {
                 "Exécute une commande sur le serveur, ex. : whitelist add Bob"));
         player.sendMessage(helpLine("/mcs move <joueur> <serveur>", "/mcs move ", "Amener un joueur",
                 "Hébergeur de la machine et admins : envoie un joueur\nsur le serveur, une seule fois (sans lui donner d'accès)"));
+        player.sendMessage(helpLine("/mcs backup|backups <serveur>", "/mcs backups ", "Sauvegardes",
+                "Sauvegarder maintenant, ou voir l'historique.\n"
+                        + "Admins : /mcs backup policy <serveur> <heures|auto> [dernières] [semaines]"));
         player.sendMessage(helpLine("/mcs host [list|set|remove]", "/mcs host ", "Hôtes (admins)",
                 "Admins : choisir le joueur hôte de chaque machine.\n"
                         + "Il gère les serveurs de SA machine seulement (titre ʜᴏsᴛ)."));
@@ -940,6 +945,136 @@ public class McsCommand implements SimpleCommand {
 
     // ============================================================ hôtes (admins) ====
 
+    // ============================================================ sauvegardes ====
+
+    private void handleBackup(Player player, String[] args) {
+        if (args.length >= 2 && "policy".equalsIgnoreCase(args[1])) {
+            handleBackupPolicy(player, args);
+            return;
+        }
+        if (args.length != 2) {
+            usage(player, "/mcs backup <serveur>", "/mcs backup ");
+            return;
+        }
+        withServer(player, args[1], t -> {
+            if (!t.can("POWER")) {
+                failure(player, text("Tu n'as pas le droit de sauvegarder ce serveur."));
+                return;
+            }
+            pending(player, text("Sauvegarde de ").append(Component.text(t.ref(), NamedTextColor.WHITE))
+                    .append(text("… (le monde est figé quelques secondes)")));
+            afterApi(player, apiClient.backupNow(t.id(), t.playerId()), t.ref(), r -> {
+                String status = r.path("status").asText("");
+                if ("SUCCESS".equals(status)) {
+                    success(player, text("").append(serverName(t.ref())).append(text(" est sauvegardé.")));
+                    player.sendMessage(Component.text("   " + sizeOrDash(r.path("addedMb")) + " nouveaux envoyés  ·  "
+                            + sizeOrDash(r.path("totalMb")) + " au total", NamedTextColor.GRAY));
+                } else if ("RUNNING".equals(status)) {
+                    notice(player, text("La sauvegarde de " + t.ref() + " continue en arrière-plan."));
+                } else {
+                    failure(player, text("Sauvegarde échouée : " + r.path("message").asText("erreur inconnue")));
+                }
+                player.sendMessage(buttons(button("Historique", NamedTextColor.AQUA, "/mcs backups " + t.ref(),
+                        "Sauvegardes de " + t.ref())));
+            });
+        });
+    }
+
+    private static String sizeOrDash(JsonNode mb) {
+        return mb == null || mb.isNull() || mb.isMissingNode() ? "?" : size(mb.asLong());
+    }
+
+    private void handleBackups(Player player, String[] args) {
+        if (args.length != 2) {
+            usage(player, "/mcs backups <serveur>", "/mcs backups ");
+            return;
+        }
+        withServer(player, args[1], t -> afterApi(player, apiClient.listBackups(t.id(), t.playerId()), t.ref(),
+                r -> sendBackups(player, t, r)));
+    }
+
+    private void sendBackups(Player player, Target t, JsonNode r) {
+        String ref = t.ref();
+        player.sendMessage(Component.empty());
+        player.sendMessage(header("Sauvegardes de " + ref));
+        if (!r.path("enabled").asBoolean(false)) {
+            player.sendMessage(Component.text(" Les sauvegardes ne sont pas encore configurées sur ce réseau.",
+                    NamedTextColor.GOLD));
+        }
+        int interval = r.path("intervalHours").asInt(24);
+        String every = interval <= 0 ? "jamais (automatique coupé)"
+                : interval % 24 == 0 ? (interval == 24 ? "chaque jour" : "tous les " + interval / 24 + " jours")
+                : "toutes les " + interval + " h";
+        player.sendMessage(Component.text(" Automatique : ", NamedTextColor.GRAY)
+                .append(Component.text(every, NamedTextColor.WHITE))
+                .append(Component.text("  ·  gardées : " + r.path("keepLast").asInt() + " dernières + 1 par semaine pendant "
+                        + r.path("keepWeekly").asInt() + " sem.", NamedTextColor.GRAY))
+                .hoverEvent(HoverEvent.showText(Component.text("Réglage : " + r.path("policySource").asText("défaut")
+                        + "\nLes admins peuvent le changer : /mcs backup policy", NamedTextColor.GRAY))));
+
+        JsonNode list = r.path("backups");
+        if (list.size() == 0) {
+            player.sendMessage(Component.text(" Aucune sauvegarde pour l'instant.", NamedTextColor.GRAY));
+        }
+        for (JsonNode b : list) {
+            String status = b.path("status").asText("?");
+            String ago = b.hasNonNull("createdAt") ? uptime(b.get("createdAt").asText()) : null;
+            Component icon = switch (status) {
+                case "SUCCESS" -> Component.text("✔", NamedTextColor.GREEN);
+                case "RUNNING" -> Component.text("◐", NamedTextColor.YELLOW);
+                default -> Component.text("✖", NamedTextColor.RED);
+            };
+            Component line = Component.text(" ").append(icon)
+                    .append(Component.text(" il y a " + (ago == null ? "?" : ago), NamedTextColor.WHITE))
+                    .append(Component.text("  " + ("MANUAL".equals(b.path("type").asText()) ? "manuelle"
+                            + (b.hasNonNull("requestedBy") ? " (" + b.get("requestedBy").asText() + ")" : "")
+                            : "auto"), NamedTextColor.GRAY));
+            if ("SUCCESS".equals(status)) {
+                line = line.append(Component.text("  +" + sizeOrDash(b.path("addedMb")) + " / " + sizeOrDash(b.path("totalMb")),
+                        NamedTextColor.DARK_GRAY));
+            } else if ("FAILED".equals(status)) {
+                line = line.hoverEvent(HoverEvent.showText(Component.text(b.path("message").asText("erreur"),
+                        NamedTextColor.RED)));
+            }
+            player.sendMessage(line);
+        }
+        if (t.can("POWER")) {
+            player.sendMessage(buttons(button("Sauvegarder maintenant", NamedTextColor.GREEN, "/mcs backup " + ref,
+                    "Sauvegarder " + ref + " maintenant")));
+        }
+    }
+
+    /** /mcs backup policy <serveur> <heures|auto> [dernières] [semaines] (admins) */
+    private void handleBackupPolicy(Player player, String[] args) {
+        if (args.length < 4 || args.length > 6) {
+            usage(player, "/mcs backup policy <serveur> <heures|auto> [dernières] [semaines]", "/mcs backup policy ");
+            send(player, Component.text("Ex. : /mcs backup policy survie 6 5 8  ·  0 heure = pas d'automatique  ·  "
+                    + "auto = politique du rôle du propriétaire", NamedTextColor.GRAY));
+            return;
+        }
+        boolean reset = "auto".equalsIgnoreCase(args[3]);
+        Integer hours;
+        Integer keepLast;
+        Integer keepWeekly;
+        try {
+            hours = reset ? null : Integer.valueOf(args[3]);
+            keepLast = args.length >= 5 ? Integer.valueOf(args[4]) : null;
+            keepWeekly = args.length == 6 ? Integer.valueOf(args[5]) : null;
+        } catch (NumberFormatException e) {
+            failure(player, text("Nombres attendus : heures, dernières sauvegardes gardées, semaines gardées."));
+            return;
+        }
+        withServer(player, args[2], t -> afterApi(player,
+                apiClient.setBackupPolicy(t.id(), t.playerId(), hours, keepLast, keepWeekly, reset), t.ref(),
+                r -> {
+                    int h = r.path("intervalHours").asInt();
+                    success(player, text("Sauvegardes de ").append(serverName(t.ref())).append(text(" : "
+                            + (h <= 0 ? "pas d'automatique" : "toutes les " + h + " h") + ", "
+                            + r.path("keepLast").asInt() + " dernières + " + r.path("keepWeekly").asInt()
+                            + " semaines (" + r.path("policySource").asText() + ").")));
+                }));
+    }
+
     private void handleHost(Player player, String[] args) {
         String sub = args.length < 2 ? "list" : args[1].toLowerCase(Locale.ROOT);
         switch (sub) {
@@ -1230,6 +1365,20 @@ public class McsCommand implements SimpleCommand {
         if (!measured && running) {
             player.sendMessage(Component.text(" Mesures disponibles dans moins de 30 s", NamedTextColor.DARK_GRAY));
         }
+
+        // Dernière sauvegarde
+        String backupAgo = s.hasNonNull("lastBackupAt") ? uptime(s.get("lastBackupAt").asText()) : null;
+        Component backupLine = Component.text(" Sauvegarde : ", NamedTextColor.GRAY)
+                .append(backupAgo == null
+                        ? Component.text("aucune pour l'instant", NamedTextColor.DARK_GRAY)
+                        : Component.text("il y a " + backupAgo, NamedTextColor.WHITE));
+        if (t.can("POWER")) {
+            backupLine = backupLine.append(text("  "))
+                    .append(button("Sauvegarder", NamedTextColor.GREEN, "/mcs backup " + name, "Sauvegarder " + name + " maintenant"))
+                    .append(text(" "))
+                    .append(button("Historique", NamedTextColor.AQUA, "/mcs backups " + name, "Sauvegardes de " + name));
+        }
+        player.sendMessage(backupLine);
 
         // Actions, selon les droits du joueur
         Component actions = Component.text(" ");

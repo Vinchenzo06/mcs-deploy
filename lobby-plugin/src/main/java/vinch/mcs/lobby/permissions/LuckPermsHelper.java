@@ -38,12 +38,12 @@ public class LuckPermsHelper {
      */
     public CompletableFuture<UserMeta> loadUserMeta(UUID uuid) {
         if (!enabled) {
-            return CompletableFuture.completedFuture(new UserMeta(1, 1024, 1, false, "default", "", ""));
+            return CompletableFuture.completedFuture(new UserMeta(1, 1024, 1, false, "default", "", "", null, null, null));
         }
 
         return api.getUserManager().loadUser(uuid).thenApply(user -> {
             if (user == null) {
-                return new UserMeta(1, 1024, 1, false, "default", "", "");
+                return new UserMeta(1, 1024, 1, false, "default", "", "", null, null, null);
             }
 
             CachedMetaData meta = user.getCachedData().getMetaData();
@@ -68,8 +68,22 @@ public class LuckPermsHelper {
             String nameColor = meta.getMetaValue("name-color");
 
             return new UserMeta(maxServers, totalRam, totalCpu, admin, user.getPrimaryGroup(), prefixJson,
-                    nameColor == null ? "" : nameColor);
+                    nameColor == null ? "" : nameColor,
+                    parseOrNull(meta.getMetaValue("backup-interval")),
+                    parseOrNull(meta.getMetaValue("backup-keep-last")),
+                    parseOrNull(meta.getMetaValue("backup-keep-weekly")));
         });
+    }
+
+    private static Integer parseOrNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private int parseInt(String value, int defaultValue) {
@@ -82,5 +96,6 @@ public class LuckPermsHelper {
     }
 
     public record UserMeta(int maxServers, int totalRamMb, int totalCpuCores, boolean admin, String rank,
-                           String prefixJson, String nameColor) {}
+                           String prefixJson, String nameColor, Integer backupIntervalHours,
+                           Integer backupKeepLast, Integer backupKeepWeekly) {}
 }

@@ -77,6 +77,16 @@ public class Server {
     @Builder.Default
     private Boolean isPublic = false;
 
+    // Politique de sauvegarde propre à ce serveur (null : celle du rôle du propriétaire)
+    @Column(name = "backup_interval_hours")
+    private Integer backupIntervalHours;
+
+    @Column(name = "backup_keep_last")
+    private Integer backupKeepLast;
+
+    @Column(name = "backup_keep_weekly")
+    private Integer backupKeepWeekly;
+
     // Rôle réseau affiché en préfixe (équipes vanilla) ; le propriétaire peut le couper
     @Column(name = "show_network_rank", nullable = false)
     @Builder.Default

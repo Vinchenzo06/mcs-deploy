@@ -57,12 +57,14 @@ prerequisites() {
     command -v "$bin" >/dev/null || missing+=("$bin")
   done
   command -v wg-quick >/dev/null || missing+=(wireguard-tools)
+  # Sauvegardes des serveurs vers le serveur de sauvegarde MCS (par le VPS)
+  command -v restic >/dev/null || missing+=(restic)
   if (( ${#missing[@]} )); then
     command -v apt-get >/dev/null || die "Installe d'abord : ${missing[*]}"
     apt-get update -qq
     apt-get install -y -qq "${missing[@]}" >/dev/null
   fi
-  ok "jq, curl, unzip, iptables, wireguard-tools"
+  ok "jq, curl, unzip, iptables, wireguard-tools, restic"
 
   if ! command -v docker >/dev/null; then
     command -v apt-get >/dev/null || die "Docker est requis : installe-le d'abord"
@@ -428,6 +430,7 @@ Address = $WG_IP/32
 MTU = 1420
 Table = off
 PostUp = ip -4 route replace default dev %i table 51820
+PostUp = ip -4 route replace 10.99.0.1/32 dev %i
 PostUp = sysctl -qw net.ipv4.conf.%i.rp_filter=2
 PostUp = iptables -w -t mangle -A FORWARD -o %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
 PostUp = iptables -w -t mangle -A FORWARD -i %i -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
