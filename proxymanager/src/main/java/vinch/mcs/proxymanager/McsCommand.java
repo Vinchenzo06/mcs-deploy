@@ -115,6 +115,7 @@ public class McsCommand implements SimpleCommand {
             case "host" -> handleHost(player, args);
             case "backup" -> handleBackup(player, args);
             case "backups" -> handleBackups(player, args);
+            case "restore" -> handleRestore(player, args);
             case "move" -> handleMove(player, args);
             default -> sendUsage(player);
         }
@@ -387,6 +388,8 @@ public class McsCommand implements SimpleCommand {
                         + "/mcs backup keep <serveur> [n°] : permanente (propriétaire)\n"
                         + "/mcs backup settings <serveur> : combien et combien de temps\n"
                         + "/mcs backup set <serveur> [local] <type> <max> [durée]\n"
+                        + "/mcs restore <serveur> <n°> : restaurer (propriétaire, admins)\n"
+                        + "/mcs restore deleted : recréer un serveur supprimé\n"
                         + "Hôtes : /mcs host backups (sauvegardes gardées sur ta machine)\n"
                         + "Admins : /mcs backup defaults [local], minimum, limits <rôle>"));
         player.sendMessage(helpLine("/mcs host [list|set|remove]", "/mcs host ", "Hôtes (admins)",
@@ -1320,6 +1323,12 @@ public class McsCommand implements SimpleCommand {
             }
             line = line.hoverEvent(HoverEvent.showText(Component.text(hover.toString(),
                     "FAILED".equals(status) ? NamedTextColor.RED : NamedTextColor.GRAY)));
+            if (r.path("canRestore").asBoolean(false) && "SUCCESS".equals(status)) {
+                line = line.append(text(" ")).append(Component.text("↺", NamedTextColor.AQUA)
+                        .clickEvent(ClickEvent.runCommand("/mcs restore " + ref + " " + id))
+                        .hoverEvent(HoverEvent.showText(Component.text("Restaurer cette sauvegarde\n(une confirmation est demandée)",
+                                NamedTextColor.GRAY))));
+            }
             if (canConfigure && "SUCCESS".equals(status) && !onMachine) {
                 line = line.append(text(" ")).append(permanent
                         ? Component.text("★", NamedTextColor.GOLD)
@@ -1628,6 +1637,157 @@ public class McsCommand implements SimpleCommand {
                         }
                     }
                 }));
+    }
+
+    // ============================================================ restauration ====
+
+    private static Long parseBackupNumber(Player player, String raw) {
+        try {
+            return Long.parseLong(raw.replace("n°", "").replace("#", ""));
+        } catch (NumberFormatException e) {
+            failure(player, text("Numéro de sauvegarde invalide : " + raw + " (voir /mcs backups)."));
+            return null;
+        }
+    }
+
+    /**
+     * /mcs restore <serveur> <n°> [confirm]         remplace le monde par la sauvegarde
+     * /mcs restore deleted                          sauvegardes des serveurs supprimés
+     * /mcs restore deleted <n°> [nom] [confirm]     recrée un serveur supprimé
+     * Propriétaire et admins seulement (vérifié par l'API).
+     */
+    private void handleRestore(Player player, String[] args) {
+        if (args.length >= 2 && args[1].equalsIgnoreCase("deleted")) {
+            handleRestoreDeleted(player, args);
+            return;
+        }
+        if (args.length < 3 || args.length > 4 || (args.length == 4 && !"confirm".equalsIgnoreCase(args[3]))) {
+            usage(player, "/mcs restore <serveur> <n°>", "/mcs restore ");
+            send(player, Component.text("Numéros : /mcs backups <serveur>  ·  serveur supprimé : /mcs restore deleted",
+                    NamedTextColor.GRAY));
+            return;
+        }
+        Long backupId = parseBackupNumber(player, args[2]);
+        if (backupId == null) {
+            return;
+        }
+        boolean confirmed = args.length == 4;
+        withServer(player, args[1], t -> {
+            if (!confirmed) {
+                notice(player, text("Restaurer la sauvegarde n°" + backupId + " de ").append(serverName(t.ref()))
+                        .append(text(" ? Le monde actuel sera remplacé, sans retour en arrière. "
+                                + "S'il tourne, le serveur est arrêté (joueurs renvoyés au lobby) puis relancé.")));
+                player.sendMessage(buttons(
+                        button("Confirmer", NamedTextColor.RED, "/mcs restore " + t.ref() + " " + backupId + " confirm",
+                                "Remplacer le monde de " + t.ref() + " par la sauvegarde n°" + backupId),
+                        button("Historique", NamedTextColor.AQUA, "/mcs backups " + t.ref(), "Sauvegardes de " + t.ref())));
+                return;
+            }
+            pending(player, text("Restauration de ").append(Component.text(t.ref(), NamedTextColor.WHITE))
+                    .append(text(" depuis la n°" + backupId + "… (quelques minutes)")));
+            afterApi(player, apiClient.restoreBackup(t.id(), t.playerId(), backupId), t.ref(), r -> {
+                if ("RUNNING".equals(r.path("status").asText())) {
+                    notice(player, text("La restauration de " + t.ref() + " continue en arrière-plan."));
+                    return;
+                }
+                success(player, text("").append(serverName(t.ref()))
+                        .append(text(" est restauré (sauvegarde n°" + backupId + ", "
+                                + size(r.path("restoredMb").asLong()) + ")"
+                                + (r.path("restarted").asBoolean(false) ? " et relancé." : "."))));
+                if (r.hasNonNull("restartError")) {
+                    failure(player, text("Redémarrage impossible : " + r.get("restartError").asText()));
+                }
+                player.sendMessage(buttons(r.path("wasRunning").asBoolean(false) ? joinButton(t.ref()) : startButton(t.ref()),
+                        infoButton(t.ref())));
+            });
+        });
+    }
+
+    private void handleRestoreDeleted(Player player, String[] args) {
+        if (args.length == 2) {
+            apiClient.getPlayerByUuid(player.getUniqueId())
+                    .thenCompose(info -> apiClient.listDeletedBackups(info.get("id").asLong()))
+                    .whenComplete((r, error) -> run(() -> {
+                        if (error != null) {
+                            reportError(player, error, null);
+                            return;
+                        }
+                        sendDeletedBackups(player, r.path("backups"));
+                    }));
+            return;
+        }
+        boolean confirmed = "confirm".equalsIgnoreCase(args[args.length - 1]);
+        int n = confirmed ? args.length - 1 : args.length;
+        if (n < 3 || n > 4) {
+            usage(player, "/mcs restore deleted <n°> [nouveau-nom]", "/mcs restore deleted ");
+            return;
+        }
+        Long backupId = parseBackupNumber(player, args[2]);
+        if (backupId == null) {
+            return;
+        }
+        String name = n == 4 ? args[3].toLowerCase(Locale.ROOT) : null;
+        if (name != null && !NAME_PATTERN.matcher(name).matches()) {
+            failure(player, text("Nom invalide : " + name + " (3 à 32 caractères : lettres minuscules, chiffres et -)."));
+            return;
+        }
+        String cmd = "/mcs restore deleted " + backupId + (name == null ? "" : " " + name);
+        if (!confirmed) {
+            notice(player, text("Recréer le serveur de la sauvegarde n°" + backupId
+                    + (name == null ? "" : " sous le nom " + name) + " ? Il revient sur sa machine d'origine, "
+                    + "avec ses réglages, et compte dans les limites de son propriétaire."));
+            player.sendMessage(buttons(button("Confirmer", NamedTextColor.GREEN, cmd + " confirm", "Recréer le serveur")));
+            return;
+        }
+        pending(player, text("Recréation du serveur depuis la sauvegarde n°" + backupId + "… (quelques minutes)"));
+        apiClient.getPlayerByUuid(player.getUniqueId())
+                .thenCompose(info -> apiClient.restoreDeleted(backupId, info.get("id").asLong(), name))
+                .whenComplete((r, error) -> run(() -> {
+                    if (!player.isActive()) {
+                        return;
+                    }
+                    if (error != null) {
+                        reportError(player, error, name);
+                        return;
+                    }
+                    String created = r.path("name").asText(name == null ? "?" : name);
+                    if ("RUNNING".equals(r.path("status").asText())) {
+                        notice(player, text("La recréation de " + created + " continue en arrière-plan : /mcs list dans quelques minutes."));
+                        return;
+                    }
+                    success(player, text("").append(serverName(created)).append(text(" est recréé depuis sa sauvegarde.")));
+                    player.sendMessage(buttons(joinButton(created), infoButton(created)));
+                }));
+    }
+
+    private void sendDeletedBackups(Player player, JsonNode list) {
+        player.sendMessage(Component.empty());
+        player.sendMessage(header("Serveurs supprimés"));
+        if (list.size() == 0) {
+            player.sendMessage(Component.text(" Aucune sauvegarde de serveur supprimé n'est encore gardée.", NamedTextColor.GRAY));
+            return;
+        }
+        player.sendMessage(Component.text(" Sauvegardes encore gardées après la suppression (au central).", NamedTextColor.GRAY));
+        for (JsonNode b : list) {
+            long id = b.path("id").asLong();
+            String name = b.hasNonNull("name") ? b.get("name").asText() : b.path("ref").asText("?");
+            String ago = b.hasNonNull("createdAt") ? uptime(b.get("createdAt").asText()) : null;
+            String until = b.hasNonNull("expiresAt") ? remaining(b.get("expiresAt").asText()) : null;
+            Component line = Component.text(" n°" + id, NamedTextColor.DARK_AQUA)
+                    .append(Component.text("  " + name, NamedTextColor.WHITE))
+                    .append(b.hasNonNull("owner") ? Component.text(" (" + b.get("owner").asText() + ")", NamedTextColor.GRAY)
+                            : Component.empty())
+                    .append(Component.text("  il y a " + (ago == null ? "?" : ago), NamedTextColor.GRAY))
+                    .append(Component.text(until == null ? "" : "  supprimée " + until, NamedTextColor.DARK_GRAY));
+            if (b.path("restorable").asBoolean(false)) {
+                line = line.append(text(" ")).append(button("Recréer", NamedTextColor.GREEN, "/mcs restore deleted " + id,
+                        "Recréer " + name + " depuis cette sauvegarde"));
+            } else {
+                line = line.hoverEvent(HoverEvent.showText(Component.text(
+                        "Supprimé avant la mise à jour : ne peut pas être recréé", NamedTextColor.GRAY)));
+            }
+            player.sendMessage(line);
+        }
     }
 
     private void handleHost(Player player, String[] args) {

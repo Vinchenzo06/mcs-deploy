@@ -5,6 +5,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import vinch.mcs.api.entities.BackupKind;
 import vinch.mcs.api.services.BackupService;
+import vinch.mcs.api.services.RestoreService;
 
 import java.util.Map;
 
@@ -18,6 +19,11 @@ import java.util.Map;
 public class BackupController {
 
     private final BackupService backupService;
+    private final RestoreService restoreService;
+
+    public record RestoreBody(Long playerId, Long backupId) {}
+
+    public record RestoreDeletedBody(Long playerId, String name) {}
 
     /** kind : quotidienne, hebdomadaire, mensuelle, manuelle, permanente */
     /** local : sur la machine (sinon au central) */
@@ -130,6 +136,36 @@ public class BackupController {
             boolean reset = Boolean.TRUE.equals(body.reset());
             return ResponseEntity.ok(backupService.setHostRule(body.playerId(), machine, kind(body.kind(), !reset),
                     body.max(), body.duration(), reset));
+        } catch (Exception e) {
+            return error(e);
+        }
+    }
+
+    // ------------------------------------------------------------ restauration ----
+
+    @PostMapping("/api/v1/servers/{id}/restore")
+    public ResponseEntity<?> restore(@PathVariable Long id, @RequestBody RestoreBody body) {
+        try {
+            return ResponseEntity.ok(restoreService.restore(id, body.backupId(), body.playerId()));
+        } catch (Exception e) {
+            return error(e);
+        }
+    }
+
+    /** Sauvegardes encore gardées des serveurs supprimés du joueur (admins : toutes) */
+    @GetMapping("/api/v1/backups/deleted")
+    public ResponseEntity<?> deleted(@RequestParam Long playerId) {
+        try {
+            return ResponseEntity.ok(restoreService.deleted(playerId));
+        } catch (Exception e) {
+            return error(e);
+        }
+    }
+
+    @PostMapping("/api/v1/backups/{backupId}/restore-deleted")
+    public ResponseEntity<?> restoreDeleted(@PathVariable Long backupId, @RequestBody RestoreDeletedBody body) {
+        try {
+            return ResponseEntity.ok(restoreService.restoreDeleted(backupId, body.playerId(), body.name()));
         } catch (Exception e) {
             return error(e);
         }

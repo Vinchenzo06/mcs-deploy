@@ -101,6 +101,26 @@ public class Backup {
     @Builder.Default
     private String location = "CENTRAL";
 
+    // Propriétaire du serveur (pour restaurer un serveur supprimé)
+    @Column(name = "owner_id")
+    private Long ownerId;
+
+    // Réglages du serveur, fixés à sa suppression : de quoi le recréer
+    @Column(name = "server_name", length = 64)
+    private String serverName;
+
+    @Column(name = "server_type", length = 20)
+    private String serverType;
+
+    @Column(name = "minecraft_version", length = 40)
+    private String minecraftVersion;
+
+    @Column(name = "ram_mb")
+    private Integer ramMb;
+
+    @Column(name = "cpu_cores")
+    private Integer cpuCores;
+
     // Quand elle est devenue permanente : au-delà du max, c'est la plus
     // anciennement marquée qui cesse d'être permanente
     @Column(name = "permanent_at")

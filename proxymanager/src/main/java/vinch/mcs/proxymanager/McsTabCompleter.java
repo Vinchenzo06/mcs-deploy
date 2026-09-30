@@ -13,7 +13,7 @@ public class McsTabCompleter {
     private static final List<String> SUBCOMMANDS = List.of(
             "create", "list", "info", "join", "start", "stop", "restart", "members", "invite", "remove",
             "leave", "public", "private", "display", "console", "move", "delete", "quota", "host",
-            "backup", "backups"
+            "backup", "backups", "restore"
     );
 
     private static final List<String> TYPES = List.of("PAPER", "SPIGOT", "FABRIC", "FORGE", "VANILLA");
@@ -53,6 +53,13 @@ public class McsTabCompleter {
         }
         if (sub.equals("backup") && args.length >= 2) {
             return suggestBackup(player, args);
+        }
+        if (sub.equals("restore") && args.length == 2) {
+            return serverNames(player, null).thenApply(names -> {
+                List<String> all = new ArrayList<>(List.of("deleted"));
+                all.addAll(names);
+                return filter(all, args[1]);
+            });
         }
         if (args.length == 2) {
             if (sub.equals("create")) {

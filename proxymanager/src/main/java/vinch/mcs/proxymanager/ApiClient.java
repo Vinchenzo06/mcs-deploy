@@ -287,6 +287,26 @@ public class ApiClient {
         return call("POST", "/api/v1/backup-settings", body, Duration.ofSeconds(10));
     }
 
+    /** Restaure une sauvegarde d'un serveur existant (attend jusqu'à 21 min) */
+    public CompletableFuture<JsonNode> restoreBackup(long serverId, long playerId, long backupId) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("playerId", playerId);
+        body.put("backupId", backupId);
+        return call("POST", "/api/v1/servers/" + serverId + "/restore", body, Duration.ofMinutes(21));
+    }
+
+    public CompletableFuture<JsonNode> listDeletedBackups(long playerId) {
+        return call("GET", "/api/v1/backups/deleted?playerId=" + playerId, null, Duration.ofSeconds(10));
+    }
+
+    /** Recrée un serveur supprimé à partir d'une sauvegarde (name : null = nom d'origine) */
+    public CompletableFuture<JsonNode> restoreDeleted(long backupId, long playerId, String name) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("playerId", playerId);
+        body.put("name", name);
+        return call("POST", "/api/v1/backups/" + backupId + "/restore-deleted", body, Duration.ofMinutes(21));
+    }
+
     /** Machines de l'hôte (toutes pour un admin) et plafond des sauvegardes gardées dessus */
     public CompletableFuture<JsonNode> getHostBackups(long playerId, Long machine) {
         return call("GET", "/api/v1/hosts/backup-settings?playerId=" + playerId

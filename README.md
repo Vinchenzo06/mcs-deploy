@@ -273,6 +273,13 @@ Mise en place, une fois :
   Réglages : l'admin fixe le minimum que chaque hôte offre (`/mcs backup defaults local`),
   l'hôte fixe le plafond de sa machine (`/mcs host backups [machine] [type max durée]`),
   le propriétaire choisit en dessous (`/mcs backup set <serveur> local <type> <max> [durée]`).
+- **Restauration (lot 31)** : propriétaire et admins. `/mcs restore <serveur> <n°>` (ou ↺ dans
+  `/mcs backups`) remplace le monde par la sauvegarde, après confirmation : le serveur est
+  arrêté s'il tourne, restauré, puis relancé. Pas de sauvegarde de l'état actuel avant.
+  Serveur supprimé : `/mcs restore deleted` liste ses sauvegardes encore gardées,
+  `/mcs restore deleted <n°> [nouveau-nom]` le recrée sur sa machine d'origine avec ses
+  réglages (quotas du propriétaire comptés) et lui rattache ses anciennes sauvegardes.
+  Une sauvegarde n'est restaurée que sur la machine qui l'a faite (lot 32 : ailleurs).
 - **Minimum au central** : `/mcs backup minimum` (défaut : 2 hebdomadaires gardées 14 jours) ;
   un propriétaire ne descend pas en dessous.
 - **Qui règle quoi** : les admins fixent les défauts du réseau et les limites de chaque

@@ -33,6 +33,8 @@ func handleCommand(conn *websocket.Conn, config *Config, msgType, commandId stri
 		handleConsoleCommand(conn, commandId, msg)
 	case "backup_server":
 		handleBackupServer(conn, config, commandId, msg)
+	case "restore_server":
+		handleRestoreServer(conn, config, commandId, msg)
 	default:
 		log.Printf("Type de commande non géré : %s", msgType)
 		sendCommandError(conn, commandId, "unknown_command", "Commande inconnue : "+msgType)
@@ -92,6 +94,11 @@ func handleStartServer(conn *websocket.Conn, config *Config, commandId string, m
 	serverID, ok := getServerID(msg)
 	if !ok {
 		sendCommandError(conn, commandId, "missing_server_id", "server_id manquant")
+		return
+	}
+
+	if isRestoring(serverID) {
+		sendCommandError(conn, commandId, "restoring", "restauration en cours : le serveur redémarrera tout seul ensuite")
 		return
 	}
 

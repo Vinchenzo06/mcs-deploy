@@ -534,6 +534,52 @@ public class BackupService {
         }
     }
 
+    /** Réserve le serveur (et sa machine) : aucune sauvegarde pendant une restauration */
+    public boolean tryLock(long serverId, long nodeId) {
+        if (!runningServers.add(serverId)) {
+            return false;
+        }
+        runningNodes.add(nodeId);
+        return true;
+    }
+
+    public void unlock(long serverId, long nodeId) {
+        runningServers.remove(serverId);
+        runningNodes.remove(nodeId);
+    }
+
+    /**
+     * Données de restauration d'une sauvegarde pour l'agent de la machine "node".
+     * Une sauvegarde du central n'est lisible qu'avec les identifiants de la machine
+     * qui l'a faite : on ne les donne jamais à une autre machine.
+     */
+    public Map<String, Object> restoreData(Backup b, Node node, Server target) {
+        if (b.getSnapshotId() == null) {
+            throw new RuntimeException("Sauvegarde n°" + b.getId() + " sans instantané enregistré.");
+        }
+        if (b.getNodeId() == null || !b.getNodeId().equals(node.getId())) {
+            throw new RuntimeException("La sauvegarde n°" + b.getId() + " a été faite sur une autre machine : "
+                    + "la restaurer ailleurs viendra avec le déplacement de serveurs.");
+        }
+        Map<String, Object> data = new HashMap<>();
+        data.put("snapshot_id", b.getSnapshotId());
+        if (at(b, LOCAL)) {
+            if (target == null || target.getLocalBackupPassword() == null || !localEnabled(target)) {
+                throw new RuntimeException("La sauvegarde n°" + b.getId() + " n'est plus disponible sur la machine.");
+            }
+            data.put("local", true);
+            data.put("repo_password", target.getLocalBackupPassword());
+        } else {
+            ensureCredentials(node);
+            data.put("local", false);
+            data.put("repository", "rest:" + repoBase + "/node" + node.getId() + "/");
+            data.put("http_user", "node" + node.getId());
+            data.put("http_password", node.getBackupHttpPassword());
+            data.put("repo_password", node.getBackupRepoPassword());
+        }
+        return data;
+    }
+
     private static boolean olderThan(LocalDateTime t, Duration d, LocalDateTime now) {
         return t == null || !t.plus(d).minus(SLACK).isAfter(now);
     }
@@ -856,6 +902,13 @@ public class BackupService {
                 }
                 b.setExpiresAt(until);
                 b.setServerRef(s.getVelocityName());
+                // De quoi recréer le serveur à partir de cette sauvegarde (/mcs restore deleted)
+                b.setOwnerId(s.getOwner().getId());
+                b.setServerName(s.getName());
+                b.setServerType(s.getServerType().name());
+                b.setMinecraftVersion(s.getMinecraftVersion());
+                b.setRamMb(s.getAllocatedRamMb());
+                b.setCpuCores(s.getAllocatedCpuCores());
                 backupRepository.save(b);
             }
             for (Backup b : backupRepository.findTop30ByServerTagIdOrderByCreatedAtDesc(s.getId())) {
@@ -949,6 +1002,7 @@ public class BackupService {
                     .server(s)
                     .serverTagId(s.getId())
                     .serverRef(s.getVelocityName())
+                    .ownerId(s.getOwner().getId())
                     .backupType(type)
                     .location(job.location())
                     .storagePath(local ? "local:node" + node.getId() : "node" + node.getId())
@@ -1225,6 +1279,7 @@ public class BackupService {
             out.put("minimum", rulesToMap(minimum()));
             out.put("customized", policyRepository.findByScope("server:" + s.getId()).isPresent());
             out.put("canConfigure", AccessService.isAdmin(p) || AccessService.isOwner(p, s));
+            out.put("canRestore", AccessService.isAdmin(p) || AccessService.isOwner(p, s));
             out.put("running", runningServers.contains(s.getId()));
             Map<String, Object> local = new LinkedHashMap<>();
             local.put("enabled", localEnabled(s));

@@ -21,6 +21,8 @@ type CreateServerRequest struct {
 	CpuCores  int    `json:"cpu_cores"`  // Cores CPU alloués
 	StorageMb int    `json:"storage_mb"` // Stockage max
 	OwnerName string `json:"owner_name"` // Pour la séparation logique
+	// Serveur recréé à partir d'une sauvegarde (serveur supprimé, lot 31)
+	Restore *restoreRequest `json:"restore,omitempty"`
 }
 
 // ContainerName retourne le nom standardisé du conteneur pour un serveur donné
@@ -50,6 +52,11 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 		return fmt.Errorf("création refusée : %w", err)
 	}
 
+	// Vérifier qu'il n'y a pas déjà un conteneur avec ce nom
+	if exists, _ := containerExists(containerName(req.ServerID)); exists {
+		return fmt.Errorf("un conteneur existe déjà pour ce serveur")
+	}
+
 	serverPath := serverDataPath(dataPath, req.ServerID)
 
 	// Créer le dossier de données, propriété de l'utilisateur du conteneur
@@ -60,9 +67,17 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 		return fmt.Errorf("droits du dossier : %w", err)
 	}
 
-	// Vérifier qu'il n'y a pas déjà un conteneur avec ce nom
-	if exists, _ := containerExists(containerName(req.ServerID)); exists {
-		return fmt.Errorf("un conteneur existe déjà pour ce serveur")
+	// Recréation depuis une sauvegarde : les données sont en place avant le premier démarrage
+	if req.Restore != nil {
+		r := *req.Restore
+		r.ServerID = req.ServerID
+		restoring.Store(req.ServerID, true)
+		_, err := restoreInto(dataPath, r)
+		restoring.Delete(req.ServerID)
+		if err != nil {
+			_ = os.RemoveAll(serverPath)
+			return fmt.Errorf("restauration de la sauvegarde : %w", err)
+		}
 	}
 
 	serverType := mapServerType(req.Type)

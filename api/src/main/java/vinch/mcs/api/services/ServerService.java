@@ -34,6 +34,16 @@ public class ServerService {
 
     @Transactional
     public CreateServerResponse createServer(CreateServerRequest request) throws Exception {
+        return createServer(request, null);
+    }
+
+    /**
+     * restore : recréation d'un serveur supprimé à partir de sa sauvegarde (lot 31) ;
+     * les données sont restaurées par l'agent avant le premier démarrage. La machine
+     * est imposée (celle de la sauvegarde) mais doit avoir la place.
+     */
+    @Transactional
+    public CreateServerResponse createServer(CreateServerRequest request, Map<String, Object> restore) throws Exception {
         log.info("Création d'un serveur : owner={} name={} type={} version={}",
                 request.getOwnerPlayerId(), request.getName(), request.getServerType(), request.getMinecraftVersion());
 
@@ -85,6 +95,15 @@ public class ServerService {
 
         // Choisir le node : assez de place pour ce serveur (RAM, CPU, disque)
         Node node = chooseNode(request.getForceNodeId(), request);
+        if (restore != null) {
+            if (!agentWebSocketHandler.isNodeOnline(node.getId())) {
+                throw new RuntimeException("La machine de cette sauvegarde est hors ligne : réessaie plus tard.");
+            }
+            if (freeRamAfter(node, request) == null) {
+                throw new RuntimeException("La machine de cette sauvegarde n'a plus la place pour ce serveur "
+                        + "(RAM, CPU ou disque).");
+            }
+        }
 
         // Disque proportionnel à la RAM : 10 % de la RAM prêtée par la machine
         // donne 10 % de son disque prêté (le joueur ne choisit pas son disque)
@@ -127,10 +146,13 @@ public class ServerService {
         data.put("cpu_cores", request.getCpuCores());  // ← AJOUTER
         data.put("storage_mb", storageMb);
         data.put("owner_name", owner.getMinecraftUsername());
+        if (restore != null) {
+            data.put("restore", restore);
+        }
 
         try {
             CompletableFuture<JsonNode> future = agentWebSocketHandler.sendCommand(
-                    node.getId(), "create_server", data);
+                    node.getId(), "create_server", data, restore != null ? 3 * 3600 : 300);
             JsonNode result = future.get();
 
             if (result.has("success") && !result.get("success").asBoolean()) {
