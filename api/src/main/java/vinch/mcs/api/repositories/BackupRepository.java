@@ -28,4 +28,6 @@ public interface BackupRepository extends JpaRepository<Backup, Long> {
 
     // Sauvegardes de serveurs supprimés, encore gardées
     List<Backup> findByServerIsNullAndStatus(String status);
+
+    List<Backup> findByServerTagId(Long serverTagId);
 }

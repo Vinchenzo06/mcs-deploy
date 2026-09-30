@@ -918,6 +918,15 @@ public class BackupService {
                     backupRepository.save(b);
                 }
             }
+            // Plus aucune sauvegarde ne pointe vers le serveur (la base met aussi server_id
+            // à NULL) : sinon Hibernate refuse de supprimer le serveur, ces sauvegardes
+            // étant encore chargées dans la même session
+            for (Backup b : backupRepository.findByServerTagId(s.getId())) {
+                if (b.getServer() != null) {
+                    b.setServer(null);
+                    backupRepository.save(b);
+                }
+            }
             policyRepository.findByScope("server:" + s.getId()).ifPresent(policyRepository::delete);
             policyRepository.findByScope("local:server:" + s.getId()).ifPresent(policyRepository::delete);
             log.info("Serveur {} supprimé : {} sauvegarde(s) au central gardée(s) jusqu'à leur expiration",

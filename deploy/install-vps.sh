@@ -1657,8 +1657,15 @@ EOF
 }
 
 # ================================================================= main ======
+# apt occupé (mises à jour automatiques d'Ubuntu) : attendre jusqu'à 10 min au lieu d'échouer
+apt_wait_lock() {
+  mkdir -p /etc/apt/apt.conf.d
+  echo 'DPkg::Lock::Timeout "600";' > /etc/apt/apt.conf.d/90mcs-lock-timeout
+}
+
 main() {
   cd /
+  apt_wait_lock
   load_config
   local steps=("$@") s
   (( ${#steps[@]} )) || steps=("${ALL_STEPS[@]}")

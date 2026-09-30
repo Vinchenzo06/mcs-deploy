@@ -38,6 +38,8 @@ warn() { echo -e "${C_WARN}    ! $*${C_OFF}"; }
 die()  { echo -e "${C_ERR}    ✘ $*${C_OFF}" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "Lance avec sudo"
+# apt occupé (mises à jour automatiques d'Ubuntu) : attendre jusqu'à 10 min au lieu d'échouer
+mkdir -p /etc/apt/apt.conf.d && echo 'DPkg::Lock::Timeout "600";' > /etc/apt/apt.conf.d/90mcs-lock-timeout
 CODE="${1:-}"
 UPDATE=false
 if [[ "$CODE" == "--update" ]]; then
