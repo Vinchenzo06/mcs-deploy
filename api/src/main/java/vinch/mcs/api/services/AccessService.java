@@ -286,6 +286,8 @@ public class AccessService {
             m.put("hostname", n.getHostname() == null ? "?" : n.getHostname());
             m.put("online", Boolean.TRUE.equals(n.getIsOnline()));
             m.put("host", n.getOwnerPlayer() == null ? null : n.getOwnerPlayer().getMinecraftUsername());
+            m.put("region", n.getRegion());
+            m.put("servers", serverRepository.findByNodeId(n.getId()).size());
             out.add(m);
         }
         out.sort(Comparator.comparing(m -> (Long) m.get("machine")));

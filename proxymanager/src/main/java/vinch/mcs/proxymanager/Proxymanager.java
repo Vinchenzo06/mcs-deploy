@@ -216,6 +216,17 @@ public class Proxymanager {
                             player.getUsername(), response.get("id").asLong());
                     // Quotas, rôle admin et rang réseau (LuckPerms du proxy)
                     playerSync.sync(player);
+                    // Messages MCS reçus pendant son absence (serveur déplacé...)
+                    apiClient.getNotifications(response.get("id").asLong()).thenAccept(r -> {
+                        JsonNode list = r.path("notifications");
+                        if (list.size() > 0) {
+                            server.getScheduler().buildTask(this, () -> {
+                                for (JsonNode n : list) {
+                                    McsCommand.notifyPlayer(player, n.path("message").asText(""));
+                                }
+                            }).delay(java.time.Duration.ofSeconds(3)).schedule();
+                        }
+                    });
                 });
     }
 

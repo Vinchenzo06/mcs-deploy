@@ -41,6 +41,7 @@ public class ReconciliationService {
     private final AgentWebSocketHandler agentWebSocketHandler;
     private final VelocityClient velocityClient;
     private final ServerMetricsService metricsService;
+    private final vinch.mcs.api.repositories.PendingDeletionRepository pendingDeletionRepository;
 
     /**
      * Événements en direct. Les opérations lancées par l'API (création, arrêt)
@@ -61,7 +62,7 @@ public class ReconciliationService {
         metricsService.recordHealth(server.getId(), event.event());
 
         ServerStatus status = server.getStatus();
-        if (status == ServerStatus.CREATING || status == ServerStatus.STOPPING) {
+        if (status == ServerStatus.CREATING || status == ServerStatus.STOPPING || status == ServerStatus.MIGRATING) {
             return;
         }
 
@@ -114,7 +115,8 @@ public class ReconciliationService {
             // La création est toujours laissée tranquille (elle peut durer plusieurs minutes).
             // Les démarrages/arrêts ne sont corrigés qu'à la connexion de l'agent : une
             // opération en cours a forcément été interrompue par la déconnexion.
-            if (status == ServerStatus.CREATING || (!event.fullSync() && TRANSITIONAL.contains(status))) {
+            if (status == ServerStatus.CREATING || status == ServerStatus.MIGRATING
+                    || (!event.fullSync() && TRANSITIONAL.contains(status))) {
                 continue;
             }
 
@@ -146,6 +148,26 @@ public class ReconciliationService {
 
         for (Long orphanId : containers.keySet()) {
             if (known.contains(orphanId)) {
+                continue;
+            }
+            if (pendingDeletionRepository.existsByNodeIdAndServerId(nodeId, orphanId)) {
+                // Serveur déplacé pendant que cette machine était hors ligne : il tourne
+                // ailleurs, on supprime l'ancienne copie (données et sauvegardes locales)
+                log.info("Serveur {} déplacé ailleurs : suppression de l'ancienne copie sur la machine {}", orphanId, nodeId);
+                agentWebSocketHandler.sendCommand(nodeId, "delete_server",
+                                Map.<String, Object>of("server_id", orphanId, "delete_data", true))
+                        .whenComplete((result, error) -> {
+                            boolean ok = error == null && result != null
+                                    && !(result.has("success") && !result.get("success").asBoolean());
+                            if (ok) {
+                                pendingDeletionRepository.findByNodeId(nodeId).stream()
+                                        .filter(p -> p.getServerId().equals(orphanId))
+                                        .forEach(pendingDeletionRepository::delete);
+                            } else {
+                                log.warn("Suppression de l'ancienne copie de {} impossible : {}", orphanId,
+                                        error != null ? error.getMessage() : result);
+                            }
+                        });
                 continue;
             }
             log.warn("Conteneur orphelin mcs-server-{} sur la machine {} : mise en quarantaine", orphanId, nodeId);

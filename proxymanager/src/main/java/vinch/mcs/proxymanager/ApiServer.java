@@ -184,6 +184,19 @@ public class ApiServer {
                     sendResponse(exchange, 401, "{\"error\":\"Unauthorized\"}");
                     return;
                 }
+                if (exchange.getRequestMethod().equals("POST") && exchange.getRequestURI().getPath().equals("/players/notify")) {
+                    // Message MCS à un joueur s'il est connecté (sinon 404 : il le verra à sa connexion)
+                    JsonNode body = objectMapper.readTree(readBody(exchange));
+                    java.util.UUID who = java.util.UUID.fromString(body.path("uuid").asText());
+                    Optional<com.velocitypowered.api.proxy.Player> online = proxyServer.getPlayer(who);
+                    if (online.isEmpty()) {
+                        sendResponse(exchange, 404, "{\"error\":\"Joueur non connecté\"}");
+                        return;
+                    }
+                    McsCommand.notifyPlayer(online.get(), body.path("message").asText(""));
+                    sendResponse(exchange, 200, "{\"success\":true}");
+                    return;
+                }
                 if (!exchange.getRequestMethod().equals("POST") || !exchange.getRequestURI().getPath().equals("/players/connect")) {
                     sendResponse(exchange, 404, "{\"error\":\"Not found\"}");
                     return;

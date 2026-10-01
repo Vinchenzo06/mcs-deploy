@@ -33,4 +33,6 @@ public class CreateServerRequest {
     private Integer storageMb;
 
     private Long forceNodeId;
+    // Accepte de supprimer les sauvegardes d'un serveur supprimé qui occupe encore une place
+    private Boolean replaceDeleted;
 }

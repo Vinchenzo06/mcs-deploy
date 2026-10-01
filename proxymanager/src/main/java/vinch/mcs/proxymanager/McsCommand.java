@@ -116,6 +116,9 @@ public class McsCommand implements SimpleCommand {
             case "backup" -> handleBackup(player, args);
             case "backups" -> handleBackups(player, args);
             case "restore" -> handleRestore(player, args);
+            case "migrate" -> handleMigrate(player, args);
+            case "regions" -> handleRegions(player);
+            case "machine" -> handleMachine(player, args);
             case "move" -> handleMove(player, args);
             default -> sendUsage(player);
         }
@@ -392,6 +395,11 @@ public class McsCommand implements SimpleCommand {
                         + "/mcs restore deleted : recréer un serveur supprimé\n"
                         + "Hôtes : /mcs host backups (sauvegardes gardées sur ta machine)\n"
                         + "Admins : /mcs backup defaults [local], minimum, limits <rôle>"));
+        player.sendMessage(helpLine("/mcs migrate <serveur> [région]", "/mcs migrate ", "Déplacer",
+                "Change ton serveur de machine ou de région (/mcs regions).\n"
+                        + "Machine hors ligne : /mcs migrate <serveur> backup\n"
+                        + "Admins : /mcs migrate <serveur> machine <n°>,\n"
+                        + "/mcs machine region|backup|evacuate <n°>"));
         player.sendMessage(helpLine("/mcs host [list|set|remove]", "/mcs host ", "Hôtes (admins)",
                 "Admins : choisir le joueur hôte de chaque machine.\n"
                         + "Il gère les serveurs de SA machine seulement (titre ʜᴏsᴛ)."));
@@ -423,7 +431,11 @@ public class McsCommand implements SimpleCommand {
         return mb > Integer.MAX_VALUE ? null : (int) mb;
     }
 
-    private void handleCreate(Player player, String[] args) {
+    private void handleCreate(Player player, String[] rawArgs) {
+        // "... confirm" : accepte de supprimer les sauvegardes d'un serveur supprimé qui occupe une place
+        boolean replaceDeleted = rawArgs.length >= 5 && "confirm".equalsIgnoreCase(rawArgs[rawArgs.length - 1]);
+        String[] args = replaceDeleted ? java.util.Arrays.copyOf(rawArgs, rawArgs.length - 1) : rawArgs;
+        String command = "/mcs " + String.join(" ", args);
         if (args.length < 4 || args.length > 6) {
             usage(player, "/mcs create <type> <version> <nom> [ram] [cpu]", "/mcs create ");
             send(player, Component.text("Exemple : /mcs create paper 1.21.4 survie 4G 2  (RAM par défaut 2G, CPU 1)",
@@ -483,9 +495,18 @@ public class McsCommand implements SimpleCommand {
         playerSync.sync(player)
                 .thenCompose(v -> apiClient.getPlayerByUuid(player.getUniqueId()))
                 .thenCompose(playerInfo -> apiClient.createServer(
-                        playerInfo.get("id").asLong(), name, type, version, finalRamMb, finalCpuCores))
+                        playerInfo.get("id").asLong(), name, type, version, finalRamMb, finalCpuCores, replaceDeleted))
                 .whenComplete((result, error) -> run(() -> {
                     if (!player.isActive()) {
+                        return;
+                    }
+                    if (error != null && errorText(error).startsWith("Emplacement occupé")) {
+                        notice(player, text("⚠ " + errorText(error)));
+                        player.sendMessage(buttons(
+                                button("Créer quand même", NamedTextColor.RED, command + " confirm",
+                                        "Supprime les sauvegardes du serveur supprimé et crée " + name),
+                                button("Serveurs supprimés", NamedTextColor.AQUA, "/mcs restore deleted",
+                                        "Voir ou recréer tes serveurs supprimés")));
                         return;
                     }
                     if (error != null) {
@@ -1639,6 +1660,180 @@ public class McsCommand implements SimpleCommand {
                 }));
     }
 
+    // ============================================================ déplacements ====
+
+    /** Message MCS reçu (serveur déplacé, machine hors ligne...) */
+    public static void notifyPlayer(Player player, String message) {
+        player.sendMessage(PREFIX.append(Component.text("✉ ", NamedTextColor.GOLD))
+                .append(Component.text(message, NamedTextColor.YELLOW)));
+    }
+
+    /** /mcs regions : régions des machines */
+    private void handleRegions(Player player) {
+        apiClient.getRegions().whenComplete((r, error) -> run(() -> {
+            if (error != null) {
+                reportError(player, error, null);
+                return;
+            }
+            player.sendMessage(Component.empty());
+            player.sendMessage(header("Régions"));
+            for (JsonNode reg : r.path("regions")) {
+                String name = reg.path("region").asText("?");
+                int online = reg.path("online").asInt(0);
+                player.sendMessage(Component.text(" " + name, NamedTextColor.WHITE, TextDecoration.BOLD)
+                        .append(Component.text("  " + online + "/" + reg.path("machines").asInt(0) + " machine(s) en ligne",
+                                online > 0 ? NamedTextColor.GREEN : NamedTextColor.DARK_GRAY)));
+            }
+            player.sendMessage(Component.text(" Changer la région d'un serveur : ", NamedTextColor.GRAY)
+                    .append(Component.text("/mcs migrate <serveur> <région>", NamedTextColor.YELLOW)
+                            .clickEvent(ClickEvent.suggestCommand("/mcs migrate "))));
+        }));
+    }
+
+    /**
+     * /mcs migrate <serveur> [région | machine <n°>] [confirm]
+     * /mcs migrate <serveur> backup [n°] [région | machine <n°>] [confirm]   (machine hors ligne)
+     */
+    private void handleMigrate(Player player, String[] args) {
+        if (args.length < 2) {
+            usage(player, "/mcs migrate <serveur> [région]", "/mcs migrate ");
+            send(player, Component.text("Régions : /mcs regions  ·  machine hors ligne : /mcs migrate <serveur> backup",
+                    NamedTextColor.GRAY));
+            return;
+        }
+        java.util.List<String> rest = new java.util.ArrayList<>(java.util.Arrays.asList(args).subList(2, args.length));
+        boolean confirmed = !rest.isEmpty() && "confirm".equalsIgnoreCase(rest.get(rest.size() - 1));
+        if (confirmed) {
+            rest.remove(rest.size() - 1);
+        }
+        boolean fromBackup = false;
+        Long backupId = null;
+        Long machine = null;
+        String region = null;
+        int i = 0;
+        if (i < rest.size() && rest.get(i).equalsIgnoreCase("backup")) {
+            fromBackup = true;
+            i++;
+            if (i < rest.size() && rest.get(i).replace("n°", "").replace("#", "").matches("\\d+")) {
+                backupId = Long.parseLong(rest.get(i).replace("n°", "").replace("#", ""));
+                i++;
+            }
+        }
+        if (i < rest.size() && rest.get(i).equalsIgnoreCase("machine")) {
+            if (i + 1 >= rest.size() || !rest.get(i + 1).replace("#", "").matches("\\d+")) {
+                failure(player, text("Numéro de machine attendu (voir /mcs host list)."));
+                return;
+            }
+            machine = Long.parseLong(rest.get(i + 1).replace("#", ""));
+            i += 2;
+        } else if (i < rest.size()) {
+            region = rest.get(i).toLowerCase(Locale.ROOT);
+            i++;
+        }
+        if (i != rest.size()) {
+            usage(player, "/mcs migrate <serveur> [backup [n°]] [région | machine <n°>]", "/mcs migrate ");
+            return;
+        }
+        String where = machine != null ? "la machine " + machine : region != null ? "la région " + region : "une autre machine";
+        String cmd = "/mcs migrate " + String.join(" ", java.util.Arrays.asList(args).subList(1, args.length))
+                .replaceFirst("(?i)\\s+confirm$", "");
+        boolean fFromBackup = fromBackup;
+        Long fBackupId = backupId;
+        Long fMachine = machine;
+        String fRegion = region;
+        withServer(player, args[1], t -> {
+            if (!confirmed) {
+                notice(player, text("Déplacer ").append(serverName(t.ref())).append(text(" vers " + where + " ? "
+                        + (fFromBackup
+                        ? "Il repartira de sa " + (fBackupId == null ? "dernière sauvegarde" : "sauvegarde n°" + fBackupId)
+                          + " au central : ce qui a été fait après est perdu."
+                        : "Il sera arrêté quelques minutes (joueurs renvoyés au lobby), sauvegardé, puis relancé "
+                          + "sur sa nouvelle machine. Rien n'est perdu."))));
+                player.sendMessage(buttons(button("Confirmer", NamedTextColor.GREEN, cmd + " confirm", "Déplacer " + t.ref())));
+                return;
+            }
+            pending(player, text("Déplacement de ").append(Component.text(t.ref(), NamedTextColor.WHITE))
+                    .append(text(" vers " + where + "… (quelques minutes)")));
+            afterApi(player, apiClient.migrateServer(t.id(), t.playerId(), fRegion, fMachine, fFromBackup, fBackupId), t.ref(), r -> {
+                if ("RUNNING".equals(r.path("status").asText())) {
+                    notice(player, text("Le déplacement de " + t.ref() + " continue en arrière-plan (" + r.path("target").asText("?") + ")."));
+                    return;
+                }
+                success(player, text("").append(serverName(t.ref())).append(text(" est maintenant sur la "
+                        + r.path("target").asText("?") + (r.path("running").asBoolean(false) ? ", relancé." : "."))));
+                player.sendMessage(buttons(r.path("running").asBoolean(false) ? joinButton(t.ref()) : startButton(t.ref()),
+                        infoButton(t.ref())));
+            });
+        });
+    }
+
+    /**
+     * Admins : /mcs machine region <n°> <région>
+     *          /mcs machine backup <n°>                       sauvegarde tous ses serveurs au central
+     *          /mcs machine evacuate <n°> [machine] [backup]  déplace tous ses serveurs
+     */
+    private void handleMachine(Player player, String[] args) {
+        if (args.length < 3 || !args[2].replace("#", "").matches("\\d+")) {
+            usage(player, "/mcs machine <region|backup|evacuate> <n°> ...", "/mcs machine ");
+            return;
+        }
+        String action = args[1].toLowerCase(Locale.ROOT);
+        long machine = Long.parseLong(args[2].replace("#", ""));
+        String region = null;
+        Long target = null;
+        boolean fromBackup = false;
+        switch (action) {
+            case "region" -> {
+                if (args.length != 4) {
+                    usage(player, "/mcs machine region <n°> <région>", "/mcs machine region ");
+                    return;
+                }
+                region = args[3].toLowerCase(Locale.ROOT);
+            }
+            case "backup" -> {
+                if (args.length != 3) {
+                    usage(player, "/mcs machine backup <n°>", "/mcs machine backup ");
+                    return;
+                }
+            }
+            case "evacuate" -> {
+                for (int i = 3; i < args.length; i++) {
+                    if (args[i].equalsIgnoreCase("backup")) {
+                        fromBackup = true;
+                    } else if (args[i].replace("#", "").matches("\\d+")) {
+                        target = Long.parseLong(args[i].replace("#", ""));
+                    } else {
+                        usage(player, "/mcs machine evacuate <n°> [machine] [backup]", "/mcs machine evacuate ");
+                        return;
+                    }
+                }
+            }
+            default -> {
+                usage(player, "/mcs machine <region|backup|evacuate> <n°> ...", "/mcs machine ");
+                return;
+            }
+        }
+        String fRegion = region;
+        Long fTarget = target;
+        boolean fFromBackup = fromBackup;
+        apiClient.getPlayerByUuid(player.getUniqueId())
+                .thenCompose(info -> apiClient.machineAction(machine, action, info.get("id").asLong(), fRegion, fTarget, fFromBackup))
+                .whenComplete((r, error) -> run(() -> {
+                    if (error != null) {
+                        reportError(player, error, null);
+                        return;
+                    }
+                    switch (action) {
+                        case "region" -> success(player, text("Machine " + machine + " : région " + r.path("region").asText() + "."));
+                        case "backup" -> success(player, text("Machine " + machine + " : sauvegarde de "
+                                + r.path("servers").asInt() + " serveur(s) lancée. Tu recevras le résultat ici."));
+                        default -> success(player, text(r.path("servers").asInt() == 0 ? "Machine " + machine + " : aucun serveur."
+                                : "Machine " + machine + " : déplacement de " + r.path("servers").asInt()
+                                + " serveur(s) lancé (un à la fois). Les propriétaires sont prévenus ; tu recevras le résultat ici."));
+                    }
+                }));
+    }
+
     // ============================================================ restauration ====
 
     private static Long parseBackupNumber(Player player, String raw) {
@@ -1847,6 +2042,12 @@ public class McsCommand implements SimpleCommand {
             String host = m.path("host").isNull() || m.path("host").isMissingNode() ? null : m.path("host").asText();
             Component line = Component.text(" #" + id + " ", NamedTextColor.WHITE, TextDecoration.BOLD)
                     .append(Component.text(m.path("hostname").asText("?"), NamedTextColor.GRAY))
+                    .append(Component.text("  " + m.path("region").asText("?") + " · " + m.path("servers").asInt(0) + " serv.",
+                            NamedTextColor.DARK_AQUA)
+                            .clickEvent(ClickEvent.suggestCommand("/mcs machine "))
+                            .hoverEvent(HoverEvent.showText(Component.text(
+                                    "/mcs machine region " + id + " <région>\n/mcs machine backup " + id
+                                            + "\n/mcs machine evacuate " + id + " [machine] [backup]", NamedTextColor.GRAY))))
                     .append(Component.text(online ? "  ● en ligne" : "  ○ hors ligne",
                             online ? NamedTextColor.GREEN : NamedTextColor.DARK_GRAY))
                     .append(Component.text("  hôte : ", NamedTextColor.GRAY))
@@ -2153,6 +2354,7 @@ public class McsCommand implements SimpleCommand {
     private void sendQuota(Player player, JsonNode q) {
         long maxServers = q.path("maxServers").asLong(0);
         long serversUsed = q.path("serversUsed").asLong(0);
+        long deletedHeld = q.path("deletedHeld").asLong(0);
         long totalRam = q.path("totalRamMb").asLong(0);
         long ramUsed = q.path("ramUsedMb").asLong(0);
         long ramLeft = Math.max(0, q.path("ramRemainingMb").asLong(totalRam - ramUsed));
@@ -2164,12 +2366,19 @@ public class McsCommand implements SimpleCommand {
         player.sendMessage(header("Ton quota"));
 
         // Même présentation que /mcs info : barre, libellé, valeurs
-        player.sendMessage(Component.text(" ").append(bar(ratio(serversUsed, maxServers))).append(label("Serveurs"))
-                .append(Component.text(serversUsed + " / " + maxServers, NamedTextColor.WHITE))
-                .append(Component.text(serversUsed >= maxServers ? "  limite atteinte" : "  reste " + (maxServers - serversUsed),
-                        serversUsed >= maxServers ? NamedTextColor.RED : NamedTextColor.GRAY))
+        long slotsUsed = serversUsed + deletedHeld;
+        player.sendMessage(Component.text(" ").append(bar(ratio(slotsUsed, maxServers))).append(label("Serveurs"))
+                .append(Component.text(slotsUsed + " / " + maxServers, NamedTextColor.WHITE))
+                .append(Component.text(slotsUsed >= maxServers ? "  limite atteinte" : "  reste " + (maxServers - slotsUsed),
+                        slotsUsed >= maxServers ? NamedTextColor.RED : NamedTextColor.GRAY))
                 .hoverEvent(HoverEvent.showText(Component.text(
-                        "Nombre de serveurs que tu peux posséder,\nallumés ou éteints.", NamedTextColor.GRAY))));
+                        "Nombre de serveurs que tu peux posséder,\nallumés ou éteints."
+                                + (deletedHeld > 0 ? "\nDont " + deletedHeld + " serveur(s) supprimé(s) dont les sauvegardes\n"
+                                + "sont encore gardées (voir /mcs restore deleted)." : ""), NamedTextColor.GRAY))));
+        if (deletedHeld > 0) {
+            player.sendMessage(Component.text(" dont " + deletedHeld + " supprimé(s), sauvegardes encore gardées ", NamedTextColor.DARK_GRAY)
+                    .append(button("Voir", NamedTextColor.AQUA, "/mcs restore deleted", "Serveurs supprimés")));
+        }
 
         player.sendMessage(Component.text(" ").append(bar(ratio(ramUsed, totalRam))).append(label("RAM"))
                 .append(Component.text(size(ramUsed) + " / " + size(totalRam), NamedTextColor.WHITE))

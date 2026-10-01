@@ -121,6 +121,13 @@ public class Backup {
     @Column(name = "cpu_cores")
     private Integer cpuCores;
 
+    // Recopiée depuis un ancien dépôt de machine (lot 32) : l'original, à supprimer là-bas
+    @Column(name = "legacy_repo", length = 40)
+    private String legacyRepo;
+
+    @Column(name = "legacy_snapshot", length = 80)
+    private String legacySnapshot;
+
     // Quand elle est devenue permanente : au-delà du max, c'est la plus
     // anciennement marquée qui cesse d'être permanente
     @Column(name = "permanent_at")

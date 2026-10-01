@@ -150,11 +150,13 @@ public class ApiClient {
         return call("GET", "/api/v1/players/by-uuid/" + uuid, null, Duration.ofSeconds(10));
     }
 
+    /** replaceDeleted : accepte de supprimer les sauvegardes d'un serveur supprimé qui occupe une place */
     public CompletableFuture<JsonNode> createServer(long ownerPlayerId, String name, String type, String version,
-                                                    int ramMb, int cpuCores) {
+                                                    int ramMb, int cpuCores, boolean replaceDeleted) {
         return call("POST", "/api/v1/servers", java.util.Map.of(
                 "ownerPlayerId", ownerPlayerId, "name", name, "displayName", name, "serverType", type,
-                "minecraftVersion", version, "ramMb", ramMb, "cpuCores", cpuCores, "storageMb", 0),
+                "minecraftVersion", version, "ramMb", ramMb, "cpuCores", cpuCores, "storageMb", 0,
+                "replaceDeleted", replaceDeleted),
                 Duration.ofMinutes(5));
     }
 
@@ -285,6 +287,37 @@ public class ApiClient {
         body.put("duration", duration);
         body.put("reset", reset);
         return call("POST", "/api/v1/backup-settings", body, Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> getNotifications(long playerId) {
+        return call("GET", "/api/v1/players/" + playerId + "/notifications", null, Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> getRegions() {
+        return call("GET", "/api/v1/regions", null, Duration.ofSeconds(10));
+    }
+
+    /** Déplace un serveur (attend jusqu'à 21 min) */
+    public CompletableFuture<JsonNode> migrateServer(long serverId, long playerId, String region, Long machine,
+                                                     boolean fromBackup, Long backupId) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("playerId", playerId);
+        body.put("region", region);
+        body.put("machine", machine);
+        body.put("fromBackup", fromBackup);
+        body.put("backupId", backupId);
+        return call("POST", "/api/v1/servers/" + serverId + "/migrate", body, Duration.ofMinutes(21));
+    }
+
+    /** Admins : région, sauvegarde de tous les serveurs, évacuation d'une machine */
+    public CompletableFuture<JsonNode> machineAction(long machine, String action, long playerId, String region,
+                                                     Long target, boolean fromBackup) {
+        java.util.Map<String, Object> body = new java.util.HashMap<>();
+        body.put("playerId", playerId);
+        body.put("region", region);
+        body.put("target", target);
+        body.put("fromBackup", fromBackup);
+        return call("POST", "/api/v1/nodes/" + machine + "/" + action, body, Duration.ofSeconds(30));
     }
 
     /** Restaure une sauvegarde d'un serveur existant (attend jusqu'à 21 min) */

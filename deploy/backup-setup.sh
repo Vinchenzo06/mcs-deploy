@@ -187,16 +187,35 @@ export RESTIC_CACHE_DIR=/var/cache/mcs-backup
 now=$(date +%s)
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 ack=$(mktemp)
-trap 'rm -f "$ack" "$ack.n"' EXIT
+trap 'rm -f "$ack" "$ack.n" "$ack.o"' EXIT
 echo '{}' > "$ack"
 # Date restic -> secondes (fuseau ignoré : précision suffisante pour des jours)
 TO_EPOCH='sub("\\.[0-9]+"; "") | sub("([+-][0-9]{2}:[0-9]{2}|Z)$"; "Z") | fromdateiso8601'
+echo '{}' > "$ack.o"
 while IFS= read -r repo; do
   user=$(jq -r .user <<<"$repo")
   dir="$DATA_DIR/$user"
-  [[ "$user" =~ ^[a-z0-9]+$ && -f "$dir/config" ]] || continue
+  [[ "$user" =~ ^[a-z0-9]+$ ]] || continue
   RESTIC_PASSWORD=$(jq -r .repo_password <<<"$repo")
   export RESTIC_PASSWORD
+  # Recopie depuis les anciens dépôts de machine (un dépôt par serveur depuis le lot 32)
+  while IFS=$'\t' read -r from ids; do
+    [[ "$from" =~ ^node[0-9]+$ && -f "$DATA_DIR/$from/config" ]] || continue
+    RESTIC_FROM_PASSWORD=$(jq -r --arg f "$from" '.repos[] | select(.user == $f) | .repo_password' "$ETC/export.json")
+    export RESTIC_FROM_PASSWORD
+    if [[ ! -f "$dir/config" ]]; then
+      restic -r "$dir" init --from-repo "$DATA_DIR/$from" --copy-chunker-params >/dev/null || { echo "  ! création de $user impossible"; continue; }
+    fi
+    # shellcheck disable=SC2086
+    if restic -r "$dir" copy -q --from-repo "$DATA_DIR/$from" $ids; then
+      echo "  $user : $(wc -w <<<"$ids") instantané(s) recopié(s) depuis $from"
+    else
+      echo "  ! recopie $from -> $user échouée"
+    fi
+    unset RESTIC_FROM_PASSWORD
+  done < <(jq -r '[.copy // [] | .[] | select((.from | test("^node[0-9]+$")) and (.id | test("^[0-9a-f]{8,64}$")))]
+                  | group_by(.from)[] | [.[0].from, (map(.id) | join(" "))] | @tsv' <<<"$repo")
+  [[ -f "$dir/config" ]] || continue
   echo "== $user"
   restic -r "$dir" unlock >/dev/null 2>&1 || true
   if ! snaps=$(restic -r "$dir" snapshots --json 2>/dev/null); then
@@ -214,10 +233,11 @@ while IFS= read -r repo; do
     ids=$(jq -r --argjson f "$(jq -c '[.forget // [] | .[] | strings | select(test("^[0-9a-f]{8,64}$"))]' <<<"$repo")" \
       '.[] | .id as $id | select(any($f[]; . as $p | $id | startswith($p))) | $id' <<<"$snaps")
     # Inconnues de l'API depuis plus de 14 jours (ni gardées ni expirées)
-    known=$(jq -c '[(.known // []), (.forget // []) | .[] | strings | select(test("^[0-9a-f]{8,64}$"))]' <<<"$repo")
+    # (une copie depuis un ancien dépôt de machine est connue par son original)
+    known=$(jq -c '[(.known // []), (.forget // []), ((.copy // []) | map(.id)) | .[] | strings | select(test("^[0-9a-f]{8,64}$"))]' <<<"$repo")
     unknown=$(jq -r --argjson k "$known" --argjson now "$now" "
-      .[] | .id as \$id | select(any(\$k[]; . as \$p | \$id | startswith(\$p)) | not)
-      | select((.time | $TO_EPOCH) < (\$now - 14 * 86400)) | \$id" <<<"$snaps")
+      .[] | . as \$s | select(any(\$k[]; . as \$p | (\$s.id | startswith(\$p)) or ((\$s.original // \"\") | startswith(\$p))) | not)
+      | select((.time | $TO_EPOCH) < (\$now - 14 * 86400)) | .id" <<<"$snaps")
     n_known=$(jq 'length' <<<"$known")
     n_unknown=$(grep -c . <<<"$unknown" || true)
     if (( n_unknown > 0 )); then
@@ -236,13 +256,15 @@ while IFS= read -r repo; do
   fi
   restic -r "$dir" prune -q --max-unused 10% || echo "  ! prune a échoué"
   chown -R mcs-backup:mcs-backup "$dir"
-  # Ce qui reste, pour l'accusé
-  if present=$(restic -r "$dir" snapshots --json 2>/dev/null | jq -c '[.[].id]'); then
-    jq --arg u "$user" --argjson p "$present" '.[$u] = $p' "$ack" > "$ack.n" && mv "$ack.n" "$ack"
+  # Ce qui reste, pour l'accusé (et l'original des copies)
+  if all=$(restic -r "$dir" snapshots --json 2>/dev/null); then
+    jq --arg u "$user" --argjson p "$(jq -c '[.[].id]' <<<"$all")" '.[$u] = $p' "$ack" > "$ack.n" && mv "$ack.n" "$ack"
+    jq --arg u "$user" --argjson p "$(jq -c '[.[] | select(.original != null) | [.id, .original]]' <<<"$all")" \
+      '.[$u] = $p' "$ack.o" > "$ack.n" && mv "$ack.n" "$ack.o"
   fi
 done < <(jq -c '.repos[]' "$ETC/export.json")
 # Accusé au VPS : les sauvegardes expirées dont l'instantané n'existe plus passent en DELETED
-jq -n --arg g "$started" --slurpfile r "$ack" '{generated: $g, repos: $r[0]}' > "$ack.n"
+jq -n --arg g "$started" --slurpfile r "$ack" --slurpfile o "$ack.o" '{generated: $g, repos: $r[0], originals: $o[0]}' > "$ack.n"
 if ssh -T -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=yes \
      -o UserKnownHostsFile="$ETC/known_hosts" -i "$ETC/id_ed25519" -p "$SSH_PORT" \
      "$SSH_USER@$VPS" ack < "$ack.n" >/dev/null; then

@@ -30,4 +30,6 @@ public interface BackupRepository extends JpaRepository<Backup, Long> {
     List<Backup> findByServerIsNullAndStatus(String status);
 
     List<Backup> findByServerTagId(Long serverTagId);
+
+    List<Backup> findByServerIsNullAndStatusAndOwnerId(String status, Long ownerId);
 }

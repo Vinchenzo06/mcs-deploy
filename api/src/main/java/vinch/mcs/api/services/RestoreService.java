@@ -218,9 +218,29 @@ public class RestoreService {
                 throw new RuntimeException("Cette sauvegarde vient d'un serveur supprimé avant la mise à jour : "
                         + "ses réglages ne sont pas connus, il ne peut pas être recréé.");
             }
-            Node node = nodeRepository.findById(b.getNodeId())
-                    .filter(n -> !Boolean.TRUE.equals(n.getIsRevoked()))
-                    .orElseThrow(() -> new RuntimeException("La machine de cette sauvegarde n'existe plus."));
+            // Dépôt du serveur ("srv<id>") : sur sa machine d'origine si elle a la place,
+            // sinon sur une autre ; ancien dépôt de machine : seulement sur celle-ci
+            boolean legacy = b.getStoragePath() == null || b.getStoragePath().startsWith("node");
+            Node origin = b.getNodeId() == null ? null : nodeRepository.findById(b.getNodeId())
+                    .filter(n -> !Boolean.TRUE.equals(n.getIsRevoked())).orElse(null);
+            Node node;
+            if (legacy) {
+                if (origin == null) {
+                    throw new RuntimeException("La machine de cette sauvegarde n'existe plus.");
+                }
+                node = origin;
+            } else if (origin != null && agentWebSocketHandler.isNodeOnline(origin.getId())
+                    && serverService.hasRoom(origin, b.getRamMb(), b.getCpuCores())) {
+                node = origin;
+            } else {
+                node = serverService.pickNode(b.getRamMb(), b.getCpuCores(), null, origin == null ? null : origin.getRegion());
+                if (node == null) {
+                    node = serverService.pickNode(b.getRamMb(), b.getCpuCores(), null, null);
+                }
+                if (node == null) {
+                    throw new RuntimeException("Aucune machine en ligne n'a la place pour ce serveur en ce moment.");
+                }
+            }
             Map<String, Object> restore = backupService.restoreData(b, node, null);
             String name = newName == null || newName.isBlank() ? b.getServerName() : newName.trim().toLowerCase(Locale.ROOT);
             if (!name.matches("[a-z0-9-]{3,32}")) {
@@ -245,7 +265,7 @@ public class RestoreService {
 
         CompletableFuture<CreateServerResponse> future = CompletableFuture.supplyAsync(() -> {
             try {
-                CreateServerResponse created = serverService.createServer(plan.request(), plan.restore());
+                CreateServerResponse created = serverService.createServer(plan.request(), plan.restore(), plan.oldTag());
                 // Les anciennes sauvegardes suivent le nouveau serveur (et ses règles)
                 tx().executeWithoutResult(status -> {
                     Server s = serverRepository.findById(created.getServerId()).orElseThrow();

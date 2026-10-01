@@ -13,7 +13,7 @@ public class McsTabCompleter {
     private static final List<String> SUBCOMMANDS = List.of(
             "create", "list", "info", "join", "start", "stop", "restart", "members", "invite", "remove",
             "leave", "public", "private", "display", "console", "move", "delete", "quota", "host",
-            "backup", "backups", "restore"
+            "backup", "backups", "restore", "migrate", "regions", "machine"
     );
 
     private static final List<String> TYPES = List.of("PAPER", "SPIGOT", "FABRIC", "FORGE", "VANILLA");
@@ -68,6 +68,12 @@ public class McsTabCompleter {
             if (sub.equals("move")) {
                 return done(filter(playerNames(), args[1]));
             }
+            if (sub.equals("machine")) {
+                return done(filter(List.of("region", "backup", "evacuate"), args[1]));
+            }
+            if (sub.equals("migrate")) {
+                return serverNames(player, null).thenApply(names -> filter(names, args[1]));
+            }
             if (sub.equals("host")) {
                 return done(filter(List.of("list", "set", "remove", "backups"), args[1]));
             }
@@ -105,6 +111,15 @@ public class McsTabCompleter {
         }
         if (args.length == 4 && sub.equals("host") && args[1].equalsIgnoreCase("set")) {
             return done(filter(playerNames(), args[3]));
+        }
+        if (args.length == 3 && sub.equals("migrate")) {
+            return command.api().getRegions().thenApply(r -> {
+                List<String> opts = new ArrayList<>(List.of("backup", "machine"));
+                for (JsonNode reg : r.path("regions")) {
+                    opts.add(reg.path("region").asText());
+                }
+                return filter(opts, args[2]);
+            }).exceptionally(e -> filter(List.of("backup", "machine"), args[2]));
         }
         if (args.length == 4 && sub.equals("invite")) {
             return done(filter(LEVELS, args[3]));

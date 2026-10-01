@@ -85,10 +85,12 @@ public class PlayerController {
             long ramUsed = serverService.getTotalRamUsedByOwnerId(id);
             long cpuUsed = serverService.getTotalCpuUsedByOwnerId(id);
             long serversUsed = serverService.countServersByOwnerId(id);
+            long deletedHeld = serverService.deletedHeld(id);
 
             return ResponseEntity.ok(Map.of(
                     "maxServers", player.getMaxServers(),
                     "serversUsed", serversUsed,
+                    "deletedHeld", deletedHeld,
                     "totalRamMb", player.getTotalRamMb(),
                     "ramUsedMb", ramUsed,
                     "ramRemainingMb", player.getTotalRamMb() - ramUsed,

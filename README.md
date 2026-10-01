@@ -280,6 +280,24 @@ Mise en place, une fois :
   `/mcs restore deleted <n°> [nouveau-nom]` le recrée sur sa machine d'origine avec ses
   réglages (quotas du propriétaire comptés) et lui rattache ses anciennes sauvegardes.
   Une sauvegarde n'est restaurée que sur la machine qui l'a faite (lot 32 : ailleurs).
+- **Serveurs supprimés et nombre de serveurs** : tant que ses sauvegardes sont gardées, un
+  serveur supprimé occupe une place dans le nombre de serveurs du joueur (`/mcs quota`).
+  Créer au-delà demande une confirmation (`/mcs create ... confirm`) et supprime les
+  sauvegardes du plus ancien serveur supprimé. Exemple : 2 places, 1 serveur supprimé →
+  on peut en créer 1 sans rien perdre ; en créer un 2e efface les sauvegardes du supprimé.
+- **Dépôts au central (lot 32)** : un dépôt restic par serveur (`srv<id>`) ; une machine ne
+  reçoit que les identifiants des serveurs qu'elle héberge (renouvelés quand un serveur
+  part). Les anciens dépôts par machine (`node<id>`) sont recopiés chaque nuit dans ceux des
+  serveurs par le serveur de sauvegarde (`restic copy`), puis vidés.
+- **Déplacer un serveur (lot 32)** : `/mcs migrate <serveur> [région]` (propriétaire ou
+  admin ; `/mcs regions` pour la liste). Arrêt, sauvegarde, recréation sur la nouvelle
+  machine, suppression de l'ancienne copie, relance : rien n'est perdu. Machine hors
+  ligne : `/mcs migrate <serveur> backup [n°]` repart de la dernière sauvegarde du central
+  (l'ancienne copie est supprimée au retour de la machine). Admins : `/mcs migrate
+  <serveur> machine <n°>`, `/mcs machine region <n°> <région>`, `/mcs machine backup <n°>`
+  (tous ses serveurs au central), `/mcs machine evacuate <n°> [machine] [backup]` (tous ses
+  serveurs ailleurs, même région d'abord ; propriétaires prévenus). Messages aux joueurs :
+  tout de suite s'ils sont connectés, sinon à leur connexion.
 - **Minimum au central** : `/mcs backup minimum` (défaut : 2 hebdomadaires gardées 14 jours) ;
   un propriétaire ne descend pas en dessous.
 - **Qui règle quoi** : les admins fixent les défauts du réseau et les limites de chaque

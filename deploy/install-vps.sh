@@ -611,7 +611,8 @@ else
   [[ "$name" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || { echo "Nom invalide (lettres, chiffres, - et _, 32 max)"; exit 1; }
   vid=$(runuser -u postgres -- psql -qtA -d mcs_db -c "SELECT id FROM volunteers ORDER BY id LIMIT 1")
   [[ -n "$vid" ]] || { echo "Aucun volontaire en base"; exit 1; }
-  resp=$(api "" -d "$(jq -n --argjson v "$vid" --arg h "$name" '{volunteerId: $v, region: "default", hostname: $h}')") \
+  # Région (ensuite : /mcs machine region <n°> <région>)
+  resp=$(api "" -d "$(jq -n --argjson v "$vid" --arg h "$name" --arg r "${MCS_DEFAULT_REGION:-ca-est}" '{volunteerId: $v, region: $r, hostname: $h}')") \
     || { echo "L'API a refusé la création du node (est-elle démarrée ?)"; exit 1; }
 fi
 node_id=$(jq -r '.nodeId // empty' <<<"$resp")
@@ -913,6 +914,27 @@ ack=/home/mcs-backup/ack.json
 if [[ -s "$ack" ]]; then
   if jq -e '(.generated | type == "string") and (.repos | type == "object")' "$ack" >/dev/null 2>&1; then
     gen=$(jq -r .generated "$ack")
+    # Instantanés recopiés d'un ancien dépôt de machine : la sauvegarde pointe vers la copie
+    while IFS=$'\t' read -r repo newid orig; do
+      [[ "$repo" =~ ^srv[0-9]+$ && "$newid" =~ ^[0-9a-f]{8,64}$ && "$orig" =~ ^[0-9a-f]{8,64}$ ]] || continue
+      "${psql[@]}" -v repo="$repo" -v newid="$newid" -v orig="$orig" >/dev/null <<'SQL'
+UPDATE backups b SET legacy_repo = b.storage_path, legacy_snapshot = b.snapshot_id,
+                     storage_path = :'repo', snapshot_id = :'newid'
+WHERE b.storage_path LIKE 'node%' AND 'srv' || b.server_tag_id = :'repo' AND b.snapshot_id IS NOT NULL
+  AND (:'orig' LIKE b.snapshot_id || '%' OR b.snapshot_id LIKE :'orig' || '%');
+SQL
+    done < <(jq -r '(.originals // {}) | to_entries[] | .key as $r | .value[] | select(type == "array" and length == 2)
+                    | [$r, .[0], .[1]] | @tsv' "$ack")
+    # Originaux supprimés des anciens dépôts : plus rien à y faire
+    while IFS=$'\t' read -r repo ids; do
+      [[ "$repo" =~ ^node[0-9]+$ ]] || continue
+      "${psql[@]}" -v repo="$repo" -v ids="$ids" >/dev/null <<'SQL'
+UPDATE backups b SET legacy_repo = NULL, legacy_snapshot = NULL
+WHERE b.legacy_repo = :'repo'
+  AND NOT EXISTS (SELECT 1 FROM json_array_elements_text(:'ids'::json) x WHERE x LIKE b.legacy_snapshot || '%');
+SQL
+    done < <(jq -r '.repos | to_entries[]
+                    | [.key, ([.value[] | strings | select(test("^[0-9a-f]{8,64}$"))] | tojson)] | @tsv' "$ack")
     while IFS=$'\t' read -r repo ids; do
       [[ "$repo" =~ ^[a-z0-9]+$ ]] || continue
       "${psql[@]}" -v repo="$repo" -v ids="$ids" -v gen="$gen" >/dev/null <<'SQL'
@@ -931,19 +953,27 @@ fi
 # Expirées sans instantané (échec d'enregistrement) : rien à supprimer
 "${psql[@]}" -c "UPDATE backups SET status = 'DELETED' WHERE status = 'EXPIRED' AND snapshot_id IS NULL" >/dev/null
 
-# 2. Export
+# 2. Export : un dépôt par serveur ("srv<id>", lot 32) et les anciens par machine ("node<id>")
+#    forget : expirées, et originaux déjà recopiés dans le dépôt de leur serveur
+#    copy   : instantanés d'un ancien dépôt de machine à recopier dans ce dépôt de serveur
 nodes=$("${psql[@]}" -c "
   SELECT COALESCE(json_agg(json_build_object(
-      'user', 'node' || n.id,
-      'http_password', n.backup_http_password,
-      'repo_password', n.backup_repo_password,
-      'forget', COALESCE((SELECT json_agg(b.snapshot_id) FROM backups b
-          WHERE b.storage_path = 'node' || n.id AND b.status = 'EXPIRED' AND b.snapshot_id IS NOT NULL), '[]'::json),
+      'user', r.name,
+      'http_password', r.http_password,
+      'repo_password', r.repo_password,
+      'forget', COALESCE((SELECT json_agg(q.id) FROM (
+          SELECT b.snapshot_id AS id FROM backups b
+          WHERE b.storage_path = r.name AND b.status = 'EXPIRED' AND b.snapshot_id IS NOT NULL
+          UNION
+          SELECT b.legacy_snapshot FROM backups b
+          WHERE b.legacy_repo = r.name AND b.legacy_snapshot IS NOT NULL) q), '[]'::json),
       'known', COALESCE((SELECT json_agg(b.snapshot_id) FROM backups b
-          WHERE b.storage_path = 'node' || n.id AND b.status IN ('SUCCESS', 'RUNNING') AND b.snapshot_id IS NOT NULL), '[]'::json)
-      ) ORDER BY n.id), '[]'::json)
-  FROM nodes n
-  WHERE n.backup_http_password IS NOT NULL AND n.backup_repo_password IS NOT NULL")
+          WHERE b.storage_path = r.name AND b.status IN ('SUCCESS', 'RUNNING') AND b.snapshot_id IS NOT NULL), '[]'::json),
+      'copy', COALESCE((SELECT json_agg(json_build_object('from', b.storage_path, 'id', b.snapshot_id)) FROM backups b
+          WHERE r.name LIKE 'srv%' AND b.storage_path LIKE 'node%' AND b.status = 'SUCCESS'
+            AND b.snapshot_id IS NOT NULL AND 'srv' || b.server_tag_id = r.name), '[]'::json)
+      ) ORDER BY r.name), '[]'::json)
+  FROM backup_repos r")
 tmp=$(mktemp)
 jq -n --argjson nodes "$nodes" --arg vh "$BACKUP_VPS_HTTP_PASSWORD" --arg vr "$BACKUP_VPS_REPO_PASSWORD" \
   '{version: 2, generated: (now | todate),

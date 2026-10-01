@@ -44,6 +44,16 @@ public class ServerService {
      */
     @Transactional
     public CreateServerResponse createServer(CreateServerRequest request, Map<String, Object> restore) throws Exception {
+        return createServer(request, restore, null);
+    }
+
+    /**
+     * restoringTag : ancien id du serveur supprimé qu'on recrée (sa place, occupée par
+     * ses sauvegardes, lui revient).
+     */
+    @Transactional
+    public CreateServerResponse createServer(CreateServerRequest request, Map<String, Object> restore,
+                                             Long restoringTag) throws Exception {
         log.info("Création d'un serveur : owner={} name={} type={} version={}",
                 request.getOwnerPlayerId(), request.getName(), request.getServerType(), request.getMinecraftVersion());
 
@@ -62,6 +72,33 @@ public class ServerService {
         long count = serverRepository.countByOwnerId(owner.getId());
         if (count >= owner.getMaxServers()) {
             throw new RuntimeException("Limite de serveurs atteinte : " + owner.getMaxServers());
+        }
+        // Un serveur supprimé dont les sauvegardes sont encore gardées occupe une place :
+        // créer au-delà supprime les sauvegardes du plus ancien (après confirmation)
+        LinkedHashMap<Long, List<Backup>> held = backupService.heldDeleted(owner.getId());
+        if (restoringTag != null) {
+            held.remove(restoringTag);
+        }
+        List<List<Backup>> toRelease = new ArrayList<>();
+        Iterator<List<Backup>> oldest = held.values().iterator();
+        long used = count + held.size();
+        while (used >= owner.getMaxServers() && oldest.hasNext()) {
+            toRelease.add(oldest.next());
+            used--;
+        }
+        if (!toRelease.isEmpty()) {
+            if (!Boolean.TRUE.equals(request.getReplaceDeleted())) {
+                StringBuilder names = new StringBuilder();
+                for (List<Backup> g : toRelease) {
+                    names.append(names.length() == 0 ? "" : ", ").append(BackupService.describeHeld(g));
+                }
+                throw new RuntimeException("Emplacement occupé : ton serveur supprimé " + names
+                        + " compte encore dans tes " + owner.getMaxServers() + " serveur(s). "
+                        + "Créer celui-ci supprimera ses sauvegardes pour de bon.");
+            }
+            for (List<Backup> g : toRelease) {
+                backupService.releaseDeleted(g);
+            }
         }
 
 // Vérifier le budget RAM total
@@ -134,6 +171,8 @@ public class ServerService {
                 .build();
 
         server = serverRepository.save(server);
+        // Dépôt de sauvegarde du serveur au central (le serveur de sauvegarde le connaît en 2 min)
+        backupService.repoFor(server.getId());
         log.info("Serveur créé en base : id={} velocityName={}", server.getId(), velocityName);
 
         // Envoyer la commande à l'agent
@@ -192,6 +231,11 @@ public class ServerService {
                 .status(server.getStatus().name())
                 .storageMb(storageMb)
                 .build();
+    }
+
+    /** Serveurs supprimés du joueur dont des sauvegardes occupent encore une place */
+    public long deletedHeld(Long ownerId) {
+        return backupService.heldDeleted(ownerId).size();
     }
 
     /** RAM minimale d'un serveur (limite totale du conteneur) */
@@ -307,6 +351,72 @@ public class ServerService {
 
     // Premier port libre dans la plage de la machine. Les ports sont vérifiés
     // sur tout le VPS : deux serveurs ne peuvent jamais partager un tunnel.
+    // ------------------------------------------------------------ placement (lot 32) ----
+
+    private static CreateServerRequest sizing(int ramMb, int cpuCores) {
+        CreateServerRequest r = new CreateServerRequest();
+        r.setRamMb(ramMb);
+        r.setCpuCores(cpuCores);
+        return r;
+    }
+
+    /** La machine peut-elle accueillir un serveur de cette taille (en plus des siens) ? */
+    public boolean hasRoom(Node node, int ramMb, int cpuCores) {
+        return node != null && !Boolean.TRUE.equals(node.getIsRevoked()) && node.getPortStart() != null
+                && freeRamAfter(node, sizing(ramMb, cpuCores)) != null;
+    }
+
+    /**
+     * Machine en ligne qui a la place (la plus de RAM libre), hors "exclude", dans la
+     * région demandée (null : toutes) ; null si aucune.
+     */
+    public Node pickNode(int ramMb, int cpuCores, Long exclude, String region) {
+        Node best = null;
+        int bestFree = -1;
+        for (Node n : nodeRepository.findAll()) {
+            if (!Boolean.TRUE.equals(n.getIsOnline()) || Boolean.TRUE.equals(n.getIsRevoked())
+                    || n.getPortStart() == null || n.getPortEnd() == null
+                    || (exclude != null && exclude.equals(n.getId()))
+                    || (region != null && !region.equalsIgnoreCase(n.getRegion()))
+                    || !agentWebSocketHandler.isNodeOnline(n.getId())) {
+                continue;
+            }
+            Integer free = freeRamAfter(n, sizing(ramMb, cpuCores));
+            if (free != null && free > bestFree) {
+                best = n;
+                bestFree = free;
+            }
+        }
+        return best;
+    }
+
+    /** Port libre sur la machine */
+    public int freePortOn(Node node) {
+        return allocatePort(node);
+    }
+
+    /** Quota disque d'un serveur de cette RAM sur cette machine */
+    public static int quotaOn(Node node, int ramMb) {
+        return diskQuotaFor(node, ramMb);
+    }
+
+    /** Commande create_server pour un serveur existant (déplacement vers une autre machine) */
+    public static Map<String, Object> createData(Server server, int port, int storageMb, Map<String, Object> restore) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("server_id", server.getId());
+        data.put("type", server.getServerType().name());
+        data.put("version", server.getMinecraftVersion());
+        data.put("port", port);
+        data.put("ram_mb", server.getAllocatedRamMb());
+        data.put("cpu_cores", server.getAllocatedCpuCores());
+        data.put("storage_mb", storageMb);
+        data.put("owner_name", server.getOwner().getMinecraftUsername());
+        if (restore != null) {
+            data.put("restore", restore);
+        }
+        return data;
+    }
+
     private int allocatePort(Node node) {
         Set<Integer> usedPorts = new HashSet<>(serverRepository.findAllUsedPorts());
 
@@ -400,6 +510,9 @@ public class ServerService {
 
         if (server.getStatus() == ServerStatus.RUNNING) {
             throw new RuntimeException("Le serveur est déjà en marche");
+        }
+        if (server.getStatus() == ServerStatus.MIGRATING) {
+            throw new RuntimeException("Le serveur est en train de changer de machine : il redémarrera tout seul.");
         }
 
         String quota = metricsService.diskQuotaProblem(server);

@@ -10,6 +10,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import vinch.mcs.api.entities.*;
 import vinch.mcs.api.repositories.BackupPolicyRepository;
+import vinch.mcs.api.repositories.BackupRepoRepository;
 import vinch.mcs.api.repositories.BackupRepository;
 import vinch.mcs.api.repositories.NodeRepository;
 import vinch.mcs.api.repositories.ServerRepository;
@@ -60,6 +61,7 @@ public class BackupService {
     private final NodeRepository nodeRepository;
     private final BackupRepository backupRepository;
     private final BackupPolicyRepository policyRepository;
+    private final BackupRepoRepository repoRepository;
     private final AgentWebSocketHandler agentWebSocketHandler;
     private final AccessService accessService;
     private final PlatformTransactionManager transactionManager;
@@ -534,6 +536,70 @@ public class BackupService {
         }
     }
 
+    // ------------------------------------------------------------ serveurs supprimés ----
+
+    /**
+     * Serveurs supprimés du joueur dont des sauvegardes sont encore gardées (ancien id
+     * -> sauvegardes, du plus anciennement sauvegardé au plus récent). Chacun occupe une
+     * place dans son nombre de serveurs : supprimer/recréer à l'infini ne multiplie pas
+     * les sauvegardes.
+     */
+    public LinkedHashMap<Long, List<Backup>> heldDeleted(Long ownerId) {
+        Map<Long, List<Backup>> groups = new HashMap<>();
+        for (Backup b : backupRepository.findByServerIsNullAndStatusAndOwnerId("SUCCESS", ownerId)) {
+            if (b.getServerTagId() != null) {
+                groups.computeIfAbsent(b.getServerTagId(), k -> new ArrayList<>()).add(b);
+            }
+        }
+        List<Map.Entry<Long, List<Backup>>> sorted = new ArrayList<>(groups.entrySet());
+        sorted.sort(Comparator.comparing(e -> latest(e.getValue())));
+        LinkedHashMap<Long, List<Backup>> out = new LinkedHashMap<>();
+        for (Map.Entry<Long, List<Backup>> e : sorted) {
+            out.put(e.getKey(), e.getValue());
+        }
+        return out;
+    }
+
+    private static LocalDateTime latest(List<Backup> list) {
+        LocalDateTime t = LocalDateTime.MIN;
+        for (Backup b : list) {
+            if (b.getCreatedAt() != null && b.getCreatedAt().isAfter(t)) {
+                t = b.getCreatedAt();
+            }
+        }
+        return t;
+    }
+
+    /** Nom d'un serveur supprimé et date de fin de ses sauvegardes, pour les messages */
+    public static String describeHeld(List<Backup> group) {
+        String name = null;
+        LocalDateTime until = null;
+        for (Backup b : group) {
+            if (name == null) {
+                name = b.getServerName() != null ? b.getServerName() : b.getServerRef();
+            }
+            if (b.getExpiresAt() != null && (until == null || b.getExpiresAt().isAfter(until))) {
+                until = b.getExpiresAt();
+            }
+        }
+        return "« " + (name == null ? "?" : name) + " »" + (until == null ? ""
+                : " (sauvegardes gardées jusqu'au " + String.format("%02d/%02d à %02dh%02d",
+                until.getDayOfMonth(), until.getMonthValue(), until.getHour(), until.getMinute()) + ")");
+    }
+
+    /** Libère la place d'un serveur supprimé : ses sauvegardes expirent tout de suite */
+    public void releaseDeleted(List<Backup> group) {
+        LocalDateTime now = LocalDateTime.now();
+        for (Backup b : group) {
+            b.setStatus("EXPIRED");
+            b.setExpiresAt(now);
+            b.setMessage("Place libérée pour un nouveau serveur");
+            backupRepository.save(b);
+        }
+        log.info("Sauvegardes du serveur supprimé {} expirées : place libérée ({} sauvegarde(s))",
+                describeHeld(group), group.size());
+    }
+
     /** Réserve le serveur (et sa machine) : aucune sauvegarde pendant une restauration */
     public boolean tryLock(long serverId, long nodeId) {
         if (!runningServers.add(serverId)) {
@@ -548,18 +614,55 @@ public class BackupService {
         runningNodes.remove(nodeId);
     }
 
+    // ------------------------------------------------------------ dépôts du central ----
+
+    /** Dépôt d'un serveur au central ("srv<id>"), créé au besoin */
+    public BackupRepo repoFor(long serverId) {
+        String name = "srv" + serverId;
+        return repoRepository.findByName(name).orElseGet(() -> {
+            BackupRepo r = repoRepository.save(BackupRepo.builder()
+                    .name(name).httpPassword(secret()).repoPassword(secret()).build());
+            log.info("Dépôt de sauvegarde {} créé", name);
+            return r;
+        });
+    }
+
+    /**
+     * Nouveau mot de passe HTTP du dépôt d'un serveur : après un déplacement, son
+     * ancienne machine ne peut plus y accéder (pris en compte par le serveur de
+     * sauvegarde à sa prochaine synchronisation, 2 min).
+     */
+    public void rotateRepoAccess(long serverId) {
+        tx().executeWithoutResult(status -> {
+            BackupRepo r = repoFor(serverId);
+            r.setHttpPassword(secret());
+            repoRepository.save(r);
+        });
+    }
+
+    private Map<String, Object> centralAccess(BackupRepo r) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("repository", "rest:" + repoBase + "/" + r.getName() + "/");
+        data.put("http_user", r.getName());
+        data.put("http_password", r.getHttpPassword());
+        data.put("repo_password", r.getRepoPassword());
+        return data;
+    }
+
     /**
      * Données de restauration d'une sauvegarde pour l'agent de la machine "node".
-     * Une sauvegarde du central n'est lisible qu'avec les identifiants de la machine
-     * qui l'a faite : on ne les donne jamais à une autre machine.
+     * Dépôt d'un serveur ("srv<id>") : n'importe quelle machine qui l'héberge. Ancien
+     * dépôt de machine ("node<id>") : seulement cette machine (il contient les autres
+     * serveurs de la machine), jusqu'à sa recopie par le serveur de sauvegarde.
      */
     public Map<String, Object> restoreData(Backup b, Node node, Server target) {
         if (b.getSnapshotId() == null) {
             throw new RuntimeException("Sauvegarde n°" + b.getId() + " sans instantané enregistré.");
         }
-        if (b.getNodeId() == null || !b.getNodeId().equals(node.getId())) {
-            throw new RuntimeException("La sauvegarde n°" + b.getId() + " a été faite sur une autre machine : "
-                    + "la restaurer ailleurs viendra avec le déplacement de serveurs.");
+        boolean legacy = !at(b, LOCAL) && (b.getStoragePath() == null || b.getStoragePath().startsWith("node"));
+        if ((at(b, LOCAL) || legacy) && (b.getNodeId() == null || !b.getNodeId().equals(node.getId()))) {
+            throw new RuntimeException("La sauvegarde n°" + b.getId() + " est encore dans l'ancien dépôt de sa machine : "
+                    + "elle sera utilisable ailleurs après sa recopie (chaque nuit, ou sudo mcs-backup-prune).");
         }
         Map<String, Object> data = new HashMap<>();
         data.put("snapshot_id", b.getSnapshotId());
@@ -570,14 +673,26 @@ public class BackupService {
             data.put("local", true);
             data.put("repo_password", target.getLocalBackupPassword());
         } else {
-            ensureCredentials(node);
+            String name = b.getStoragePath() == null ? "node" + node.getId() : b.getStoragePath();
+            BackupRepo r = repoRepository.findByName(name)
+                    .orElseThrow(() -> new RuntimeException("Dépôt " + name + " inconnu."));
             data.put("local", false);
-            data.put("repository", "rest:" + repoBase + "/node" + node.getId() + "/");
-            data.put("http_user", "node" + node.getId());
-            data.put("http_password", node.getBackupHttpPassword());
-            data.put("repo_password", node.getBackupRepoPassword());
+            data.putAll(centralAccess(r));
         }
         return data;
+    }
+
+    /**
+     * Sauvegarde au central, lancée par un déplacement ou par un admin pour toute une
+     * machine (kinds vide : gardée tant qu'elle est la plus récente). Appelant : verrou pris.
+     */
+    public Backup backupCentralNow(long serverId, Set<BackupKind> kinds, BackupType type, String requestedBy) {
+        Job job = tx().execute(status -> {
+            Server s = serverRepository.findById(serverId).orElseThrow(() -> new RuntimeException("Serveur introuvable"));
+            return new Job(s.getId(), s.getNode().getId(), s.getVelocityName(), CENTRAL,
+                    kinds.isEmpty() ? EnumSet.noneOf(BackupKind.class) : EnumSet.copyOf(kinds));
+        });
+        return execute(job, type, requestedBy);
     }
 
     private static boolean olderThan(LocalDateTime t, Duration d, LocalDateTime now) {
@@ -627,6 +742,7 @@ public class BackupService {
             if (credentialsDone.add(node.getId())) {
                 ensureCredentials(node);
             }
+            repoFor(s.getId());
             if (!agentWebSocketHandler.isNodeOnline(node.getId()) || runningServers.contains(s.getId())) {
                 continue;
             }
@@ -1001,11 +1117,7 @@ public class BackupService {
                 data.put("forget", snapshots(expired));
                 data.put("evict", snapshots(evictable));
             } else {
-                ensureCredentials(node);
-                data.put("repository", "rest:" + repoBase + "/node" + node.getId() + "/");
-                data.put("http_user", "node" + node.getId());
-                data.put("http_password", node.getBackupHttpPassword());
-                data.put("repo_password", node.getBackupRepoPassword());
+                data.putAll(centralAccess(repoFor(s.getId())));
             }
             Backup b = Backup.builder()
                     .server(s)
@@ -1014,7 +1126,7 @@ public class BackupService {
                     .ownerId(s.getOwner().getId())
                     .backupType(type)
                     .location(job.location())
-                    .storagePath(local ? "local:node" + node.getId() : "node" + node.getId())
+                    .storagePath(local ? "local:node" + node.getId() : "srv" + s.getId())
                     .nodeId(node.getId())
                     .requestedBy(requestedBy)
                     .status("RUNNING")

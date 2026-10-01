@@ -102,6 +102,23 @@ public class VelocityClient {
         }
     }
 
+    /** Message à un joueur connecté ; false s'il n'est pas en ligne (ou proxy injoignable) */
+    public boolean notifyPlayer(java.util.UUID uuid, String message) {
+        try {
+            String body = objectMapper.writeValueAsString(Map.of("uuid", uuid.toString(), "message", message));
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(velocityUrl + "/players/notify"))
+                    .header("Content-Type", "application/json")
+                    .header("X-Plugin-Key", pluginKey)
+                    .timeout(Duration.ofSeconds(5))
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+            return httpClient.send(request, HttpResponse.BodyHandlers.ofString()).statusCode() == 200;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public void unregisterServer(String name) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(velocityUrl + "/servers/" + name))
