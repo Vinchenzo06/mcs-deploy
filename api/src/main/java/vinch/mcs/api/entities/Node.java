@@ -99,6 +99,10 @@ public class Node {
     @Builder.Default
     private Boolean acceptsLocalBackups = false;
 
+    // Hors ligne depuis (null : en ligne) ; ses serveurs repartent ailleurs après 24 h
+    @Column(name = "offline_since")
+    private java.time.LocalDateTime offlineSince;
+
     // Joueur propriétaire de la machine (mcs-node-owner), null si inconnu
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "owner_player_id")

@@ -58,7 +58,7 @@ public class MigrationService {
     }
 
     private record Plan(long serverId, String ref, long ownerId, long sourceNodeId, boolean sourceOnline,
-                        boolean wasRunning, long targetNodeId, String targetLabel, Long backupId, boolean fromBackup,
+                        boolean isRunning, boolean startAfter, long targetNodeId, String targetLabel, Long backupId, boolean fromBackup,
                         String by) {}
 
     public static String normalizeRegion(String region) {
@@ -133,7 +133,8 @@ public class MigrationService {
         if (!backupService.isEnabled()) {
             throw new RuntimeException("Les sauvegardes ne sont pas encore configurées : impossible de déplacer un serveur.");
         }
-        Plan plan = tx().execute(status -> prepare(serverId, playerId, normalizeRegion(region), targetNode, fromBackup, backupId, false));
+        Plan plan = tx().execute(status -> prepare(serverId, playerId, normalizeRegion(region), targetNode, fromBackup, backupId,
+                false, null, true));
         Map<String, Object> result = runWithLock(plan);
         if (playerId != null && plan.ownerId() != playerId && "SUCCESS".equals(result.get("status"))) {
             notifyOwner(serverId, plan, true);
@@ -141,8 +142,27 @@ public class MigrationService {
         return result;
     }
 
+    /**
+     * Démarrage d'un serveur qui ne peut pas (ou plus) démarrer sur sa machine : il est
+     * recréé sur une machine qui a la place à partir de sa sauvegarde de rangement
+     * (ou de "backupId"), puis démarré. Sa machine d'origine est évitée si elle est pleine.
+     */
+    public Map<String, Object> relocateForStart(Long serverId, Long backupId, boolean avoidSource) throws Exception {
+        Plan plan = tx().execute(status -> {
+            Server s = serverRepository.findById(serverId).orElseThrow(() -> new RuntimeException("Serveur introuvable"));
+            String region = s.getNode() == null ? null : s.getNode().getRegion();
+            try {
+                return prepare(serverId, null, region, null, true, backupId, true, Boolean.TRUE, avoidSource);
+            } catch (RuntimeException e) {
+                // Rien dans la même région : n'importe où
+                return prepare(serverId, null, null, null, true, backupId, true, Boolean.TRUE, avoidSource);
+            }
+        });
+        return runWithLock(plan);
+    }
+
     private Plan prepare(Long serverId, Long playerId, String region, Long targetNode, boolean fromBackup,
-                         Long backupId, boolean system) {
+                         Long backupId, boolean system, Boolean startAfter, boolean excludeSource) {
         Server s = serverRepository.findById(serverId).orElseThrow(() -> new RuntimeException("Serveur introuvable"));
         Player p = playerId == null ? null : accessService.player(playerId);
         boolean admin = system || (p != null && AccessService.isAdmin(p));
@@ -164,13 +184,21 @@ public class MigrationService {
         if (s.getStatus() == ServerStatus.MIGRATING || s.getStatus() == ServerStatus.CREATING) {
             throw new RuntimeException("Le serveur est déjà en cours de création ou de déplacement.");
         }
+        // Arrêté et rangé (lot 33) : son rangement est sa dernière version, inutile de
+        // repasser par sa machine (qui n'a peut-être plus de copie)
+        boolean stopped = s.getStatus() == ServerStatus.STOPPED || s.getStatus() == ServerStatus.ERROR;
+        if (!fromBackup && s.getParkedBackupId() != null && stopped
+                && ("CLEAN".equals(s.getParkState()) || "COLD".equals(s.getParkState()))) {
+            fromBackup = true;
+            backupId = s.getParkedBackupId();
+        }
         if (!fromBackup && !sourceOnline) {
             throw new RuntimeException("La machine du serveur est hors ligne : relance-le depuis sa dernière sauvegarde, "
                     + "/mcs migrate " + s.getName() + " backup");
         }
 
         // Destination
-        Long exclude = source == null ? null : source.getId();
+        Long exclude = source == null || !excludeSource ? null : source.getId();
         Node target;
         if (targetNode != null) {
             target = nodeRepository.findById(targetNode).orElseThrow(() -> new RuntimeException("Machine " + targetNode + " introuvable."));
@@ -196,11 +224,12 @@ public class MigrationService {
         Long useBackup = null;
         if (fromBackup) {
             Backup b;
-            if (backupId != null) {
-                b = backupRepository.findById(backupId)
+            Long wanted = backupId;
+            if (wanted != null) {
+                b = backupRepository.findById(wanted)
                         .filter(x -> Objects.equals(x.getServerTagId(), s.getId()) && "SUCCESS".equals(x.getStatus())
                                 && !"LOCAL".equals(x.getLocation()))
-                        .orElseThrow(() -> new RuntimeException("Sauvegarde n°" + backupId + " introuvable au central pour ce serveur."));
+                        .orElseThrow(() -> new RuntimeException("Sauvegarde n°" + wanted + " introuvable au central pour ce serveur."));
             } else {
                 b = backupRepository.findByServerTagIdAndStatusOrderByCreatedAtDesc(s.getId(), "SUCCESS").stream()
                         .filter(x -> !"LOCAL".equals(x.getLocation()) && x.getSnapshotId() != null)
@@ -213,7 +242,8 @@ public class MigrationService {
         boolean running = s.getStatus() == ServerStatus.RUNNING || s.getStatus() == ServerStatus.STARTING;
         String ref = s.getOwner().getMinecraftUsername().toLowerCase(Locale.ROOT) + "/" + s.getName();
         return new Plan(s.getId(), ref, s.getOwner().getId(), source == null ? -1 : source.getId(), sourceOnline,
-                running || (fromBackup && !sourceOnline), target.getId(), label(target), useBackup, fromBackup,
+                running, startAfter != null ? startAfter : running || (fromBackup && !sourceOnline),
+                target.getId(), label(target), useBackup, fromBackup,
                 system ? "MCS" : p.getMinecraftUsername());
     }
 
@@ -253,7 +283,7 @@ public class MigrationService {
         Long ownerPlayerId = tx().execute(x -> serverRepository.findById(serverId).map(s -> s.getOwner().getId()).orElse(null));
 
         // 1. Arrêt (machine d'origine en ligne)
-        if (plan.sourceOnline() && plan.wasRunning()) {
+        if (plan.sourceOnline() && plan.isRunning()) {
             try {
                 serverService.stopServer(serverId, ownerPlayerId);
             } catch (Exception e) {
@@ -293,6 +323,7 @@ public class MigrationService {
                 Map<String, Object> restore = backupService.restoreData(b, target, s);
                 int p = serverService.freePortOn(target);
                 int q = ServerService.quotaOn(target, s.getAllocatedRamMb());
+                serverService.makeDiskRoom(target, q);
                 return new Object[]{ServerService.createData(s, p, q, restore), p, q};
             });
             @SuppressWarnings("unchecked")
@@ -360,7 +391,7 @@ public class MigrationService {
             log.warn("Enregistrement Velocity de {} : {}", velocityName, e.getMessage());
         }
         boolean stoppedAgain = false;
-        if (!plan.wasRunning()) {
+        if (!plan.startAfter()) {
             try {
                 serverService.stopServer(serverId, ownerPlayerId);
                 stoppedAgain = true;
@@ -370,7 +401,7 @@ public class MigrationService {
         }
 
         // 5. Ancienne copie : supprimée (ou plus tard, au retour de la machine)
-        if (plan.sourceNodeId() > 0) {
+        if (plan.sourceNodeId() > 0 && plan.sourceNodeId() != plan.targetNodeId()) {
             boolean deleted = false;
             if (agentWebSocketHandler.isNodeOnline(plan.sourceNodeId())) {
                 try {
@@ -399,7 +430,7 @@ public class MigrationService {
         out.put("target", plan.targetLabel());
         out.put("fromBackup", plan.fromBackup());
         out.put("backupId", backupId);
-        out.put("running", plan.wasRunning() && !stoppedAgain);
+        out.put("running", plan.startAfter() && !stoppedAgain);
         return out;
     }
 
@@ -407,14 +438,15 @@ public class MigrationService {
     private void rollback(Plan plan, Long ownerPlayerId) {
         Integer port = originalPorts.remove(plan.serverId());
         tx().executeWithoutResult(x -> serverRepository.findById(plan.serverId()).ifPresent(s -> {
-            s.setStatus(plan.sourceOnline() ? ServerStatus.STOPPED : ServerStatus.ERROR);
+            // Les données n'ont pas bougé (machine d'origine ou central) : arrêté, pas en erreur
+            s.setStatus(ServerStatus.STOPPED);
             if (port != null) {
                 s.setTunnelPort(port);
                 s.setLocalPort(port);
             }
             serverRepository.save(s);
         }));
-        if (plan.sourceOnline() && plan.wasRunning()) {
+        if (plan.sourceOnline() && plan.isRunning()) {
             try {
                 serverService.startServer(plan.serverId(), ownerPlayerId);
             } catch (Exception e) {
@@ -496,13 +528,13 @@ public class MigrationService {
                     try {
                         Plan plan;
                         try {
-                            plan = tx().execute(x -> prepare(id, playerId, target == null ? region : null, target, fromBackup, null, false));
+                            plan = tx().execute(x -> prepare(id, playerId, target == null ? region : null, target, fromBackup, null, false, null, true));
                         } catch (RuntimeException e) {
                             if (target != null || region == null) {
                                 throw e;
                             }
                             // Pas de place dans la même région : n'importe où
-                            plan = tx().execute(x -> prepare(id, playerId, null, null, fromBackup, null, false));
+                            plan = tx().execute(x -> prepare(id, playerId, null, null, fromBackup, null, false, null, true));
                         }
                         Map<String, Object> r = runWithLockBlocking(plan);
                         done.add(plan.ref() + " → " + r.get("target"));

@@ -11,7 +11,7 @@ import (
 )
 
 // Version de l'agent (fait foi, indépendamment du fichier de config)
-const AgentVersion = "0.12.0"
+const AgentVersion = "0.13.0"
 
 // Vérifie régulièrement que l'isolation réseau est toujours en place
 // (un redémarrage de Docker ou un rechargement du pare-feu peut l'effacer).

@@ -24,7 +24,7 @@ public class McsTabCompleter {
 
     private static final List<String> LEVELS = List.of("membre", "gerant", "technicien");
 
-    private static final List<String> BACKUP_SUBS = List.of("keep", "unkeep", "settings", "set", "defaults", "minimum", "limits");
+    private static final List<String> BACKUP_SUBS = List.of("keep", "unkeep", "settings", "set", "defaults", "role");
     private static final List<String> BACKUP_KINDS = List.of("quotidienne", "hebdomadaire", "mensuelle", "manuelle", "permanente");
     private static final List<String> RANKS = List.of("default", "vip", "premium", "host", "admin");
 
@@ -75,7 +75,7 @@ public class McsTabCompleter {
                 return serverNames(player, null).thenApply(names -> filter(names, args[1]));
             }
             if (sub.equals("host")) {
-                return done(filter(List.of("list", "set", "remove", "backups"), args[1]));
+                return done(filter(List.of("list", "set", "remove"), args[1]));
             }
             if (SERVER_ARG.contains(sub)) {
                 String status = switch (sub) {
@@ -102,12 +102,6 @@ public class McsTabCompleter {
                 default -> {
                 }
             }
-        }
-        if (sub.equals("host") && args[1].equalsIgnoreCase("backups") && args.length >= 4) {
-            if (args.length == 4) {
-                return done(filter(List.of("quotidienne", "manuelle", "reset"), args[3]));
-            }
-            return done(scopeArgs(args, 3, false));
         }
         if (args.length == 4 && sub.equals("host") && args[1].equalsIgnoreCase("set")) {
             return done(filter(playerNames(), args[3]));
@@ -150,32 +144,19 @@ public class McsTabCompleter {
                     return serverNames(player, null).thenApply(names -> filter(names, last));
                 }
                 if (a1.equals("set")) {
-                    boolean local = args[3].equalsIgnoreCase("local");
                     if (args.length == 4) {
                         List<String> kinds = new ArrayList<>(BACKUP_KINDS);
-                        kinds.add("local");
                         kinds.add("reset");
                         return done(filter(kinds, last));
                     }
-                    if (local && args.length == 5) {
-                        return done(filter(List.of("quotidienne", "manuelle", "reset"), last));
-                    }
-                    return done(scopeArgs(args, local ? 4 : 3, false));
+                    return done(scopeArgs(args, 3, false));
                 }
                 return done(List.of());
             }
             case "defaults" -> {
-                if (args.length == 3) {
-                    List<String> kinds = new ArrayList<>(BACKUP_KINDS);
-                    kinds.add("local");
-                    return done(filter(kinds, last));
-                }
-                return done(scopeArgs(args, args[2].equalsIgnoreCase("local") ? 3 : 2, false));
+                return done(scopeArgs(args, 2, false));
             }
-            case "minimum" -> {
-                return done(scopeArgs(args, 2, true));
-            }
-            case "limits" -> {
+            case "limits", "role" -> {
                 if (args.length == 3) {
                     return done(filter(RANKS, last));
                 }

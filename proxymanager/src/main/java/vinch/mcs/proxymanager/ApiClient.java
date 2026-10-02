@@ -200,7 +200,8 @@ public class ApiClient {
     /** action = start | stop | restart | delete, au nom du joueur */
     public CompletableFuture<JsonNode> serverAction(long serverId, String action, long playerId) {
         Duration timeout = switch (action) {
-            case "start" -> Duration.ofMinutes(3);
+            // Démarrage sur une autre machine depuis le rangement : quelques minutes
+            case "start" -> Duration.ofMinutes(21);
             case "restart" -> Duration.ofMinutes(5);
             default -> Duration.ofMinutes(1);
         };

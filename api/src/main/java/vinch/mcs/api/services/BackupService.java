@@ -145,7 +145,8 @@ public class BackupService {
 
     /** Réglages effectifs d'un serveur au central : les siens, sinon ceux du réseau */
     public Map<BackupKind, Rule> effective(Server s) {
-        return resolve("server:" + s.getId(), "network");
+        // Exception posée par un admin, sinon réglages du rôle du propriétaire, sinon réseau
+        return resolve("server:" + s.getId(), rankScope(s.getOwner()), "network");
     }
 
     /** Limites du rôle du propriétaire (ce qu'il peut régler au plus, au central) */
@@ -160,8 +161,8 @@ public class BackupService {
 
     /** La machine du serveur garde-t-elle des sauvegardes ? */
     public static boolean localEnabled(Server s) {
-        Node n = s.getNode();
-        return n != null && Boolean.TRUE.equals(n.getAcceptsLocalBackups()) && !Boolean.TRUE.equals(n.getIsRevoked());
+        // Lot 33 : plus de sauvegardes sur les machines des volontaires (un seul endroit : le central)
+        return false;
     }
 
     /** Plafond de la machine : réglage de l'hôte, sinon minimum fixé par l'admin */
@@ -241,8 +242,9 @@ public class BackupService {
             Server s = serverRepository.findById(serverId).orElseThrow(() -> new RuntimeException("Serveur introuvable"));
             Player p = accessService.player(playerId);
             boolean admin = AccessService.isAdmin(p);
-            if (!admin && !AccessService.isOwner(p, s)) {
-                throw new RuntimeException("Seuls le propriétaire du serveur et les admins règlent ses sauvegardes.");
+            if (!admin) {
+                throw new RuntimeException("Les sauvegardes suivent le rôle du propriétaire : seuls les admins "
+                        + "peuvent faire une exception pour un serveur.");
             }
             if (local && !localEnabled(s)) {
                 throw new RuntimeException("La machine de ce serveur ne garde pas de sauvegardes : tout va au central.");
@@ -729,7 +731,55 @@ public class BackupService {
         return false;
     }
 
-    /** Sauvegardes automatiques dues, par serveur (machine d'abord, puis central) */
+    /**
+     * Types automatiques dus maintenant pour ce serveur (vide : rien de dû). Hebdomadaire
+     * et mensuelle profitent de la quotidienne (pas une 2e sauvegarde le même jour).
+     */
+    private Set<BackupKind> dueKinds(Server s, LocalDateTime now) {
+        Map<BackupKind, Rule> rules = effective(s);
+        LocalDateTime lastAuto = null;
+        LocalDateTime lastWeekly = null;
+        LocalDateTime lastMonthly = null;
+        for (Backup b : at(backupRepository.findByServerTagIdAndStatusOrderByCreatedAtDesc(s.getId(), "SUCCESS"), CENTRAL)) {
+            boolean auto = b.is(BackupKind.DAILY) || b.is(BackupKind.WEEKLY) || b.is(BackupKind.MONTHLY);
+            if (auto && lastAuto == null) {
+                lastAuto = b.getCreatedAt();
+            }
+            if (b.is(BackupKind.WEEKLY) && lastWeekly == null) {
+                lastWeekly = b.getCreatedAt();
+            }
+            if (b.is(BackupKind.MONTHLY) && lastMonthly == null) {
+                lastMonthly = b.getCreatedAt();
+            }
+        }
+        if (lastAuto == null) {
+            lastAuto = s.getCreatedAt(); // pas encore de sauvegarde automatique : depuis la création
+        }
+        boolean dailyOn = rules.get(BackupKind.DAILY).max() > 0;
+        boolean weeklyDue = rules.get(BackupKind.WEEKLY).max() > 0 && olderThan(lastWeekly, Duration.ofDays(7), now);
+        boolean monthlyDue = rules.get(BackupKind.MONTHLY).max() > 0 && olderThan(lastMonthly, Duration.ofDays(30), now);
+        boolean dailyDue = dailyOn && olderThan(lastAuto, Duration.ofDays(1), now);
+        Set<BackupKind> kinds = EnumSet.noneOf(BackupKind.class);
+        if (dailyOn ? !dailyDue : !(weeklyDue || monthlyDue)) {
+            return kinds;
+        }
+        if (dailyOn) {
+            kinds.add(BackupKind.DAILY);
+        }
+        if (weeklyDue) {
+            kinds.add(BackupKind.WEEKLY);
+        }
+        if (monthlyDue) {
+            kinds.add(BackupKind.MONTHLY);
+        }
+        return kinds;
+    }
+
+    /**
+     * Sauvegardes automatiques dues des serveurs qui tournent. Un serveur arrêté est
+     * rangé à l'arrêt (ParkingService), et ce rangement compte comme quotidienne,
+     * hebdomadaire ou mensuelle quand l'une d'elles est due.
+     */
     private List<List<Job>> planDue() {
         LocalDateTime now = LocalDateTime.now();
         List<List<Job>> due = new ArrayList<>();
@@ -743,94 +793,40 @@ public class BackupService {
                 ensureCredentials(node);
             }
             repoFor(s.getId());
-            if (!agentWebSocketHandler.isNodeOnline(node.getId()) || runningServers.contains(s.getId())) {
+            if (s.getStatus() != ServerStatus.RUNNING || !agentWebSocketHandler.isNodeOnline(node.getId())
+                    || runningServers.contains(s.getId())) {
                 continue;
             }
-            boolean running = s.getStatus() == ServerStatus.RUNNING;
-            if (!running && s.getStatus() != ServerStatus.STOPPED) {
+            if (backingOff(backupRepository.findTop30ByServerTagIdOrderByCreatedAtDesc(s.getId()), CENTRAL, now)) {
                 continue;
             }
-            List<Backup> recent = backupRepository.findTop30ByServerTagIdOrderByCreatedAtDesc(s.getId());
-            List<Backup> ok = backupRepository.findByServerTagIdAndStatusOrderByCreatedAtDesc(s.getId(), "SUCCESS");
-            List<Job> jobs = new ArrayList<>();
-
-            // Sur la machine : quotidienne
-            if (localEnabled(s) && !backingOff(recent, LOCAL, now)
-                    && localEffective(s).get(BackupKind.DAILY).max() > 0) {
-                List<Backup> local = at(ok, LOCAL);
-                LocalDateTime lastDaily = null;
-                for (Backup b : local) {
-                    if (b.is(BackupKind.DAILY)) {
-                        lastDaily = b.getCreatedAt();
-                        break;
-                    }
-                }
-                LocalDateTime lastAny = local.isEmpty() ? null : local.get(0).getCreatedAt();
-                boolean isDue = running
-                        ? olderThan(lastDaily != null ? lastDaily : s.getCreatedAt(), Duration.ofDays(1), now)
-                        : s.getLastStoppedAt() != null && (lastAny == null || lastAny.isBefore(s.getLastStoppedAt()));
-                if (isDue) {
-                    jobs.add(new Job(s.getId(), node.getId(), s.getVelocityName(), LOCAL, EnumSet.of(BackupKind.DAILY)));
-                }
-            }
-
-            // Au central : quotidienne, hebdomadaire, mensuelle
-            if (!backingOff(recent, CENTRAL, now)) {
-                Map<BackupKind, Rule> rules = effective(s);
-                List<Backup> central = at(ok, CENTRAL);
-                LocalDateTime lastAuto = null;
-                LocalDateTime lastWeekly = null;
-                LocalDateTime lastMonthly = null;
-                LocalDateTime lastAny = central.isEmpty() ? null : central.get(0).getCreatedAt();
-                for (Backup b : central) {
-                    boolean auto = b.is(BackupKind.DAILY) || b.is(BackupKind.WEEKLY) || b.is(BackupKind.MONTHLY);
-                    if (auto && lastAuto == null) {
-                        lastAuto = b.getCreatedAt();
-                    }
-                    if (b.is(BackupKind.WEEKLY) && lastWeekly == null) {
-                        lastWeekly = b.getCreatedAt();
-                    }
-                    if (b.is(BackupKind.MONTHLY) && lastMonthly == null) {
-                        lastMonthly = b.getCreatedAt();
-                    }
-                }
-                if (lastAuto == null) {
-                    // Pas encore de sauvegarde automatique : on compte depuis la création
-                    lastAuto = s.getCreatedAt();
-                }
-                boolean dailyOn = rules.get(BackupKind.DAILY).max() > 0;
-                boolean weeklyDue = rules.get(BackupKind.WEEKLY).max() > 0 && olderThan(lastWeekly, Duration.ofDays(7), now);
-                boolean monthlyDue = rules.get(BackupKind.MONTHLY).max() > 0 && olderThan(lastMonthly, Duration.ofDays(30), now);
-                boolean dailyDue = dailyOn && olderThan(lastAuto, Duration.ofDays(1), now);
-
-                boolean isDue;
-                if (running) {
-                    // Hebdo/mensuelle profitent de la quotidienne (pas une 2e sauvegarde le même jour)
-                    isDue = dailyOn ? dailyDue : (weeklyDue || monthlyDue);
-                } else {
-                    // Arrêté : une sauvegarde après l'arrêt (si rien depuis), puis plus rien
-                    isDue = (dailyOn || weeklyDue || monthlyDue) && s.getLastStoppedAt() != null
-                            && (lastAny == null || lastAny.isBefore(s.getLastStoppedAt()));
-                }
-                if (isDue) {
-                    Set<BackupKind> kinds = EnumSet.noneOf(BackupKind.class);
-                    if (dailyOn) {
-                        kinds.add(BackupKind.DAILY);
-                    }
-                    if (weeklyDue) {
-                        kinds.add(BackupKind.WEEKLY);
-                    }
-                    if (monthlyDue) {
-                        kinds.add(BackupKind.MONTHLY);
-                    }
-                    jobs.add(new Job(s.getId(), node.getId(), s.getVelocityName(), CENTRAL, kinds));
-                }
-            }
-            if (!jobs.isEmpty()) {
-                due.add(jobs);
+            Set<BackupKind> kinds = dueKinds(s, now);
+            if (!kinds.isEmpty()) {
+                due.add(List.of(new Job(s.getId(), node.getId(), s.getVelocityName(), CENTRAL, kinds)));
             }
         }
         return due;
+    }
+
+    // ------------------------------------------------------------ rangement ----
+
+    /** Une sauvegarde, restauration ou déplacement de ce serveur est-il en cours ? */
+    public boolean isBusy(long serverId) {
+        return runningServers.contains(serverId);
+    }
+
+    /**
+     * Rangement d'un serveur arrêté au central (sauvegarde cachée au propriétaire, qui
+     * compte aussi comme automatique quand une est due). Appelant : verrou pris.
+     */
+    public Backup parkNow(long serverId) {
+        Job job = tx().execute(status -> {
+            Server s = serverRepository.findById(serverId).orElseThrow(() -> new RuntimeException("Serveur introuvable"));
+            Set<BackupKind> kinds = dueKinds(s, LocalDateTime.now());
+            return new Job(s.getId(), s.getNode().getId(), s.getVelocityName(), CENTRAL,
+                    kinds.isEmpty() ? EnumSet.noneOf(BackupKind.class) : kinds);
+        });
+        return execute(job, BackupType.PARK, null);
     }
 
     // ------------------------------------------------------------ expiration ----
@@ -874,6 +870,9 @@ public class BackupService {
             if (ok.size() > 1) {
                 Set<Long> kept = retained(ok, rules, now, false);
                 kept.add(ok.get(0).getId());
+                if (s.getParkedBackupId() != null) {
+                    kept.add(s.getParkedBackupId()); // le rangement en cours n'expire jamais
+                }
                 markExpired(ok, kept, now, s.getVelocityName());
             }
 
@@ -1267,6 +1266,9 @@ public class BackupService {
                     throw new RuntimeException("Les sauvegardes manuelles sont désactivées pour ce serveur.");
                 }
             }
+            if ("COLD".equals(s.getParkState()) || "LOST".equals(s.getParkState())) {
+                throw new RuntimeException("Ce serveur est rangé au central : sa dernière version y est déjà sauvegardée.");
+            }
             if (s.getNode() == null || !agentWebSocketHandler.isNodeOnline(s.getNode().getId())) {
                 throw new RuntimeException("La machine qui héberge ce serveur est hors ligne");
             }
@@ -1399,7 +1401,9 @@ public class BackupService {
             out.put("limits", rulesToMap(limits(s.getOwner())));
             out.put("minimum", rulesToMap(minimum()));
             out.put("customized", policyRepository.findByScope("server:" + s.getId()).isPresent());
-            out.put("canConfigure", AccessService.isAdmin(p) || AccessService.isOwner(p, s));
+            out.put("canConfigure", AccessService.isAdmin(p));
+            out.put("rank", s.getOwner().getNetworkRank() == null ? "default" : s.getOwner().getNetworkRank());
+            out.put("parkState", s.getParkState());
             out.put("canRestore", AccessService.isAdmin(p) || AccessService.isOwner(p, s));
             out.put("running", runningServers.contains(s.getId()));
             Map<String, Object> local = new LinkedHashMap<>();
@@ -1415,6 +1419,11 @@ public class BackupService {
             List<Map<String, Object>> items = new ArrayList<>();
             for (Backup b : backupRepository.findTop30ByServerTagIdOrderByCreatedAtDesc(s.getId())) {
                 if ("DELETED".equals(b.getStatus())) {
+                    continue;
+                }
+                // Rangements : cachés au propriétaire (sauf s'ils comptent comme quotidienne...)
+                if (b.getBackupType() == BackupType.PARK && !b.is(BackupKind.DAILY) && !b.is(BackupKind.WEEKLY)
+                        && !b.is(BackupKind.MONTHLY) && !b.is(BackupKind.PERMANENT)) {
                     continue;
                 }
                 Map<String, Object> m = describe(b);

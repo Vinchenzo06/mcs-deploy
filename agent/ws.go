@@ -61,7 +61,7 @@ func runConnection(config *Config, stopChan chan struct{}, events <-chan serverE
 		AgentVersion: config.Node.AgentVersion,
 		Capacity:     capacity,
 		Host:         host,
-		LocalBackups: config.Backups.Local,
+		LocalBackups: false,
 	}
 	log.Printf("Capacité prêtée : %d Mo de RAM, %d cœur(s), %d Mo de disque", capacity.RAMMB, capacity.CPUCores, capacity.DiskMB)
 

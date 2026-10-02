@@ -9,6 +9,7 @@ import vinch.mcs.api.entities.Player;
 import vinch.mcs.api.entities.Server;
 import vinch.mcs.api.repositories.ServerRepository;
 import vinch.mcs.api.services.AccessService;
+import vinch.mcs.api.services.ParkingService;
 import vinch.mcs.api.services.ServerService;
 
 import java.util.Map;
@@ -27,6 +28,7 @@ public class AccessController {
 
     private final AccessService accessService;
     private final ServerService serverService;
+    private final ParkingService parkingService;
     private final ServerRepository serverRepository;
 
     // Corps des requêtes : des records, pas JsonNode (Spring Boot 4 utilise Jackson 3,
@@ -76,10 +78,8 @@ public class AccessController {
 
     @PostMapping("/servers/{id}/start")
     public ResponseEntity<?> start(@PathVariable Long id, @RequestParam Long playerId) {
-        return handle(() -> {
-            serverService.startServer(id, playerId);
-            return null;
-        });
+        // Sur sa machine si possible, sinon sur une autre à partir de son rangement (lot 33)
+        return handle(() -> parkingService.start(id, playerId));
     }
 
     @PostMapping("/servers/{id}/stop")

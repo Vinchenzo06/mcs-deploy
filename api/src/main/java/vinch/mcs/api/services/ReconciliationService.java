@@ -121,6 +121,9 @@ public class ReconciliationService {
             }
 
             String state = containers.get(server.getId());
+            if (state == null && "COLD".equals(server.getParkState())) {
+                continue; // rangé au central, plus de copie sur la machine : normal
+            }
             if (state == null) {
                 if (status != ServerStatus.ERROR) {
                     log.warn("Serveur {} ({}) : conteneur introuvable sur la machine {} -> ERROR",

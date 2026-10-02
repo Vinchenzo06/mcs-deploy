@@ -101,6 +101,11 @@ func handleStartServer(conn *websocket.Conn, config *Config, commandId string, m
 		sendCommandError(conn, commandId, "restoring", "restauration en cours : le serveur redémarrera tout seul ensuite")
 		return
 	}
+	// Rangement en cours : démarrer maintenant rendrait la copie incohérente
+	if isBackingUp(serverID) {
+		sendCommandError(conn, commandId, "busy", "rangement du serveur en cours : réessaie dans un instant")
+		return
+	}
 
 	// Serveurs créés avant la 0.9.0 : les commandes console de MCS ne doivent pas
 	// s'afficher aux OP ("[Rcon: ...]"). Pris en compte à ce démarrage.

@@ -145,6 +145,7 @@ public class ServerService {
         // Disque proportionnel à la RAM : 10 % de la RAM prêtée par la machine
         // donne 10 % de son disque prêté (le joueur ne choisit pas son disque)
         int storageMb = diskQuotaFor(node, request.getRamMb());
+        makeDiskRoom(node, storageMb);
 
         // Allouer un port libre
         int port = allocatePort(node);
@@ -293,16 +294,51 @@ public class ServerService {
     }
 
     /** Place encore libre sur une machine pour un nouveau serveur, ou null si elle ne peut pas l'accueillir */
+    // Serveurs qui occupent de la RAM et du CPU sur leur machine (les autres sont arrêtés)
+    private static final Set<ServerStatus> ACTIVE = EnumSet.of(ServerStatus.RUNNING, ServerStatus.STARTING,
+            ServerStatus.CREATING, ServerStatus.MIGRATING);
+
+    /** Copie d'un serveur arrêté dont le rangement est à jour : peut quitter la machine */
+    static boolean evictable(Server s) {
+        return "CLEAN".equals(s.getParkState()) && s.getStatus() == ServerStatus.STOPPED;
+    }
+
+    /** Le serveur a-t-il une copie sur sa machine ? */
+    static boolean hasCopy(Server s) {
+        return !"COLD".equals(s.getParkState());
+    }
+
     private Integer freeRamAfter(Node node, CreateServerRequest request) {
+        return freeRamAfter(node, request, null);
+    }
+
+    /**
+     * Place libre sur une machine pour un serveur de plus (null : elle ne peut pas
+     * l'accueillir). RAM et CPU : seulement les serveurs qui tournent (lot 33 : les
+     * serveurs arrêtés n'occupent rien). Disque : les copies présentes, sauf celles qui
+     * peuvent partir (rangées et arrêtées), libérées au besoin (makeDiskRoom).
+     */
+    private Integer freeRamAfter(Node node, CreateServerRequest request, Long excludeServerId) {
         if (node.getTotalRamMb() == null || node.getTotalRamMb() <= 0) {
             return null; // capacité inconnue (agent trop ancien) : on n'y place rien
         }
         List<Server> onNode = serverRepository.findByNodeId(node.getId());
-        int ram = 0, cpu = 0, disk = 0;
+        int ram = 0, cpu = 0, disk = 0, evictableDisk = 0;
         for (Server s : onNode) {
-            ram += containerRamMb(s.getAllocatedRamMb());
-            cpu += s.getAllocatedCpuCores();
-            disk += s.getAllocatedStorageMb();
+            if (excludeServerId != null && excludeServerId.equals(s.getId())) {
+                continue;
+            }
+            if (ACTIVE.contains(s.getStatus())) {
+                ram += containerRamMb(s.getAllocatedRamMb());
+                cpu += s.getAllocatedCpuCores();
+            }
+            if (hasCopy(s)) {
+                if (evictable(s)) {
+                    evictableDisk += s.getAllocatedStorageMb();
+                } else {
+                    disk += s.getAllocatedStorageMb();
+                }
+            }
         }
         int freeRam = usable(node.getTotalRamMb()) - ram - containerRamMb(request.getRamMb());
         int storage = diskQuotaFor(node, request.getRamMb());
@@ -310,8 +346,81 @@ public class ServerService {
         boolean diskOk = node.getTotalStorageMb() == null || node.getTotalStorageMb() <= 0
                 || disk + storage <= usable(node.getTotalStorageMb());
         boolean hostDiskOk = node.getHostDiskFreeMb() == null
-                || node.getHostDiskFreeMb() - storage >= DISK_FREE_MARGIN_MB;
+                || node.getHostDiskFreeMb() + evictableDisk - storage >= DISK_FREE_MARGIN_MB;
         return (freeRam >= 0 && cpuOk && diskOk && hostDiskOk) ? freeRam : null;
+    }
+
+    /** Le serveur peut-il démarrer sur sa machine (RAM et CPU libres) ? */
+    public boolean hasRunRoom(Server server) {
+        Node node = server.getNode();
+        if (node == null || node.getTotalRamMb() == null || node.getTotalRamMb() <= 0) {
+            return false;
+        }
+        int ram = 0, cpu = 0;
+        for (Server s : serverRepository.findByNodeId(node.getId())) {
+            if (!s.getId().equals(server.getId()) && ACTIVE.contains(s.getStatus())) {
+                ram += containerRamMb(s.getAllocatedRamMb());
+                cpu += s.getAllocatedCpuCores();
+            }
+        }
+        return ram + containerRamMb(server.getAllocatedRamMb()) <= usable(node.getTotalRamMb())
+                && cpu + server.getAllocatedCpuCores() <= Math.max(1, usable(node.getCpuCores()));
+    }
+
+    /**
+     * Fait de la place sur le disque d'une machine pour "neededMb" : les copies rangées
+     * des serveurs arrêtés partent, les plus anciennement arrêtées d'abord (elles restent
+     * au central et repartiront sur une machine libre à leur prochain démarrage).
+     */
+    public void makeDiskRoom(Node node, int neededMb) {
+        List<Server> onNode = new ArrayList<>(serverRepository.findByNodeId(node.getId()));
+        int disk = 0;
+        for (Server s : onNode) {
+            if (hasCopy(s) && !evictable(s)) {
+                disk += s.getAllocatedStorageMb();
+            }
+        }
+        int limit = node.getTotalStorageMb() == null || node.getTotalStorageMb() <= 0
+                ? Integer.MAX_VALUE : usable(node.getTotalStorageMb());
+        long hostFree = node.getHostDiskFreeMb() == null ? Long.MAX_VALUE / 2 : node.getHostDiskFreeMb();
+        // Copies présentes qui peuvent partir, les plus anciennement arrêtées d'abord
+        List<Server> candidates = onNode.stream().filter(x -> hasCopy(x) && evictable(x))
+                .sorted(Comparator.comparing((Server x) -> x.getLastStoppedAt() == null ? LocalDateTime.MIN : x.getLastStoppedAt()))
+                .toList();
+        int keptEvictable = candidates.stream().mapToInt(Server::getAllocatedStorageMb).sum();
+        for (Server s : candidates) {
+            // Place réellement disponible si les copies restantes restent
+            boolean fits = disk + keptEvictable + neededMb <= limit && hostFree - neededMb >= DISK_FREE_MARGIN_MB;
+            if (fits) {
+                return;
+            }
+            if (evictCopy(s)) {
+                keptEvictable -= s.getAllocatedStorageMb();
+                hostFree += s.getAllocatedStorageMb();
+            }
+        }
+    }
+
+    /** Retire la copie d'un serveur rangé de sa machine (il reste au central) */
+    public boolean evictCopy(Server s) {
+        if (!evictable(s) || s.getNode() == null || !agentWebSocketHandler.isNodeOnline(s.getNode().getId())
+                || backupService.isBusy(s.getId())) {
+            return false;
+        }
+        try {
+            JsonNode r = agentWebSocketHandler.sendCommand(s.getNode().getId(), "delete_server",
+                    Map.of("server_id", s.getId(), "delete_data", true)).get(6, java.util.concurrent.TimeUnit.MINUTES);
+            if (r != null && r.has("success") && !r.get("success").asBoolean()) {
+                return false;
+            }
+        } catch (Exception e) {
+            log.warn("Copie de {} : retrait impossible : {}", s.getVelocityName(), e.getMessage());
+            return false;
+        }
+        s.setParkState("COLD");
+        serverRepository.save(s);
+        log.info("Copie de {} retirée de la machine {} (rangée au central)", s.getVelocityName(), s.getNode().getId());
+        return true;
     }
 
     private Node chooseNode(Long forceNodeId, CreateServerRequest request) {
@@ -431,6 +540,15 @@ public class ServerService {
     }
 
     public void deleteServer(Long serverId, boolean deleteData) throws Exception {
+        deleteServer(serverId, deleteData, false);
+    }
+
+    /**
+     * skipAgent : la machine n'est pas contactée (hors ligne : l'appelant a prévu la
+     * suppression de la copie à son retour). Serveur sans copie sur sa machine (COLD) :
+     * rien à supprimer là-bas.
+     */
+    public void deleteServer(Long serverId, boolean deleteData, boolean skipAgent) throws Exception {
         Server server = serverRepository.findById(serverId)
                 .orElseThrow(() -> new RuntimeException("Serveur non trouvé : " + serverId));
 
@@ -440,7 +558,8 @@ public class ServerService {
         // La machine doit être joignable, sinon son conteneur resterait orphelin.
         // Exception : machine révoquée (ou absente), qui ne reviendra jamais.
         Node node = server.getNode();
-        boolean nodeGone = node == null || Boolean.TRUE.equals(node.getIsRevoked());
+        boolean nodeGone = node == null || Boolean.TRUE.equals(node.getIsRevoked())
+                || "COLD".equals(server.getParkState()) || skipAgent;
         if (!nodeGone && !agentWebSocketHandler.isNodeOnline(node.getId())) {
             throw new RuntimeException("La machine qui héberge ce serveur est hors ligne : "
                     + "suppression impossible pour l'instant, réessaie plus tard");

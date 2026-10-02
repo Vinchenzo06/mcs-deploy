@@ -100,8 +100,29 @@ public class Server {
     @Column(name = "local_backup_mb")
     private Integer localBackupMb;
 
+    // Rangement (lot 33) : voir V18__parking.sql
+    @Column(name = "park_state", nullable = false, length = 10)
+    @Builder.Default
+    private String parkState = "DIRTY";
+
+    @Column(name = "parked_backup_id")
+    private Long parkedBackupId;
+
+    @Column(name = "inactivity_warned_at")
+    private LocalDateTime inactivityWarnedAt;
+
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) createdAt = LocalDateTime.now();
+        markDirtyIfRunning();
+    }
+
+    /** Un serveur qui tourne modifie ses données : son rangement n'est plus à jour */
+    @PreUpdate
+    protected void markDirtyIfRunning() {
+        if (status == ServerStatus.RUNNING || status == ServerStatus.STARTING) {
+            parkState = "DIRTY";
+            inactivityWarnedAt = null;
+        }
     }
 }

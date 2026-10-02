@@ -39,6 +39,7 @@ public class RestoreService {
     private final BackupRepository backupRepository;
     private final NodeRepository nodeRepository;
     private final PlayerRepository playerRepository;
+    private final vinch.mcs.api.repositories.PendingDeletionRepository pendingDeletionRepository;
     private final AgentWebSocketHandler agentWebSocketHandler;
     private final AccessService accessService;
     private final ServerService serverService;
@@ -63,6 +64,41 @@ public class RestoreService {
     public Map<String, Object> restore(Long serverId, Long backupId, Long playerId) throws Exception {
         if (!backupService.isEnabled()) {
             throw new RuntimeException("Les sauvegardes ne sont pas encore configurées sur ce réseau.");
+        }
+        // Serveur rangé sans copie sur une machine (lot 33) : rien à copier maintenant, la
+        // sauvegarde choisie devient son rangement ; il démarrera à partir d'elle
+        Map<String, Object> parked = tx().execute(status -> {
+            Server s = serverRepository.findById(serverId).orElseThrow(() -> new RuntimeException("Serveur introuvable"));
+            if (!"COLD".equals(s.getParkState()) && !"LOST".equals(s.getParkState())) {
+                return null;
+            }
+            requireOwnerOrAdmin(accessService.player(playerId), s);
+            Backup b = backupRepository.findById(backupId)
+                    .filter(x -> Objects.equals(x.getServerTagId(), s.getId()) && "SUCCESS".equals(x.getStatus())
+                            && x.getStoragePath() != null && x.getStoragePath().startsWith("srv"))
+                    .orElseThrow(() -> new RuntimeException("Sauvegarde n°" + backupId + " introuvable (ou pas encore "
+                            + "recopiée dans le dépôt du serveur) pour ce serveur."));
+            if ("LOST".equals(s.getParkState()) && s.getNode() != null) {
+                // L'ancienne copie (machine hors ligne) sera supprimée à son retour
+                if (!pendingDeletionRepository.existsByNodeIdAndServerId(s.getNode().getId(), s.getId())) {
+                    pendingDeletionRepository.save(PendingDeletion.builder().nodeId(s.getNode().getId()).serverId(s.getId()).build());
+                }
+            }
+            s.setParkState("COLD");
+            s.setParkedBackupId(b.getId());
+            serverRepository.save(s);
+            log.info("{} : rangement remplacé par la sauvegarde {}", s.getVelocityName(), backupId);
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("status", "SUCCESS");
+            out.put("backupId", backupId);
+            out.put("restoredMb", 0);
+            out.put("wasRunning", false);
+            out.put("restarted", false);
+            out.put("parked", true);
+            return out;
+        });
+        if (parked != null) {
+            return parked;
         }
         Plan plan = tx().execute(status -> {
             Server s = serverRepository.findById(serverId).orElseThrow(() -> new RuntimeException("Serveur introuvable"));
@@ -147,6 +183,11 @@ public class RestoreService {
             throw new RuntimeException("Restauration échouée : " + error
                     + (plan.wasRunning() ? (restarted ? " (le serveur a redémarré tel quel)" : "") : ""));
         }
+        // Données remplacées : le rangement n'est plus à jour (refait 2 min après l'arrêt)
+        tx().executeWithoutResult(x -> serverRepository.findById(plan.serverId()).ifPresent(s -> {
+            s.setParkState("DIRTY");
+            serverRepository.save(s);
+        }));
         out.put("status", "SUCCESS");
         out.put("backupId", backupId);
         out.put("wasRunning", plan.wasRunning());

@@ -264,15 +264,15 @@ Mise en place, une fois :
   | manuelle | 2 max, 3 jours | propriétaire, gérants, techniciens, hôte, admins |
   | permanente | 1 max, gardée tant que le serveur existe, puis 24 h | propriétaire, admins |
 
-- **Sur la machine (lot 30)** : si le volontaire l'accepte (question de `node-setup.sh`,
-  à changer avec `node-setup.sh --capacity`), les **quotidiennes** sont gardées en double
-  (machine + central) et les **manuelles** sur la machine ; hebdomadaires, mensuelles et
-  permanentes restent au central. Dépôt restic par serveur dans `<données>/.backups/<id>`,
-  compté dans le **disque du serveur** : l'agent supprime les plus vieilles pour faire de
-  la place, sinon la manuelle part au central (le serveur n'est jamais arrêté pour ça).
-  Réglages : l'admin fixe le minimum que chaque hôte offre (`/mcs backup defaults local`),
-  l'hôte fixe le plafond de sa machine (`/mcs host backups [machine] [type max durée]`),
-  le propriétaire choisit en dessous (`/mcs backup set <serveur> local <type> <max> [durée]`).
+- **Rangement (lot 33)** : à chaque arrêt, quelle qu'en soit la cause, le serveur est rangé au
+  central (sauvegarde cachée au propriétaire, 2 min après l'arrêt). La copie sur sa machine
+  n'est qu'un cache, utilisé seulement s'il est à jour : au démarrage, le serveur démarre sur
+  sa machine si elle a la place, sinon sur une autre à partir de son rangement (répartition
+  de la charge ; seuls les serveurs allumés comptent pour la RAM et le CPU d'une machine).
+  Arrêté depuis 30 jours (ou place nécessaire) : sa copie quitte la machine. Machine hors
+  ligne 24 h avec des données non rangées : il repartira de sa dernière sauvegarde
+  (propriétaire prévenu). Pas démarré depuis 6 mois : avertissement, puis suppression 14 jours
+  après. Plus de sauvegardes gardées sur les machines des volontaires.
 - **Restauration (lot 31)** : propriétaire et admins. `/mcs restore <serveur> <n°>` (ou ↺ dans
   `/mcs backups`) remplace le monde par la sauvegarde, après confirmation : le serveur est
   arrêté s'il tourne, restauré, puis relancé. Pas de sauvegarde de l'état actuel avant.
@@ -300,9 +300,10 @@ Mise en place, une fois :
   tout de suite s'ils sont connectés, sinon à leur connexion.
 - **Minimum au central** : `/mcs backup minimum` (défaut : 2 hebdomadaires gardées 14 jours) ;
   un propriétaire ne descend pas en dessous.
-- **Qui règle quoi** : les admins fixent les défauts du réseau et les limites de chaque
-  rôle ; le propriétaire règle son serveur sans dépasser les limites de son rôle ; les
-  admins règlent tout. Invités et hôte ne changent rien (ils peuvent lancer une manuelle).
+- **Qui règle quoi** : les sauvegardes suivent le **rôle** du propriétaire
+  (`/mcs backup role <rôle> [type max durée | reset]`, défauts : `/mcs backup defaults`) ;
+  un admin peut faire une exception pour un serveur (`/mcs backup set <serveur> ...`). Le
+  propriétaire ne règle plus rien ; il lance des manuelles et des permanentes.
 - **Suppression** : c'est l'API qui décide ce qui expire. Le serveur de sauvegarde
   supprime chaque nuit les instantanés expirés, puis confirme au VPS ce qui reste
   (EXPIRED → DELETED). Un instantané inconnu de l'API part après 14 jours.
@@ -310,10 +311,10 @@ Mise en place, une fois :
   - `/mcs backup <serveur>` : sauvegarde manuelle ;
   - `/mcs backups <serveur>` : historique (n°, types, expiration ; ☆/★ pour garder) ;
   - `/mcs backup keep <serveur> [n°]` / `unkeep <serveur> <n°>` : permanente ;
-  - `/mcs backup settings <serveur>`, `/mcs backup set <serveur> <type> <max> [durée]`
-    (ex. `quotidienne 5 7j`, `permanente 1 48h`, `0` = coupée) ou `set <serveur> reset` ;
-  - admins : `/mcs backup defaults [type max durée]`,
-    `/mcs backup limits <rôle> [type max durée | reset]`.
+  - `/mcs backup settings <serveur>` : réglages (ceux du rôle du propriétaire) ;
+  - admins : `/mcs backup role <rôle> [type max durée | reset]` (ex. `quotidienne 5 7j`,
+    `permanente 1 48h`, `0` = coupée), `/mcs backup defaults [type max durée]`,
+    exception pour un serveur : `/mcs backup set <serveur> <type> <max> [durée]` ou `reset`.
 - Mise à jour du serveur de sauvegarde (sans code) :
   `curl ... backup-setup.sh -o backup-setup.sh && sudo bash backup-setup.sh --update`.
 - Le VPS (bases, `/etc/mcs`, lobby, proxy) est sauvegardé chaque nuit (`sudo mcs-backup-vps`).

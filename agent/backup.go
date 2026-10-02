@@ -404,6 +404,20 @@ func containerRunning(serverID int64) bool {
 	return err == nil && strings.TrimSpace(string(out)) == "true"
 }
 
+// isBackingUp : une sauvegarde (ou restauration) de ce serveur est-elle en cours ?
+func isBackingUp(serverID int64) bool {
+	lock, ok := backupLocks.Load(serverID)
+	if !ok {
+		return false
+	}
+	mu := lock.(*sync.Mutex)
+	if mu.TryLock() {
+		mu.Unlock()
+		return false
+	}
+	return true
+}
+
 func handleBackupServer(conn *websocket.Conn, config *Config, commandId string, msg map[string]interface{}) {
 	data, ok := msg["data"].(map[string]interface{})
 	if !ok {
@@ -424,13 +438,10 @@ func handleBackupServer(conn *websocket.Conn, config *Config, commandId string, 
 	sendCommandResult(conn, commandId, res)
 }
 
-// localBackupsStartup : le volontaire ne garde plus de sauvegardes -> on rend la place
+// localBackupsStartup : plus de sauvegardes sur les machines des volontaires
+// (lot 33, tout est au central) -> on rend la place
 func localBackupsStartup(config *Config) {
 	dir := filepath.Join(config.Docker.DataPath, ".backups")
-	if config.Backups.Local {
-		log.Printf("Sauvegardes des serveurs gardées sur cette machine : oui (%s)", dir)
-		return
-	}
 	if _, err := os.Stat(dir); err == nil {
 		if err := os.RemoveAll(dir); err != nil {
 			log.Printf("Suppression des anciennes sauvegardes locales : %v", err)

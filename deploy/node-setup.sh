@@ -9,7 +9,7 @@
 #  Mettre à jour seulement l'agent (machine déjà jumelée) :
 #    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh -o node-setup.sh && sudo bash node-setup.sh --update-agent
 #
-#  Changer la part de la machine prêtée à MCS (RAM, CPU, disque, sauvegardes) :
+#  Changer la part de la machine prêtée à MCS (RAM, CPU, disque) :
 #    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/node-setup.sh -o node-setup.sh && sudo bash node-setup.sh --capacity
 #
 #  Tout ce qui est propre à cette machine (port SSH, nom...) est détecté ici :
@@ -269,30 +269,10 @@ choose_capacity() {  # dossier des données des serveurs
   echo "          Chaque serveur réserve 5 Go par défaut."
   CAP_DISK=$(ask_amount "Disque prêté" "$CAP_DISK" "$MIN_DISK_MB" "$disk_max" mb)
 
-  echo
-  echo "    Sauvegardes : chaque serveur est sauvegardé chaque jour sur le serveur de sauvegarde"
-  echo "          de MCS. Tu peux aussi en garder une copie ici : restauration plus rapide, et"
-  echo "          moins de charge pour le réseau. Elles restent dans l'espace disque de chaque"
-  echo "          serveur (déjà compté dans le disque prêté) : rien de plus à prévoir."
-  local def=o answer
-  [[ "${CAP_LOCAL:-}" == "false" ]] && def=n
-  CAP_LOCAL=true
-  [[ "$def" == "n" ]] && CAP_LOCAL=false
-  if has_tty; then
-    read -r -p "    Garder des sauvegardes des serveurs sur cette machine ? [$( [[ $def == o ]] && echo O/n || echo o/N )] " answer </dev/tty || answer=""
-    case "${answer,,}" in
-      o | oui | y | yes) CAP_LOCAL=true ;;
-      n | non | no) CAP_LOCAL=false ;;
-    esac
-  fi
-
+  # Plus de sauvegardes gardées sur les machines (lot 33) : tout est au central
+  CAP_LOCAL=false
   echo
   ok "Prêté à MCS : $(fmt_mb "$CAP_RAM") de RAM, $CAP_CPU cœur(s), $(fmt_mb "$CAP_DISK") de disque"
-  if [[ "$CAP_LOCAL" == "true" ]]; then
-    ok "Sauvegardes gardées aussi sur cette machine"
-  else
-    ok "Sauvegardes seulement sur le serveur de sauvegarde MCS"
-  fi
 }
 
 # Remplace (ou ajoute) la section capacity de config.yaml

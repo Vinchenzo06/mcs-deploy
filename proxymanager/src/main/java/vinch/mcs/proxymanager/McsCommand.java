@@ -389,12 +389,10 @@ public class McsCommand implements SimpleCommand {
                 "/mcs backup <serveur> : sauvegarde manuelle\n"
                         + "/mcs backups <serveur> : historique (n°, types, expiration)\n"
                         + "/mcs backup keep <serveur> [n°] : permanente (propriétaire)\n"
-                        + "/mcs backup settings <serveur> : combien et combien de temps\n"
-                        + "/mcs backup set <serveur> [local] <type> <max> [durée]\n"
+                        + "/mcs backup settings <serveur> : réglages (selon le rôle)\n"
                         + "/mcs restore <serveur> <n°> : restaurer (propriétaire, admins)\n"
                         + "/mcs restore deleted : recréer un serveur supprimé\n"
-                        + "Hôtes : /mcs host backups (sauvegardes gardées sur ta machine)\n"
-                        + "Admins : /mcs backup defaults [local], minimum, limits <rôle>"));
+                        + "Admins : /mcs backup role <rôle>, defaults, set <serveur> (exception)"));
         player.sendMessage(helpLine("/mcs migrate <serveur> [région]", "/mcs migrate ", "Déplacer",
                 "Change ton serveur de machine ou de région (/mcs regions).\n"
                         + "Machine hors ligne : /mcs migrate <serveur> backup\n"
@@ -763,12 +761,21 @@ public class McsCommand implements SimpleCommand {
                 default -> "Redémarrage de ";
             };
             pending(player, text(doing).append(Component.text(ref, NamedTextColor.WHITE))
-                    .append(text("stop".equals(action) ? "…" : "… (jusqu'à 2 minutes)")));
+                    .append(text("stop".equals(action) ? "…" : "… (jusqu'à 2 minutes, plus s'il change de machine)")));
             afterApi(player, apiClient.serverAction(t.id(), action, t.playerId()), ref, r -> {
                 // L'agent ne répond qu'une fois le serveur prêt à accueillir des joueurs
                 switch (action) {
                     case "start" -> {
+                        if ("RUNNING".equals(r.path("status").asText())) {
+                            notice(player, text(ref + " démarre sur une autre machine depuis son rangement, "
+                                    + "ça continue en arrière-plan : /mcs info " + ref + " dans quelques minutes."));
+                            return;
+                        }
                         success(player, text("").append(serverName(ref)).append(text(" est en ligne !")));
+                        if (r.path("moved").asBoolean(false)) {
+                            player.sendMessage(Component.text("   Démarré sur la " + r.path("target").asText("nouvelle machine")
+                                    + " (sa machine habituelle était pleine ou hors ligne).", NamedTextColor.GRAY));
+                        }
                         player.sendMessage(buttons(joinButton(ref), infoButton(ref)));
                     }
                     case "stop" -> {
@@ -1117,15 +1124,10 @@ public class McsCommand implements SimpleCommand {
     private void handleBackup(Player player, String[] args) {
         String sub = args.length >= 2 ? args[1].toLowerCase(Locale.ROOT) : "";
         if (sub.equals("defaults")) {
-            boolean local = args.length >= 3 && args[2].equalsIgnoreCase("local");
-            handleBackupScope(player, local ? "local" : "network", args, local ? 3 : 2);
+            handleBackupScope(player, "network", args, 2);
             return;
         }
-        if (sub.equals("minimum")) {
-            handleBackupScope(player, "min", args, 2);
-            return;
-        }
-        if (sub.equals("limits")) {
+        if (sub.equals("limits") || sub.equals("role")) {
             if (args.length < 3) {
                 usage(player, "/mcs backup limits <rôle> [type max durée | reset]", "/mcs backup limits ");
                 return;
@@ -1276,7 +1278,16 @@ public class McsCommand implements SimpleCommand {
             }
         }
         detail.append(r.path("customized").asBoolean(false) ? "Réglages propres à ce serveur" : "Réglages du réseau");
-        player.sendMessage(Component.text(" Au central : ", NamedTextColor.GRAY)
+        String park = switch (r.path("parkState").asText("")) {
+            case "CLEAN" -> "rangé au central ✔";
+            case "COLD" -> "rangé au central (il démarrera sur la machine qui a de la place)";
+            case "LOST" -> "machine hors ligne : repartira de sa dernière sauvegarde";
+            default -> "en marche, ou rangé 2 min après son arrêt";
+        };
+        player.sendMessage(Component.text(" État : ", NamedTextColor.GRAY).append(Component.text(park, NamedTextColor.WHITE))
+                .hoverEvent(HoverEvent.showText(Component.text("À chaque arrêt, le serveur est rangé au central :\n"
+                        + "il peut ensuite démarrer sur n'importe quelle machine qui a de la place.", NamedTextColor.GRAY))));
+        player.sendMessage(Component.text(" Automatique : ", NamedTextColor.GRAY)
                 .append(Component.text(auto.length() == 0 ? "coupée" : auto.toString(), NamedTextColor.WHITE))
                 .hoverEvent(HoverEvent.showText(Component.text(detail.toString(), NamedTextColor.GRAY))));
         JsonNode local = r.path("local");
@@ -1402,60 +1413,23 @@ public class McsCommand implements SimpleCommand {
 
     private void sendBackupSettings(Player player, Target t, JsonNode r) {
         String ref = t.ref();
-        boolean canConfigure = r.path("canConfigure").asBoolean(false);
-        JsonNode local = r.path("local");
-        boolean localOn = local.path("enabled").asBoolean(false);
+        boolean admin = r.path("canConfigure").asBoolean(false);
+        String rank = r.path("rank").asText("default");
         player.sendMessage(Component.empty());
-        player.sendMessage(header("Réglages des sauvegardes de " + ref));
+        player.sendMessage(header("Sauvegardes de " + ref));
         player.sendMessage(Component.text(" Max : au-delà, la plus ancienne est supprimée. Durée : combien de temps "
                 + "chacune reste.", NamedTextColor.GRAY));
-
-        player.sendMessage(Component.text(" Au central (serveur de sauvegarde MCS)", NamedTextColor.GOLD)
-                .append(Component.text(r.path("customized").asBoolean(false) ? "  · réglages propres" : "  · réglages du réseau",
+        player.sendMessage(Component.text(" Réglages du rôle " + rank, NamedTextColor.GOLD)
+                .append(Component.text(r.path("customized").asBoolean(false) ? "  · exception posée par un admin" : "",
                         NamedTextColor.DARK_GRAY)));
-        JsonNode central = r.path("rules");
-        if (localOn) {
-            // Les manuelles vont sur la machine : on ne montre pas la règle manuelle du central
-            central = central.deepCopy();
-            ((com.fasterxml.jackson.databind.node.ObjectNode) central).remove("MANUAL");
-        }
-        sendRuleLines(player, central, r.path("limits"), "Ton rôle permet au plus",
-                canConfigure ? "/mcs backup set " + ref : null);
-        JsonNode min = r.path("minimum");
-        StringBuilder minText = new StringBuilder();
-        for (String k : KIND_ORDER) {
-            if (min.path(k).path("max").asInt(0) > 0) {
-                minText.append(minText.length() == 0 ? "" : ", ").append(kindLabel(k).toLowerCase(Locale.ROOT))
-                        .append(" ").append(ruleText(k, min.path(k)));
-            }
-        }
-        if (minText.length() > 0) {
-            player.sendMessage(Component.text("  Toujours gardé au central : " + minText, NamedTextColor.DARK_GRAY));
-        }
-
-        if (localOn) {
-            long repo = local.path("repoMb").asLong(0);
-            long quota = local.path("quotaMb").asLong(0);
-            player.sendMessage(Component.text(" Sur la machine", NamedTextColor.GOLD)
-                    .append(Component.text("  · " + size(repo) + " utilisés, comptés dans le disque du serveur ("
-                            + size(quota) + ")", NamedTextColor.DARK_GRAY)));
-            sendRuleLines(player, local.path("rules"), local.path("ceiling"), "La machine permet au plus",
-                    canConfigure ? "/mcs backup set " + ref + " local" : null);
-            player.sendMessage(Component.text("  Quotidiennes : aussi au central · manuelles : ici · si le disque du "
-                    + "serveur est plein, les plus vieilles partent, sinon la manuelle va au central.", NamedTextColor.DARK_GRAY));
-        } else {
-            player.sendMessage(Component.text(" La machine de ce serveur ne garde pas de sauvegardes : tout va au central.",
-                    NamedTextColor.DARK_GRAY));
-        }
+        sendRuleLines(player, r.path("rules"), null, null, admin ? "/mcs backup set " + ref : null);
+        player.sendMessage(Component.text(" Toutes les sauvegardes sont sur le serveur de sauvegarde MCS. "
+                + "Les réglages suivent le rôle du propriétaire.", NamedTextColor.DARK_GRAY));
         java.util.List<Component> actions = new java.util.ArrayList<>();
         actions.add(button("Historique", NamedTextColor.AQUA, "/mcs backups " + ref, "Sauvegardes de " + ref));
-        if (canConfigure && r.path("customized").asBoolean(false)) {
-            actions.add(button("Central par défaut", NamedTextColor.AQUA, "/mcs backup set " + ref + " reset",
-                    "Revenir aux réglages du réseau"));
-        }
-        if (canConfigure && localOn && local.path("customized").asBoolean(false)) {
-            actions.add(button("Machine par défaut", NamedTextColor.AQUA, "/mcs backup set " + ref + " local reset",
-                    "Revenir au réglage de l'hôte de la machine"));
+        if (admin && r.path("customized").asBoolean(false)) {
+            actions.add(button("Réglages du rôle", NamedTextColor.AQUA, "/mcs backup set " + ref + " reset",
+                    "Retirer l'exception : le serveur suit le rôle de son propriétaire"));
         }
         player.sendMessage(buttons(actions.toArray(new Component[0])));
     }
@@ -1491,15 +1465,16 @@ public class McsCommand implements SimpleCommand {
         return new RuleArgs(kind, max, duration);
     }
 
-    /** /mcs backup set <serveur> [local] <type> <max> [durée]  ·  /mcs backup set <serveur> [local] reset */
+    /** Admins : /mcs backup set <serveur> <type> <max> [durée]  ·  /mcs backup set <serveur> reset (exception) */
     private void handleBackupSet(Player player, String[] args) {
-        boolean local = args.length >= 4 && args[3].equalsIgnoreCase("local");
-        int from = local ? 4 : 3;
+        boolean local = false;
+        int from = 3;
         boolean reset = args.length == from + 1 && args[from].equalsIgnoreCase("reset");
         if (!reset && (args.length < from + 2 || args.length > from + 3)) {
-            usage(player, "/mcs backup set <serveur> [local] <type> <max> [durée]", "/mcs backup set ");
-            send(player, Component.text("Ex. : /mcs backup set survie quotidienne 5 7j  ·  /mcs backup set survie local "
-                    + "manuelle 3 5j  ·  0 = coupée  ·  reset = par défaut", NamedTextColor.GRAY));
+            usage(player, "/mcs backup set <serveur> <type> <max> [durée]", "/mcs backup set ");
+            send(player, Component.text("Admins : exception pour un serveur. Ex. : /mcs backup set survie quotidienne 5 7j  ·  "
+                    + "0 = coupée  ·  reset = réglages du rôle. Pour tout un rôle : /mcs backup limits <rôle>",
+                    NamedTextColor.GRAY));
             return;
         }
         RuleArgs rule = reset ? new RuleArgs(null, null, null)
@@ -1507,7 +1482,7 @@ public class McsCommand implements SimpleCommand {
         if (rule == null) {
             return;
         }
-        String where = local ? " (sur la machine)" : " (au central)";
+        String where = " (exception)";
         withServer(player, args[2], t -> afterApi(player,
                 apiClient.setBackupRule(t.id(), t.playerId(), rule.kind(), rule.max(), rule.duration(), reset, local),
                 t.ref(), r -> {
@@ -1525,10 +1500,8 @@ public class McsCommand implements SimpleCommand {
     }
 
     /**
-     * Admins : /mcs backup defaults [type max durée]         défauts du réseau (central)
-     *          /mcs backup defaults local [type max durée]   minimum que les hôtes offrent
-     *          /mcs backup minimum [type max durée]          toujours gardé au central
-     *          /mcs backup limits <rôle> [type max durée | reset]  limites des propriétaires
+     * Admins : /mcs backup defaults [type max durée]              défauts du réseau
+     *          /mcs backup role <rôle> [type max durée | reset]   réglages d'un rôle (alias : limits)
      */
     private void handleBackupScope(Player player, String scope, String[] args, int from) {
         int rest = args.length - from;
@@ -1553,13 +1526,13 @@ public class McsCommand implements SimpleCommand {
             case "network" -> "Sauvegardes : défauts du réseau";
             case "local" -> "Sauvegardes : minimum des machines";
             case "min" -> "Sauvegardes : minimum au central";
-            default -> "Sauvegardes : limites du rôle " + scope;
+            default -> "Sauvegardes du rôle " + scope;
         };
         String explain = switch (scope) {
-            case "network" -> " Au central, pour les serveurs qui n'ont rien changé.";
+            case "network" -> " Pour les rôles qui n'ont pas leurs propres réglages.";
             case "local" -> " Ce que chaque hôte offre au moins sur sa machine (et son réglage par défaut).";
             case "min" -> " Toujours gardé au central : un propriétaire ne peut pas descendre en dessous.";
-            default -> " Le propriétaire (rôle " + scope + ") ne peut pas régler plus haut, au central.";
+            default -> " Réglages des serveurs dont le propriétaire a le rôle " + scope + " (sans rien : défauts du réseau).";
         };
         apiClient.getPlayerByUuid(player.getUniqueId())
                 .thenCompose(info -> {
@@ -1581,82 +1554,6 @@ public class McsCommand implements SimpleCommand {
                     player.sendMessage(header(title));
                     player.sendMessage(Component.text(explain, NamedTextColor.GRAY));
                     sendRuleLines(player, r.path("rules"), null, null, cmd);
-                }));
-    }
-
-    /** /mcs host backups [machine] [type max durée | reset] : plafond des sauvegardes gardées sur la machine */
-    private void handleHostBackups(Player player, String[] args) {
-        Long machine = null;
-        if (args.length >= 3) {
-            try {
-                machine = Long.parseLong(args[2].replace("#", ""));
-            } catch (NumberFormatException e) {
-                failure(player, text("Numéro de machine invalide : " + args[2] + "."));
-                return;
-            }
-        }
-        boolean reset = args.length == 4 && args[3].equalsIgnoreCase("reset");
-        RuleArgs rule = null;
-        if (args.length > 3 && !reset) {
-            rule = parseRuleArgs(player, args, 3, "/mcs host backups " + machine + " quotidienne 5 7j");
-            if (rule == null) {
-                return;
-            }
-        }
-        Long fMachine = machine;
-        RuleArgs fRule = rule;
-        boolean change = reset || rule != null;
-        if (change && machine == null) {
-            usage(player, "/mcs host backups <machine> [type max durée | reset]", "/mcs host backups ");
-            return;
-        }
-        apiClient.getPlayerByUuid(player.getUniqueId())
-                .thenCompose(info -> {
-                    long id = info.get("id").asLong();
-                    if (!change) {
-                        return apiClient.getHostBackups(id, fMachine);
-                    }
-                    return apiClient.setHostBackupRule(fMachine, id, reset ? null : fRule.kind(),
-                            reset ? null : fRule.max(), reset ? null : fRule.duration(), reset)
-                            .thenCompose(x -> apiClient.getHostBackups(id, fMachine));
-                })
-                .whenComplete((r, error) -> run(() -> {
-                    if (error != null) {
-                        reportError(player, error, null);
-                        return;
-                    }
-                    if (change) {
-                        success(player, text("Machine " + fMachine + " : " + (reset ? "plafond remis au minimum du réseau."
-                                : kindLabel(fRule.kind()).toLowerCase(Locale.ROOT) + " = "
-                                + ruleText(fRule.kind(), r.path("machines").path(0).path("rules").path(fRule.kind())) + ".")));
-                    }
-                    JsonNode machines = r.path("machines");
-                    player.sendMessage(Component.empty());
-                    player.sendMessage(header("Sauvegardes sur tes machines"));
-                    if (machines.size() == 0) {
-                        player.sendMessage(Component.text(" Tu n'es l'hôte d'aucune machine.", NamedTextColor.GRAY));
-                        return;
-                    }
-                    player.sendMessage(Component.text(" Le plus que les propriétaires peuvent garder sur ta machine "
-                            + "(dans le disque de chaque serveur).", NamedTextColor.GRAY));
-                    for (JsonNode m : machines) {
-                        long id = m.path("machine").asLong();
-                        boolean accepts = m.path("acceptsLocal").asBoolean(false);
-                        player.sendMessage(Component.text(" Machine " + id, NamedTextColor.GOLD)
-                                .append(Component.text("  " + m.path("hostname").asText("?")
-                                        + (m.hasNonNull("host") ? " · hôte " + m.get("host").asText() : ""), NamedTextColor.DARK_GRAY)));
-                        if (!accepts) {
-                            player.sendMessage(Component.text("  Ne garde pas de sauvegardes (à activer sur la machine : "
-                                    + "node-setup.sh --capacity).", NamedTextColor.GRAY));
-                            continue;
-                        }
-                        sendRuleLines(player, m.path("rules"), r.path("minimum"), "Minimum du réseau",
-                                "/mcs host backups " + id);
-                        if (m.path("customized").asBoolean(false)) {
-                            player.sendMessage(buttons(button("Par défaut", NamedTextColor.AQUA,
-                                    "/mcs host backups " + id + " reset", "Revenir au minimum du réseau")));
-                        }
-                    }
                 }));
     }
 
@@ -1885,6 +1782,12 @@ public class McsCommand implements SimpleCommand {
                     notice(player, text("La restauration de " + t.ref() + " continue en arrière-plan."));
                     return;
                 }
+                if (r.path("parked").asBoolean(false)) {
+                    success(player, text("").append(serverName(t.ref())).append(text(" est rangé au central : il "
+                            + "démarrera depuis la sauvegarde n°" + backupId + ".")));
+                    player.sendMessage(buttons(startButton(t.ref()), infoButton(t.ref())));
+                    return;
+                }
                 success(player, text("").append(serverName(t.ref()))
                         .append(text(" est restauré (sauvegarde n°" + backupId + ", "
                                 + size(r.path("restoredMb").asLong()) + ")"
@@ -1988,7 +1891,6 @@ public class McsCommand implements SimpleCommand {
     private void handleHost(Player player, String[] args) {
         String sub = args.length < 2 ? "list" : args[1].toLowerCase(Locale.ROOT);
         switch (sub) {
-            case "backups" -> handleHostBackups(player, args);
             case "list" -> apiClient.getPlayerByUuid(player.getUniqueId())
                     .thenCompose(info -> apiClient.getHosts(info.get("id").asLong()))
                     .whenComplete((r, error) -> run(() -> {
@@ -2026,7 +1928,7 @@ public class McsCommand implements SimpleCommand {
                             applyHostGroups(player, r);
                         }));
             }
-            default -> usage(player, "/mcs host [list|set|remove|backups]", "/mcs host ");
+            default -> usage(player, "/mcs host [list|set|remove]", "/mcs host ");
         }
     }
 

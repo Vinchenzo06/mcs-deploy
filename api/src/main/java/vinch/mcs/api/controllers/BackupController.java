@@ -120,27 +120,6 @@ public class BackupController {
         }
     }
 
-    /** Machines de l'hôte (toutes pour un admin) et leurs réglages de sauvegardes locales */
-    @GetMapping("/api/v1/hosts/backup-settings")
-    public ResponseEntity<?> hostSettings(@RequestParam Long playerId, @RequestParam(required = false) Long machine) {
-        try {
-            return ResponseEntity.ok(backupService.hostSettings(playerId, machine));
-        } catch (Exception e) {
-            return error(e);
-        }
-    }
-
-    @PostMapping("/api/v1/hosts/{machine}/backup-settings")
-    public ResponseEntity<?> hostRule(@PathVariable Long machine, @RequestBody HostRuleBody body) {
-        try {
-            boolean reset = Boolean.TRUE.equals(body.reset());
-            return ResponseEntity.ok(backupService.setHostRule(body.playerId(), machine, kind(body.kind(), !reset),
-                    body.max(), body.duration(), reset));
-        } catch (Exception e) {
-            return error(e);
-        }
-    }
-
     // ------------------------------------------------------------ restauration ----
 
     @PostMapping("/api/v1/servers/{id}/restore")
