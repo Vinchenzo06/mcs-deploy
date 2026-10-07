@@ -52,6 +52,11 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 		return fmt.Errorf("création refusée : %w", err)
 	}
 
+	// Image Docker présente avant tout (sinon docker run la télécharge sans rien dire)
+	if err := ensureImage(); err != nil {
+		return err
+	}
+
 	// Vérifier qu'il n'y a pas déjà un conteneur avec ce nom
 	if exists, _ := containerExists(containerName(req.ServerID)); exists {
 		return fmt.Errorf("un conteneur existe déjà pour ce serveur")
@@ -106,7 +111,7 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 		"--label", "mcs.managed=true",
 		"--label", fmt.Sprintf("mcs.server_id=%d", req.ServerID),
 		"--label", fmt.Sprintf("mcs.owner=%s", req.OwnerName),
-		"itzg/minecraft-server",
+		serverImage,
 	)
 
 	out, err := exec.Command("docker", args...).CombinedOutput()

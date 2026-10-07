@@ -512,6 +512,12 @@ public class McsCommand implements SimpleCommand {
                         return;
                     }
 
+                    if ("CREATING".equals(result.path("status").asText())) {
+                        notice(player, text("La création de ").append(Component.text(name, NamedTextColor.WHITE))
+                                .append(text(" continue en arrière-plan (la première sur une machine peut prendre "
+                                        + "plusieurs minutes). Tu recevras un message quand il sera prêt.")));
+                        return;
+                    }
                     String serverName = result.path("name").asText(name);
                     long storage = result.path("storageMb").asLong(0);
                     success(player, text("Ton serveur ").append(serverName(serverName)).append(text(" est prêt !")));

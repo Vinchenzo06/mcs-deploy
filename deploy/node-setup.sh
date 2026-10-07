@@ -145,6 +145,9 @@ WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
   systemctl enable mcs-netguard mcs-agent >/dev/null 2>&1
+  # Lancé tout de suite aussi (avant : seulement au prochain redémarrage de la machine)
+  systemctl restart mcs-netguard >/dev/null 2>&1 \
+    || warn "mcs-netguard n'a pas démarré : journalctl -u mcs-netguard -n 20"
 }
 
 show_agent_log() {

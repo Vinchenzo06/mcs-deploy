@@ -157,7 +157,7 @@ public class ApiClient {
                 "ownerPlayerId", ownerPlayerId, "name", name, "displayName", name, "serverType", type,
                 "minecraftVersion", version, "ramMb", ramMb, "cpuCores", cpuCores, "storageMb", 0,
                 "replaceDeleted", replaceDeleted),
-                Duration.ofMinutes(5));
+                Duration.ofMinutes(2));
     }
 
     public CompletableFuture<JsonNode> getPlayerServers(long playerId) {

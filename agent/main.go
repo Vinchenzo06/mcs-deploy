@@ -11,7 +11,7 @@ import (
 )
 
 // Version de l'agent (fait foi, indépendamment du fichier de config)
-const AgentVersion = "0.13.0"
+const AgentVersion = "0.13.1"
 
 // Vérifie régulièrement que l'isolation réseau est toujours en place
 // (un redémarrage de Docker ou un rechargement du pare-feu peut l'effacer).
@@ -77,6 +77,9 @@ func main() {
 		log.Printf("ATTENTION : isolation réseau impossible, les créations de serveur seront refusées : %v", err)
 	}
 	go watchIsolation(stopChan)
+
+	// Image des serveurs téléchargée ou mise à jour en arrière-plan
+	go refreshImage()
 
 	// Événements Docker (démarrage, arrêt, santé) transmis à l'API en direct
 	events := make(chan serverEvent, 256)

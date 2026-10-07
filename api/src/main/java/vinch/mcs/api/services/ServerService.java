@@ -5,7 +5,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import vinch.mcs.api.dto.CreateServerRequest;
 import vinch.mcs.api.dto.CreateServerResponse;
 import vinch.mcs.api.entities.*;
@@ -31,8 +33,8 @@ public class ServerService {
     private final ServerMetricsService metricsService;
     private final AccessService accessService;
     private final BackupService backupService;
+    private final PlatformTransactionManager transactionManager;
 
-    @Transactional
     public CreateServerResponse createServer(CreateServerRequest request) throws Exception {
         return createServer(request, null);
     }
@@ -42,7 +44,6 @@ public class ServerService {
      * les données sont restaurées par l'agent avant le premier démarrage. La machine
      * est imposée (celle de la sauvegarde) mais doit avoir la place.
      */
-    @Transactional
     public CreateServerResponse createServer(CreateServerRequest request, Map<String, Object> restore) throws Exception {
         return createServer(request, restore, null);
     }
@@ -51,15 +52,124 @@ public class ServerService {
      * restoringTag : ancien id du serveur supprimé qu'on recrée (sa place, occupée par
      * ses sauvegardes, lui revient).
      */
-    @Transactional
     public CreateServerResponse createServer(CreateServerRequest request, Map<String, Object> restore,
                                              Long restoringTag) throws Exception {
+        // Étape 1, validée tout de suite : le serveur existe en base (CREATING) pendant que
+        // la machine travaille. Une transaction ouverte pendant toute la création (jusqu'à
+        // plusieurs minutes) cachait le serveur et bloquait une 2e demande du même nom.
+        Prepared p;
+        try {
+            p = tx().execute(st -> prepareCreate(request, restore, restoringTag));
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            // Deux demandes simultanées pour le même nom
+            throw new RuntimeException("'" + request.getName() + "' est déjà en cours de création : "
+                    + "attends le message de fin (/mcs info " + request.getName() + ")", e);
+        }
+        Server server = p.server();
+        Node node = p.node();
+        int port = p.port();
+        int storageMb = p.storageMb();
+
+        // Étape 2 : la machine crée le conteneur
+        Map<String, Object> data = new HashMap<>();
+        data.put("server_id", server.getId());
+        data.put("type", request.getServerType().name());
+        data.put("version", request.getMinecraftVersion());
+        data.put("port", port);
+        data.put("ram_mb", request.getRamMb());
+        data.put("cpu_cores", request.getCpuCores());
+        data.put("storage_mb", storageMb);
+        data.put("owner_name", p.ownerName());
+        if (restore != null) {
+            data.put("restore", restore);
+        }
+
+        JsonNode result;
+        try {
+            result = agentWebSocketHandler.sendCommand(node.getId(), "create_server", data,
+                    restore != null ? 3 * 3600 : CREATE_TIMEOUT_SECONDS).get();
+        } catch (Exception e) {
+            // Pas de réponse (délai dépassé, machine déconnectée) : la création peut encore
+            // aboutir ; l'inventaire de la machine repassera le serveur en marche s'il démarre
+            log.error("Création du serveur {} : pas de réponse de la machine {} : {}",
+                    server.getId(), node.getId(), e.getMessage());
+            setStatus(server.getId(), ServerStatus.ERROR, false);
+            throw new RuntimeException("La machine n'a pas répondu à temps pour '" + request.getName()
+                    + "'. Il démarrera peut-être tout seul (/mcs info " + request.getName()
+                    + ") ; sinon supprime-le et réessaie.");
+        }
+
+        if (result.has("success") && !result.get("success").asBoolean()) {
+            String error = result.path("message").asText("erreur inconnue");
+            log.error("Création du serveur {} refusée par la machine {} : {}", server.getId(), node.getId(), error);
+            // Rien d'utilisable sur la machine : on efface tout pour pouvoir réessayer avec le même nom
+            try {
+                deleteServer(server.getId(), true);
+            } catch (Exception ex) {
+                log.warn("Nettoyage du serveur {} après l'échec : {}", server.getId(), ex.getMessage());
+                setStatus(server.getId(), ServerStatus.ERROR, false);
+            }
+            throw new RuntimeException("Échec de la création sur la machine : " + error);
+        }
+
+        setStatus(server.getId(), ServerStatus.RUNNING, true);
+        log.info("Serveur {} créé avec succès sur node {}", server.getId(), node.getId());
+
+        // Enregistrer le serveur dans Velocity avec le velocity_name
+        try {
+            velocityClient.registerServer(server.getVelocityName(), "127.0.0.1", server.getTunnelPort());
+        } catch (Exception e) {
+            log.error("Erreur d'enregistrement Velocity : {}", e.getMessage());
+        }
+
+        return CreateServerResponse.builder()
+                .serverId(server.getId())
+                .name(server.getName())
+                .velocityName(server.getVelocityName())
+                .port(server.getTunnelPort())
+                .nodeId(node.getId())
+                .status(ServerStatus.RUNNING.name())
+                .storageMb(storageMb)
+                .build();
+    }
+
+    /** Création : jusqu'à 20 min (machine neuve : image Docker, Paper, premier monde) */
+    private static final int CREATE_TIMEOUT_SECONDS = 20 * 60;
+
+    private record Prepared(Server server, Node node, int port, int storageMb, String ownerName) {}
+
+    private TransactionTemplate tx() {
+        return new TransactionTemplate(transactionManager);
+    }
+
+    private void setStatus(Long serverId, ServerStatus status, boolean started) {
+        tx().executeWithoutResult(st -> serverRepository.findById(serverId).ifPresent(s -> {
+            s.setStatus(status);
+            if (started) {
+                s.setLastStartedAt(LocalDateTime.now());
+            }
+            serverRepository.save(s);
+        }));
+    }
+
+    /** Vérifications, choix de la machine et enregistrement en base (CREATING) */
+    private Prepared prepareCreate(CreateServerRequest request, Map<String, Object> restore, Long restoringTag) {
         log.info("Création d'un serveur : owner={} name={} type={} version={}",
                 request.getOwnerPlayerId(), request.getName(), request.getServerType(), request.getMinecraftVersion());
 
         // Vérifier que le joueur existe
         Player owner = playerRepository.findById(request.getOwnerPlayerId())
                 .orElseThrow(() -> new RuntimeException("Joueur non trouvé : " + request.getOwnerPlayerId()));
+
+        // Vérifier que ce joueur n'a pas déjà un serveur avec ce nom
+        Optional<Server> sameName = serverRepository.findByOwnerIdAndName(owner.getId(), request.getName());
+        if (sameName.isPresent()) {
+            if (sameName.get().getStatus() == ServerStatus.CREATING) {
+                throw new RuntimeException("'" + request.getName() + "' est déjà en cours de création : "
+                        + "attends le message de fin (/mcs info " + request.getName() + ")");
+            }
+            throw new RuntimeException("Tu as déjà un serveur nommé '" + request.getName() + "'");
+        }
 
         if (request.getRamMb() < MIN_RAM_MB) {
             throw new RuntimeException("RAM minimum : " + MIN_RAM_MB + " Mo");
@@ -125,10 +235,6 @@ public class ServerService {
             ));
         }
 
-        // Vérifier que ce joueur n'a pas déjà un serveur avec ce nom
-        if (serverRepository.findByOwnerIdAndName(owner.getId(), request.getName()).isPresent()) {
-            throw new RuntimeException("Tu as déjà un serveur nommé '" + request.getName() + "'");
-        }
 
         // Choisir le node : assez de place pour ce serveur (RAM, CPU, disque)
         Node node = chooseNode(request.getForceNodeId(), request);
@@ -175,63 +281,7 @@ public class ServerService {
         // Dépôt de sauvegarde du serveur au central (le serveur de sauvegarde le connaît en 2 min)
         backupService.repoFor(server.getId());
         log.info("Serveur créé en base : id={} velocityName={}", server.getId(), velocityName);
-
-        // Envoyer la commande à l'agent
-        Map<String, Object> data = new HashMap<>();
-        data.put("server_id", server.getId());
-        data.put("type", request.getServerType().name());
-        data.put("version", request.getMinecraftVersion());
-        data.put("port", port);
-        data.put("ram_mb", request.getRamMb());
-        data.put("cpu_cores", request.getCpuCores());  // ← AJOUTER
-        data.put("storage_mb", storageMb);
-        data.put("owner_name", owner.getMinecraftUsername());
-        if (restore != null) {
-            data.put("restore", restore);
-        }
-
-        try {
-            CompletableFuture<JsonNode> future = agentWebSocketHandler.sendCommand(
-                    node.getId(), "create_server", data, restore != null ? 3 * 3600 : 300);
-            JsonNode result = future.get();
-
-            if (result.has("success") && !result.get("success").asBoolean()) {
-                server.setStatus(ServerStatus.ERROR);
-                serverRepository.save(server);
-                String error = result.has("message") ? result.get("message").asText() : "Erreur inconnue";
-                throw new RuntimeException("Échec création côté agent : " + error);
-            }
-
-            // Succès : marquer comme RUNNING
-            server.setStatus(ServerStatus.RUNNING);
-            server.setLastStartedAt(LocalDateTime.now());
-            serverRepository.save(server);
-
-            log.info("Serveur {} créé avec succès sur node {}", server.getId(), node.getId());
-
-        } catch (Exception e) {
-            log.error("Erreur création serveur {}: {}", server.getId(), e.getMessage());
-            server.setStatus(ServerStatus.ERROR);
-            serverRepository.save(server);
-            throw e;
-        }
-
-        // Enregistrer le serveur dans Velocity avec le velocity_name
-        try {
-            velocityClient.registerServer(server.getVelocityName(), "127.0.0.1", server.getTunnelPort());
-        } catch (Exception e) {
-            log.error("Erreur d'enregistrement Velocity : {}", e.getMessage());
-        }
-
-        return CreateServerResponse.builder()
-                .serverId(server.getId())
-                .name(server.getName())
-                .velocityName(server.getVelocityName())
-                .port(server.getTunnelPort())
-                .nodeId(node.getId())
-                .status(server.getStatus().name())
-                .storageMb(storageMb)
-                .build();
+        return new Prepared(server, node, port, storageMb, owner.getMinecraftUsername());
     }
 
     /** Serveurs supprimés du joueur dont des sauvegardes occupent encore une place */
