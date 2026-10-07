@@ -80,6 +80,8 @@ public class ServerService {
         data.put("cpu_cores", request.getCpuCores());
         data.put("storage_mb", storageMb);
         data.put("owner_name", p.ownerName());
+        int java = JavaVersions.effective(server);
+        data.put("java", java);
         if (restore != null) {
             data.put("restore", restore);
         }
@@ -99,6 +101,12 @@ public class ServerService {
                     + ") ; sinon supprime-le et réessaie.");
         }
 
+        if (JavaVersions.isIssue(result)) {
+            // Mauvaise version de Java : le serveur est gardé (arrêté), le joueur en choisit une autre
+            log.warn("Création du serveur {} : {}", server.getId(), result.path("java_detail").asText());
+            setStatus(server.getId(), ServerStatus.STOPPED, false);
+            throw JavaVersions.issue(result, server, java);
+        }
         if (result.has("success") && !result.get("success").asBoolean()) {
             String error = result.path("message").asText("erreur inconnue");
             log.error("Création du serveur {} refusée par la machine {} : {}", server.getId(), node.getId(), error);
@@ -171,6 +179,10 @@ public class ServerService {
             throw new RuntimeException("Tu as déjà un serveur nommé '" + request.getName() + "'");
         }
 
+        if (request.getServerType() == ServerType.VANILLA && restore == null) {
+            throw new RuntimeException("Vanilla n'est plus proposé (le proxy ne peut pas lui transmettre les vrais "
+                    + "comptes des joueurs) : prends Paper, ou Fabric sans mods.");
+        }
         if (request.getRamMb() < MIN_RAM_MB) {
             throw new RuntimeException("RAM minimum : " + MIN_RAM_MB + " Mo");
         }
@@ -570,6 +582,7 @@ public class ServerService {
         data.put("cpu_cores", server.getAllocatedCpuCores());
         data.put("storage_mb", storageMb);
         data.put("owner_name", server.getOwner().getMinecraftUsername());
+        data.put("java", JavaVersions.effective(server));
         if (restore != null) {
             data.put("restore", restore);
         }
@@ -700,7 +713,13 @@ public class ServerService {
         try {
             CompletableFuture<JsonNode> future = agentWebSocketHandler.sendCommand(
                     server.getNode().getId(), "start_server", data);
-            requireSuccess(future.get());
+            JsonNode started = future.get();
+            if (JavaVersions.isIssue(started)) {
+                server.setStatus(ServerStatus.STOPPED);
+                serverRepository.save(server);
+                throw JavaVersions.issue(started, server, JavaVersions.effective(server));
+            }
+            requireSuccess(started);
 
             server.setStatus(ServerStatus.RUNNING);
             server.setLastStartedAt(LocalDateTime.now());
@@ -714,11 +733,113 @@ public class ServerService {
             }
 
             log.info("Serveur {} démarré", serverId);
+        } catch (JavaVersions.JavaIssueException e) {
+            throw e;
         } catch (Exception e) {
             server.setStatus(ServerStatus.ERROR);
             serverRepository.save(server);
             throw new RuntimeException("Erreur démarrage : " + e.getMessage());
         }
+    }
+
+    private record JavaPlan(String name, Long nodeId, boolean wasRunning, boolean start, int java,
+                            Map<String, Object> data, String velocityName, int port) {}
+
+    /**
+     * Change la version de Java d'un serveur (choice : 8, 11, 16, 17, 21, 25 ou "auto").
+     * Sa copie est sur sa machine : nouveau conteneur avec la bonne image (fichiers
+     * intacts), redémarré s'il tournait ou si start. Sans copie (rangé au central) :
+     * pris en compte au prochain démarrage ("needsStart" pour le démarrer tout de suite).
+     */
+    public Map<String, Object> setJava(Long serverId, Long playerId, String choice, boolean start) throws Exception {
+        Integer chosen = JavaVersions.parseChoice(choice);
+        JavaPlan plan = tx().execute(st -> {
+            Server s = serverRepository.findById(serverId)
+                    .orElseThrow(() -> new RuntimeException("Serveur non trouvé : " + serverId));
+            accessService.require(accessService.player(playerId), s, AccessService.Right.FILES);
+            ServerStatus status = s.getStatus();
+            if (status == ServerStatus.CREATING || status == ServerStatus.MIGRATING
+                    || status == ServerStatus.STARTING || status == ServerStatus.STOPPING) {
+                throw new RuntimeException("Une opération est en cours sur ce serveur : réessaie dans un instant.");
+            }
+            if (backupService.isBusy(s.getId())) {
+                throw new RuntimeException("Rangement ou sauvegarde de ce serveur en cours : réessaie dans un instant.");
+            }
+            boolean hasCopy = s.getNode() != null && !"COLD".equals(s.getParkState()) && !"LOST".equals(s.getParkState());
+            if (hasCopy && !agentWebSocketHandler.isNodeOnline(s.getNode().getId())) {
+                throw new RuntimeException("La machine de ce serveur est hors ligne : réessaie plus tard.");
+            }
+            boolean running = status == ServerStatus.RUNNING;
+            boolean doStart = running || start;
+            if (doStart && hasCopy) {
+                String quota = metricsService.diskQuotaProblem(s);
+                if (quota != null) {
+                    throw new RuntimeException(quota);
+                }
+            }
+            s.setJavaVersion(chosen);
+            int java = JavaVersions.effective(s);
+            if (!hasCopy) {
+                serverRepository.save(s);
+                return new JavaPlan(s.getName(), null, false, doStart, java, null, s.getVelocityName(), 0);
+            }
+            Map<String, Object> data = createData(s, s.getTunnelPort(), s.getAllocatedStorageMb(), null);
+            data.put("start", doStart);
+            if (doStart) {
+                s.setStatus(ServerStatus.STARTING);
+            }
+            serverRepository.save(s);
+            return new JavaPlan(s.getName(), s.getNode().getId(), running, doStart, java, data,
+                    s.getVelocityName(), s.getTunnelPort());
+        });
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("java", plan.java());
+        out.put("auto", chosen == null);
+        if (plan.nodeId() == null) {
+            // Rangé au central : la version servira au prochain démarrage (recréation)
+            out.put("status", "SAVED");
+            out.put("needsStart", plan.start());
+            return out;
+        }
+        if (plan.wasRunning()) {
+            try {
+                velocityClient.unregisterServer(plan.velocityName());
+            } catch (Exception e) {
+                log.warn("Désenregistrement Velocity : {}", e.getMessage());
+            }
+        }
+        log.info("Serveur {} : passage à Java {} (démarrage={})", serverId, plan.java(), plan.start());
+        JsonNode result;
+        try {
+            result = agentWebSocketHandler.sendCommand(plan.nodeId(), "recreate_server", plan.data(),
+                    CREATE_TIMEOUT_SECONDS).get();
+        } catch (Exception e) {
+            setStatus(serverId, plan.start() ? ServerStatus.ERROR : ServerStatus.STOPPED, false);
+            throw new RuntimeException("Changement de Java : pas de réponse de la machine (" + e.getMessage() + ")");
+        }
+        if (JavaVersions.isIssue(result)) {
+            setStatus(serverId, ServerStatus.STOPPED, false);
+            Server s = serverRepository.findById(serverId).orElseThrow();
+            throw JavaVersions.issue(result, s, plan.java());
+        }
+        if (result == null || (result.has("success") && !result.get("success").asBoolean())) {
+            setStatus(serverId, plan.start() ? ServerStatus.ERROR : ServerStatus.STOPPED, false);
+            String error = result == null ? "pas de réponse" : result.path("message").asText("erreur inconnue");
+            throw new RuntimeException("Changement de Java : " + error);
+        }
+        if (plan.start()) {
+            setStatus(serverId, ServerStatus.RUNNING, true);
+            try {
+                velocityClient.registerServer(plan.velocityName(), "127.0.0.1", plan.port());
+            } catch (Exception e) {
+                log.warn("Enregistrement Velocity : {}", e.getMessage());
+            }
+        } else {
+            setStatus(serverId, ServerStatus.STOPPED, false);
+        }
+        out.put("status", plan.start() ? "STARTED" : "UPDATED");
+        out.put("needsStart", false);
+        return out;
     }
 
     public void stopServer(Long serverId, Long requestedByPlayerId) throws Exception {

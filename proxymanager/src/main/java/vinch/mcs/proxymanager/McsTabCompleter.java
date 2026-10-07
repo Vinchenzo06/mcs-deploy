@@ -13,10 +13,10 @@ public class McsTabCompleter {
     private static final List<String> SUBCOMMANDS = List.of(
             "create", "list", "info", "join", "start", "stop", "restart", "members", "invite", "remove",
             "leave", "public", "private", "display", "console", "move", "delete", "quota", "host",
-            "backup", "backups", "restore", "migrate", "regions", "machine"
+            "backup", "backups", "restore", "migrate", "regions", "machine", "java"
     );
 
-    private static final List<String> TYPES = List.of("PAPER", "SPIGOT", "FABRIC", "FORGE", "VANILLA");
+    private static final List<String> TYPES = List.of("PAPER", "SPIGOT", "FABRIC", "FORGE", "NEOFORGE");
 
     private static final List<String> COMMON_VERSIONS = List.of(
             "LATEST", "26.1.2", "1.21.11", "1.21.4", "1.21.1", "1.20.1", "1.19.2", "1.18.2"
@@ -30,7 +30,7 @@ public class McsTabCompleter {
 
     private static final Set<String> SERVER_ARG = Set.of(
             "delete", "join", "restart", "info", "members", "invite", "remove", "leave",
-            "public", "private", "display", "console", "start", "stop", "backup", "backups");
+            "public", "private", "display", "console", "start", "stop", "backup", "backups", "java");
 
     // Serveurs du joueur (les siens + partagés en "pseudo/nom"), gardés 10 s
     private final Map<UUID, List<Cached>> cache = new ConcurrentHashMap<>();
@@ -98,6 +98,9 @@ public class McsTabCompleter {
                 }
                 case "display" -> {
                     return done(filter(List.of("on", "off"), args[2]));
+                }
+                case "java" -> {
+                    return done(filter(List.of("8", "11", "16", "17", "21", "25", "auto"), args[2]));
                 }
                 default -> {
                 }

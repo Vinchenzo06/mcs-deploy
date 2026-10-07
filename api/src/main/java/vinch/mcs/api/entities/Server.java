@@ -108,6 +108,10 @@ public class Server {
     @Column(name = "parked_backup_id")
     private Long parkedBackupId;
 
+    // Version de Java (lot 35) : null = automatique (voir JavaVersions)
+    @Column(name = "java_version")
+    private Integer javaVersion;
+
     @Column(name = "inactivity_warned_at")
     private LocalDateTime inactivityWarnedAt;
 

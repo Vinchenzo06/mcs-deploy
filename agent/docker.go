@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -21,6 +22,8 @@ type CreateServerRequest struct {
 	CpuCores  int    `json:"cpu_cores"`  // Cores CPU alloués
 	StorageMb int    `json:"storage_mb"` // Stockage max
 	OwnerName string `json:"owner_name"` // Pour la séparation logique
+	// Version de Java (image itzg javaN) ; 0 = la plus récente (API d'avant le lot 35)
+	Java int `json:"java"`
 	// Serveur recréé à partir d'une sauvegarde (serveur supprimé, lot 31)
 	Restore *restoreRequest `json:"restore,omitempty"`
 }
@@ -53,7 +56,7 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 	}
 
 	// Image Docker présente avant tout (sinon docker run la télécharge sans rien dire)
-	if err := ensureImage(); err != nil {
+	if err := ensureImage(imageFor(req.Java)); err != nil {
 		return err
 	}
 
@@ -85,19 +88,28 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 		}
 	}
 
-	serverType := mapServerType(req.Type)
+	args := runArgs(serverPath, req, "run", "-d")
+	out, err := exec.Command("docker", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("docker run a échoué : %s : %w", string(out), err)
+	}
+	log.Printf("Conteneur créé : %s (%s)", strings.TrimSpace(string(out)), imageFor(req.Java))
 
-	// Construire la commande docker run
-	args := []string{
-		"run", "-d",
+	return firstStart(serverPath, req)
+}
+
+// runArgs : arguments de docker run / docker create pour ce serveur
+func runArgs(serverPath string, req CreateServerRequest, verb ...string) []string {
+	args := append([]string{}, verb...)
+	args = append(args,
 		"--name", containerName(req.ServerID),
 		"--restart", "unless-stopped",
 		"-p", fmt.Sprintf("127.0.0.1:%d:25565", req.Port),
 		"-v", fmt.Sprintf("%s:/data", serverPath),
 		"-e", "EULA=TRUE",
 		"-e", "ONLINE_MODE=FALSE",
-		"-e", "TYPE=" + serverType,
-		"-e", "VERSION=" + req.Version,
+		"-e", "TYPE="+mapServerType(req.Type),
+		"-e", "VERSION="+req.Version,
 		"-e", fmt.Sprintf("MEMORY=%dM", javaHeapMb(req.RamMb)),
 		"-e", "ENABLE_QUERY=false",
 		// RCON local au conteneur (port non publié) : /mcs console via rcon-cli
@@ -105,44 +117,110 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 		// Les commandes de MCS (OP, équipes...) ne s'affichent pas aux OP
 		"-e", "BROADCAST_RCON_TO_OPS=false",
 		"--cpus", fmt.Sprintf("%d", req.CpuCores),
-	}
+	)
 	args = append(args, hardeningArgs(req.RamMb)...)
 	args = append(args,
 		"--label", "mcs.managed=true",
 		"--label", fmt.Sprintf("mcs.server_id=%d", req.ServerID),
 		"--label", fmt.Sprintf("mcs.owner=%s", req.OwnerName),
-		serverImage,
+		"--label", fmt.Sprintf("mcs.java=%d", req.Java),
+		imageFor(req.Java),
 	)
+	return args
+}
 
-	out, err := exec.Command("docker", args...).CombinedOutput()
+// isBukkit : Paper et Spigot lisent spigot.yml (forwarding BungeeCord du proxy)
+func isBukkit(t string) bool {
+	switch mapServerType(t) {
+	case "PAPER", "SPIGOT":
+		return true
+	}
+	return false
+}
+
+// bungeecordReady : spigot.yml existe et le forwarding y est déjà activé
+func bungeecordReady(serverPath string) bool {
+	data, err := os.ReadFile(filepath.Join(serverPath, "spigot.yml"))
 	if err != nil {
-		return fmt.Errorf("docker run a échoué : %s : %w", string(out), err)
+		return false
 	}
-
-	containerID := strings.TrimSpace(string(out))
-	log.Printf("Conteneur créé : %s", containerID)
-
-	// Attendre que les fichiers de config soient générés puis configurer bungeecord
-	log.Printf("Attente de la génération initiale des fichiers...")
-	if err := waitForConfigFiles(serverPath, 90); err != nil {
-		log.Printf("Avertissement : fichiers non générés à temps : %v", err)
-		// On continue quand même
+	for _, l := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(l) == "bungeecord: true" {
+			return true
+		}
 	}
+	return false
+}
 
-	if err := configureBungeecord(serverPath); err != nil {
-		log.Printf("Avertissement : échec config bungeecord : %v", err)
-	} else {
-		log.Printf("Configuration bungeecord appliquée, redémarrage du serveur...")
-		// Redémarrer pour appliquer les changements
-		_ = exec.Command("docker", "restart", containerName(req.ServerID)).Run()
+// firstStart : conteneur qui vient d'être lancé. Paper/Spigot : attente des
+// fichiers de config, forwarding activé, redémarrage. Puis attente que le serveur
+// soit prêt. Un problème de version de Java arrête le conteneur et le signale.
+func firstStart(serverPath string, req CreateServerRequest) error {
+	name := containerName(req.ServerID)
+	if isBukkit(req.Type) && !bungeecordReady(serverPath) {
+		log.Printf("Attente de la génération initiale des fichiers...")
+		if err := waitForConfigFiles(serverPath, name, 120); err != nil {
+			if je := javaFailure(name, err); je != err {
+				return je
+			}
+			log.Printf("Avertissement : fichiers non générés à temps : %v", err)
+		}
+		if err := configureBungeecord(serverPath); err != nil {
+			log.Printf("Avertissement : échec config bungeecord : %v", err)
+		} else {
+			log.Printf("Configuration bungeecord appliquée, redémarrage du serveur...")
+			_ = exec.Command("docker", "restart", name).Run()
+		}
 	}
-
-	if err := waitForMinecraftReady(containerName(req.ServerID), 180); err != nil {
+	if err := waitForMinecraftReady(name, 180); err != nil {
+		err = javaFailure(name, err)
 		log.Printf("Avertissement : %v", err)
+		var je *javaError
+		if errors.As(err, &je) {
+			return je
+		}
 		return fmt.Errorf("le serveur n'a pas démarré à temps : %w", err)
 	}
-
 	return nil
+}
+
+// RecreateServer : nouveau conteneur pour un serveur existant (changement de
+// version de Java), sans toucher à ses fichiers. start=false : créé mais arrêté.
+func RecreateServer(dataPath string, req CreateServerRequest, start bool) error {
+	log.Printf("Recréation du conteneur du serveur %d (Java %d, démarrage=%v)", req.ServerID, req.Java, start)
+	serverPath := serverDataPath(dataPath, req.ServerID)
+	if !fileExists(serverPath) {
+		return fmt.Errorf("pas de données pour ce serveur sur cette machine")
+	}
+	if !isolationReady.Load() {
+		if err := ensureIsolation(); err != nil {
+			return fmt.Errorf("isolation réseau indisponible : %w", err)
+		}
+	}
+	if start {
+		if err := egressTunnelUp(); err != nil {
+			return fmt.Errorf("démarrage refusé : %w", err)
+		}
+	}
+	if err := ensureImage(imageFor(req.Java)); err != nil {
+		return err
+	}
+	name := containerName(req.ServerID)
+	_ = exec.Command("docker", "stop", "-t", "30", name).Run()
+	if out, err := exec.Command("docker", "rm", name).CombinedOutput(); err != nil &&
+		!strings.Contains(string(out), "No such container") {
+		return fmt.Errorf("docker rm a échoué : %s", strings.TrimSpace(string(out)))
+	}
+	if !start {
+		if out, err := exec.Command("docker", runArgs(serverPath, req, "create")...).CombinedOutput(); err != nil {
+			return fmt.Errorf("docker create a échoué : %s", strings.TrimSpace(string(out)))
+		}
+		return nil
+	}
+	if out, err := exec.Command("docker", runArgs(serverPath, req, "run", "-d")...).CombinedOutput(); err != nil {
+		return fmt.Errorf("docker run a échoué : %s", strings.TrimSpace(string(out)))
+	}
+	return firstStart(serverPath, req)
 }
 
 // Utilisateur non-root sous lequel tournent les serveurs (celui de l'image itzg)
@@ -195,10 +273,14 @@ func hardeningArgs(ramMb int) []string {
 }
 
 // waitForConfigFiles attend que server.properties et spigot.yml soient générés
-func waitForConfigFiles(serverPath string, timeoutSeconds int) error {
+// (abandon si le conteneur plante entre-temps)
+func waitForConfigFiles(serverPath, container string, timeoutSeconds int) error {
 	deadline := time.Now().Add(time.Duration(timeoutSeconds) * time.Second)
 
 	for time.Now().Before(deadline) {
+		if containerCrashed(container) {
+			return fmt.Errorf("le serveur s'est arrêté pendant son premier démarrage")
+		}
 		propsExist := fileExists(filepath.Join(serverPath, "server.properties"))
 		spigotExist := fileExists(filepath.Join(serverPath, "spigot.yml"))
 
@@ -323,7 +405,12 @@ func StartServer(serverID int64) error {
 	}
 
 	if err := waitForMinecraftReady(containerName(serverID), 120); err != nil {
+		err = javaFailure(containerName(serverID), err)
 		log.Printf("Avertissement : %v", err)
+		var je *javaError
+		if errors.As(err, &je) {
+			return je
+		}
 		return fmt.Errorf("le serveur n'a pas démarré à temps : %w", err)
 	}
 
@@ -450,6 +537,8 @@ func mapServerType(t string) string {
 		return "FORGE"
 	case "FABRIC":
 		return "FABRIC"
+	case "NEOFORGE":
+		return "NEOFORGE"
 	case "VANILLA":
 		return "VANILLA"
 	default:

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"time"
 
@@ -17,6 +18,8 @@ func handleCommand(conn *websocket.Conn, config *Config, msgType, commandId stri
 		handlePing(conn, commandId, msg)
 	case "create_server":
 		handleCreateServer(conn, config, commandId, msg)
+	case "recreate_server":
+		handleRecreateServer(conn, config, commandId, msg)
 	case "start_server":
 		handleStartServer(conn, config, commandId, msg)
 	case "stop_server":
@@ -79,7 +82,7 @@ func handleCreateServer(conn *websocket.Conn, config *Config, commandId string, 
 	}
 
 	if err := CreateServer(config.Docker.DataPath, req); err != nil {
-		sendCommandError(conn, commandId, "create_failed", err.Error())
+		sendCommandFailure(conn, commandId, "create_failed", err)
 		return
 	}
 
@@ -114,7 +117,7 @@ func handleStartServer(conn *websocket.Conn, config *Config, commandId string, m
 	}
 
 	if err := StartServer(serverID); err != nil {
-		sendCommandError(conn, commandId, "start_failed", err.Error())
+		sendCommandFailure(conn, commandId, "start_failed", err)
 		return
 	}
 
@@ -240,6 +243,58 @@ func sendCommandResult(conn *websocket.Conn, commandId string, result interface{
 
 	if err := writeJSON(conn, response); err != nil {
 		log.Printf("Erreur d'envoi du résultat : %v", err)
+	}
+}
+
+// handleRecreateServer : nouveau conteneur (autre version de Java) pour un serveur existant
+func handleRecreateServer(conn *websocket.Conn, config *Config, commandId string, msg map[string]interface{}) {
+	data, ok := msg["data"].(map[string]interface{})
+	if !ok {
+		sendCommandError(conn, commandId, "missing_data", "data manquant")
+		return
+	}
+	raw, _ := json.Marshal(data)
+	var req CreateServerRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		sendCommandError(conn, commandId, "invalid_data", err.Error())
+		return
+	}
+	start, _ := data["start"].(bool)
+	if isRestoring(req.ServerID) || isBackingUp(req.ServerID) {
+		sendCommandError(conn, commandId, "busy", "sauvegarde ou restauration en cours : réessaie dans un instant")
+		return
+	}
+	if err := RecreateServer(config.Docker.DataPath, req, start); err != nil {
+		sendCommandFailure(conn, commandId, "recreate_failed", err)
+		return
+	}
+	sendCommandResult(conn, commandId, map[string]interface{}{
+		"server_id": req.ServerID,
+		"status":    map[bool]string{true: "started", false: "created"}[start],
+		"java":      req.Java,
+	})
+}
+
+// sendCommandFailure : erreur de commande ; un problème de version de Java est
+// détaillé (java_needed, java_direction) pour que l'API propose d'en changer
+func sendCommandFailure(conn *websocket.Conn, commandId, errorCode string, err error) {
+	var je *javaError
+	if !errors.As(err, &je) {
+		sendCommandError(conn, commandId, errorCode, err.Error())
+		return
+	}
+	response := map[string]interface{}{
+		"type":           "command_result",
+		"command_id":     commandId,
+		"success":        false,
+		"error":          "java_version",
+		"message":        je.Error(),
+		"java_needed":    je.Needed,
+		"java_direction": je.Direction,
+		"java_detail":    je.Detail,
+	}
+	if werr := writeJSON(conn, response); werr != nil {
+		log.Printf("Erreur d'envoi de l'erreur : %v", werr)
 	}
 }
 

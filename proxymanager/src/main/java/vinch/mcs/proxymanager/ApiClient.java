@@ -133,13 +133,33 @@ public class ApiClient {
                         }
                         if (response.statusCode() < 200 || response.statusCode() >= 300) {
                             String error = json.has("error") ? json.get("error").asText() : "";
-                            throw new RuntimeException("API erreur (" + response.statusCode() + ") : " + error);
+                            throw new ApiException("API erreur (" + response.statusCode() + ") : " + error, json);
                         }
                         return json;
                     });
         } catch (Exception e) {
             return CompletableFuture.failedFuture(e);
         }
+    }
+
+    /** Erreur de l'API avec sa réponse complète (ex. javaIssue : choix d'une version de Java) */
+    public static class ApiException extends RuntimeException {
+        private final JsonNode body;
+
+        public ApiException(String message, JsonNode body) {
+            super(message);
+            this.body = body;
+        }
+
+        public JsonNode body() {
+            return body;
+        }
+    }
+
+    /** Version de Java d'un serveur (8, 11, 16, 17, 21, 25 ou auto) ; start : le démarrer avec */
+    public CompletableFuture<JsonNode> setJava(long serverId, long playerId, String version, boolean start) {
+        return call("POST", "/api/v1/servers/" + serverId + "/java?playerId=" + playerId + "&version=" + enc(version)
+                + "&start=" + start, null, Duration.ofMinutes(21));
     }
 
     private static String enc(String s) {

@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.*;
 import vinch.mcs.api.dto.CreateServerRequest;
 import vinch.mcs.api.dto.CreateServerResponse;
 import vinch.mcs.api.repositories.ServerRepository;
+import vinch.mcs.api.services.JavaVersions;
 import vinch.mcs.api.services.NotificationService;
 import vinch.mcs.api.services.ServerMetricsService;
 import vinch.mcs.api.services.ServerService;
@@ -70,7 +71,9 @@ public class ServerController {
                         Throwable cause = error instanceof CompletionException && error.getCause() != null
                                 ? error.getCause() : error;
                         log.error("Erreur création (en arrière-plan) : {}", cause.getMessage());
-                        notificationService.notify(playerId, "La création de " + name + " a échoué : " + cause.getMessage());
+                        notificationService.notify(playerId, cause instanceof JavaVersions.JavaIssueException je
+                                ? "Ton serveur " + name + " ne démarre pas. " + je.hint()
+                                : "La création de " + name + " a échoué : " + cause.getMessage());
                     }
                 } catch (Exception ex) {
                     log.warn("Message de fin de création pour {} : {}", name, ex.getMessage());
@@ -81,6 +84,9 @@ public class ServerController {
             Throwable cause = e.getCause() instanceof CompletionException && e.getCause().getCause() != null
                     ? e.getCause().getCause() : e.getCause();
             log.error("Erreur création : {}", cause.getMessage());
+            if (cause instanceof JavaVersions.JavaIssueException je) {
+                return ResponseEntity.badRequest().body(je.body());
+            }
             return ResponseEntity.badRequest().body(Map.of("error", String.valueOf(cause.getMessage())));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

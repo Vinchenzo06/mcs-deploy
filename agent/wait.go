@@ -56,6 +56,11 @@ func waitForMinecraftReady(containerName string, timeoutSeconds int) error {
 			return nil
 		}
 
+		// Mauvaise version de Java : inutile d'attendre la fin du délai
+		if je := diagnoseJavaLine(line); je != nil {
+			return je
+		}
+
 		// Détecter aussi un démarrage qui a échoué
 		if strings.Contains(line, "FAILED TO BIND TO PORT") {
 			return fmt.Errorf("le serveur n'a pas pu démarrer : port déjà utilisé")

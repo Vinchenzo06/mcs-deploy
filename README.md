@@ -264,6 +264,16 @@ Mise en place, une fois :
   | manuelle | 2 max, 3 jours | propriétaire, gérants, techniciens, hôte, admins |
   | permanente | 1 max, gardée tant que le serveur existe, puis 24 h | propriétaire, admins |
 
+- **Version de Java (lot 35)** : choisie automatiquement selon le type et la version de
+  Minecraft (Paper : 8 jusqu'à 1.11, 11 jusqu'à 1.16.4, 16 en 1.16.5, 17 en 1.17–1.19, 21
+  ensuite, 25 en 26.x ; Forge/NeoForge : 8 jusqu'à 1.16, 16 en 1.17, 17 en 1.18–1.20.4, 21
+  ensuite ; Fabric : 8 jusqu'à 1.16, 17 en 1.17–1.20.4, 21 ensuite). L'agent prend l'image
+  itzg correspondante (`java8`, `java11`, `java16`, `java17`, `java21`, `java25`).
+  `/mcs java <serveur> [8|11|16|17|21|25|auto]` (propriétaire, techniciens, admins) recrée le
+  conteneur sans toucher aux fichiers. Si un serveur ne démarre pas à cause de Java (erreur
+  reconnue dans son journal), il est arrêté et le joueur reçoit un bouton par version, la
+  version conseillée marquée ★. Vanilla n'est plus proposé à la création (pas de vrais
+  comptes derrière le proxy) : Paper, Spigot, Fabric, Forge, NeoForge.
 - **Rangement (lot 33)** : à chaque arrêt, quelle qu'en soit la cause, le serveur est rangé au
   central (sauvegarde cachée au propriétaire, 2 min après l'arrêt). La copie sur sa machine
   n'est qu'un cache, utilisé seulement s'il est à jour : au démarrage, le serveur démarre sur

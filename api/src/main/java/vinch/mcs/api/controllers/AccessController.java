@@ -9,6 +9,7 @@ import vinch.mcs.api.entities.Player;
 import vinch.mcs.api.entities.Server;
 import vinch.mcs.api.repositories.ServerRepository;
 import vinch.mcs.api.services.AccessService;
+import vinch.mcs.api.services.JavaVersions;
 import vinch.mcs.api.services.ParkingService;
 import vinch.mcs.api.services.ServerService;
 
@@ -55,6 +56,9 @@ public class AccessController {
         try {
             Object result = action.run();
             return ResponseEntity.ok(result == null ? Map.of("success", true) : result);
+        } catch (JavaVersions.JavaIssueException e) {
+            // Mauvaise version de Java : le proxy propose d'en choisir une autre
+            return ResponseEntity.badRequest().body(e.body());
         } catch (Exception e) {
             String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             return ResponseEntity.badRequest().body(Map.of("error", msg));
@@ -80,6 +84,13 @@ public class AccessController {
     public ResponseEntity<?> start(@PathVariable Long id, @RequestParam Long playerId) {
         // Sur sa machine si possible, sinon sur une autre à partir de son rangement (lot 33)
         return handle(() -> parkingService.start(id, playerId));
+    }
+
+    /** Version de Java (8, 11, 16, 17, 21, 25 ou auto) ; start : démarrer avec */
+    @PostMapping("/servers/{id}/java")
+    public ResponseEntity<?> java(@PathVariable Long id, @RequestParam Long playerId, @RequestParam String version,
+                                  @RequestParam(defaultValue = "false") boolean start) {
+        return handle(() -> serverService.setJava(id, playerId, version, start));
     }
 
     @PostMapping("/servers/{id}/stop")

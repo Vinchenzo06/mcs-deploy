@@ -11,6 +11,8 @@ import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import org.slf4j.Logger;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CompletionException;
@@ -28,7 +30,9 @@ public class McsCommand implements SimpleCommand {
     private static final Pattern NAME_PATTERN = Pattern.compile("^[a-z0-9-]{3,32}$");
     private static final Pattern RAM_PATTERN =
             Pattern.compile("^(\\d+(?:[.,]\\d+)?)\\s*(g|go|gb|m|mo|mb)?$", Pattern.CASE_INSENSITIVE);
-    private static final Set<String> TYPES = Set.of("PAPER", "SPIGOT", "FABRIC", "FORGE", "VANILLA");
+    // Vanilla retiré (lot 35) : le proxy ne peut pas lui transmettre les vrais comptes des joueurs
+    private static final Set<String> TYPES = Set.of("PAPER", "SPIGOT", "FABRIC", "FORGE", "NEOFORGE");
+    private static final List<String> JAVA_VERSIONS = List.of("8", "11", "16", "17", "21", "25");
 
     // Mêmes valeurs que l'API (ServerService.MIN_RAM_MB)
     private static final int MIN_RAM_MB = 1024;
@@ -120,6 +124,7 @@ public class McsCommand implements SimpleCommand {
             case "regions" -> handleRegions(player);
             case "machine" -> handleMachine(player, args);
             case "move" -> handleMove(player, args);
+            case "java" -> handleJava(player, args);
             default -> sendUsage(player);
         }
     }
@@ -295,6 +300,10 @@ public class McsCommand implements SimpleCommand {
      * Les erreurs inattendues sont aussi écrites dans la console du lobby.
      */
     private void reportError(Player player, Throwable error, String serverName) {
+        if (unwrap(error) instanceof ApiClient.ApiException ae && ae.body().has("javaIssue")) {
+            showJavaIssue(player, ae.body(), serverName);
+            return;
+        }
         String msg = errorText(error);
 
         if (msg.isEmpty() || msg.startsWith("Joueur non trouvé")) {
@@ -401,6 +410,9 @@ public class McsCommand implements SimpleCommand {
         player.sendMessage(helpLine("/mcs host [list|set|remove]", "/mcs host ", "Hôtes (admins)",
                 "Admins : choisir le joueur hôte de chaque machine.\n"
                         + "Il gère les serveurs de SA machine seulement (titre ʜᴏsᴛ)."));
+        player.sendMessage(helpLine("/mcs java <serveur> [version]", "/mcs java ", "Version de Java",
+                "Choisis la version de Java du serveur : 8, 11, 16, 17, 21, 25\n"
+                        + "ou auto (selon la version de Minecraft)."));
         player.sendMessage(helpLine("/mcs delete <serveur>", "/mcs delete ", "Supprimer",
                 "Supprime le serveur et son monde, définitivement\n(une confirmation est demandée)"));
         player.sendMessage(helpLine("/mcs quota", "/mcs quota", "Tes limites",
@@ -447,8 +459,13 @@ public class McsCommand implements SimpleCommand {
         int ramMb = DEFAULT_RAM_MB;
         int cpuCores = 1;
 
+        if ("VANILLA".equals(type)) {
+            failure(player, text("Vanilla n'est plus proposé : derrière le réseau, il ne verrait pas les vrais comptes "
+                    + "des joueurs (skins, UUID). Prends Paper, ou Fabric sans mods (même jeu)."));
+            return;
+        }
         if (!TYPES.contains(type)) {
-            failure(player, text("Type inconnu : " + args[1] + ". Choisis parmi Paper, Spigot, Fabric, Forge, Vanilla."));
+            failure(player, text("Type inconnu : " + args[1] + ". Choisis parmi Paper, Spigot, Fabric, Forge, NeoForge."));
             return;
         }
 
@@ -795,6 +812,91 @@ public class McsCommand implements SimpleCommand {
                 }
             });
         });
+    }
+
+    // ============================================================ java ====
+
+    /** /mcs java <serveur> [8|11|16|17|21|25|auto] [start] */
+    private void handleJava(Player player, String[] args) {
+        if (args.length < 2 || args.length > 4) {
+            usage(player, "/mcs java <serveur> [8|11|16|17|21|25|auto]", "/mcs java ");
+            return;
+        }
+        String version = args.length >= 3 ? args[2].toLowerCase(Locale.ROOT).replace("java", "") : null;
+        if (version != null && !version.equals("auto") && !JAVA_VERSIONS.contains(version)) {
+            failure(player, text("Version de Java inconnue : " + args[2] + ". Choisis parmi "
+                    + String.join(", ", JAVA_VERSIONS) + " ou auto."));
+            return;
+        }
+        boolean start = args.length == 4 && "start".equalsIgnoreCase(args[3]);
+        withServer(player, args[1], t -> {
+            String ref = t.ref();
+            if (!t.can("FILES")) {
+                failure(player, text("Seuls le propriétaire et les techniciens peuvent changer la version de Java."));
+                return;
+            }
+            if (version == null) {
+                afterApi(player, apiClient.getServerStats(t.id()), ref, s -> {
+                    int current = s.path("java").asInt(0);
+                    notice(player, text("").append(serverName(ref)).append(text(" utilise Java " + current
+                            + (s.path("javaAuto").asBoolean(true) ? " (automatique)." : " (choisi)."))));
+                    player.sendMessage(javaButtons(ref, current, 0, false));
+                });
+                return;
+            }
+            pending(player, text("Passage de ").append(Component.text(ref, NamedTextColor.WHITE))
+                    .append(text(" à Java " + version + "… (le premier usage d'une version la télécharge sur la machine)")));
+            afterApi(player, apiClient.setJava(t.id(), t.playerId(), version, start), ref, r -> {
+                int java = r.path("java").asInt();
+                String status = r.path("status").asText("");
+                if (r.path("needsStart").asBoolean(false)) {
+                    // Rangé au central : la version servira à ce démarrage
+                    pending(player, text("Java " + java + " enregistré, démarrage de " + ref + "…"));
+                    afterApi(player, apiClient.serverAction(t.id(), "start", t.playerId()), ref, x -> {
+                        success(player, text("").append(serverName(ref)).append(text(" est en ligne avec Java " + java + " !")));
+                        player.sendMessage(buttons(joinButton(ref), infoButton(ref)));
+                    });
+                    return;
+                }
+                switch (status) {
+                    case "STARTED" -> {
+                        success(player, text("").append(serverName(ref)).append(text(" est en ligne avec Java " + java + " !")));
+                        player.sendMessage(buttons(joinButton(ref), infoButton(ref)));
+                    }
+                    case "SAVED" -> success(player, text("Java " + java + " sera utilisé au prochain démarrage de ")
+                            .append(serverName(ref)).append(text(".")));
+                    default -> {
+                        success(player, text("").append(serverName(ref)).append(text(" utilisera Java " + java
+                                + (r.path("auto").asBoolean(false) ? " (automatique)." : "."))));
+                        player.sendMessage(buttons(startButton(ref)));
+                    }
+                }
+            });
+        });
+    }
+
+    /** Problème de version de Java : explication et un bouton par version */
+    private void showJavaIssue(Player player, JsonNode body, String ref) {
+        JsonNode issue = body.path("javaIssue");
+        String server = ref != null ? ref : issue.path("server").asText("?");
+        failure(player, text(body.path("error").asText("Problème de version de Java.")));
+        player.sendMessage(Component.text("   Choisis la version de Java de " + server + " (le serveur redémarre avec) :",
+                NamedTextColor.GRAY));
+        player.sendMessage(javaButtons(server, issue.path("current").asInt(0), issue.path("suggested").asInt(0), true));
+    }
+
+    private static Component javaButtons(String ref, int current, int suggested, boolean start) {
+        List<Component> list = new ArrayList<>();
+        for (String v : JAVA_VERSIONS) {
+            int n = Integer.parseInt(v);
+            String label = "Java " + v + (n == suggested ? " ★" : "") + (n == current ? " (actuel)" : "");
+            NamedTextColor color = n == suggested ? NamedTextColor.GREEN : n == current ? NamedTextColor.DARK_GRAY : NamedTextColor.AQUA;
+            list.add(button(label, color, "/mcs java " + ref + " " + v + (start ? " start" : ""),
+                    n == suggested ? "Conseillé d'après le journal du serveur" : "Utiliser Java " + v));
+        }
+        list.add(button("Auto", NamedTextColor.GRAY, "/mcs java " + ref + " auto" + (start ? " start" : ""),
+                "Selon la version de Minecraft"));
+        return buttons(list.toArray(new Component[0]));
     }
 
     // ============================================================ info ====
@@ -2112,7 +2214,11 @@ public class McsCommand implements SimpleCommand {
         player.sendMessage(header(name));
         Component line = Component.text(" ").append(state(status, s.path("health").asText("unknown")))
                 .append(Component.text("  ·  " + capitalize(s.path("serverType").asText("?")) + " "
-                        + s.path("minecraftVersion").asText(""), NamedTextColor.GRAY));
+                        + s.path("minecraftVersion").asText("")
+                        + (s.has("java") ? "  ·  Java " + s.path("java").asInt()
+                                + (s.path("javaAuto").asBoolean(true) ? "" : " (choisi)") : ""), NamedTextColor.GRAY)
+                        .hoverEvent(HoverEvent.showText(Component.text("Changer de version de Java : /mcs java " + name)))
+                        .clickEvent(ClickEvent.suggestCommand("/mcs java " + name + " ")));
         String up = running && s.hasNonNull("lastStartedAt") ? uptime(s.get("lastStartedAt").asText()) : null;
         if (up != null) {
             line = line.append(Component.text("  ·  depuis " + up, NamedTextColor.GRAY));
