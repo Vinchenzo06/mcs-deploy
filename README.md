@@ -274,6 +274,11 @@ Mise en place, une fois :
   reconnue dans son journal), il est arrêté et le joueur reçoit un bouton par version, la
   version conseillée marquée ★. Vanilla n'est plus proposé à la création (pas de vrais
   comptes derrière le proxy) : Paper, Spigot, Fabric, Forge, NeoForge.
+- **Toutes les versions de client au lobby (lot 35)** : ViaVersion, ViaBackwards et ViaRewind
+  sont installés sur le lobby et mis à jour à chaque `mcs-deploy` (Modrinth, sinon GitHub).
+  Un client 1.7 à la plus récente entre au lobby ; pour rejoindre un serveur d'une autre
+  version que la sienne, ce serveur doit avoir ViaVersion (ou le proxy, lot 36).
+  `LOBBY_VIA=false` dans mcs.env les retire.
 - **Rangement (lot 33)** : à chaque arrêt, quelle qu'en soit la cause, le serveur est rangé au
   central (sauvegarde cachée au propriétaire, 2 min après l'arrêt). La copie sur sa machine
   n'est qu'un cache, utilisé seulement s'il est à jour : au démarrage, le serveur démarre sur

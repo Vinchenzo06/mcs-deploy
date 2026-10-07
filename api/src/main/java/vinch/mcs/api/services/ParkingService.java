@@ -187,7 +187,8 @@ public class ParkingService {
 
     /** Range un serveur arrêté (synchrone) ; true si c'est fait */
     public boolean park(long serverId) {
-        Long nodeId = tx().execute(x -> serverRepository.findById(serverId).map(s -> s.getNode().getId()).orElse(null));
+        Long nodeId = tx().execute(x -> serverRepository.findById(serverId)
+                .map(s -> s.getNode() == null ? null : s.getNode().getId()).orElse(null));
         if (nodeId == null || !backupService.tryLock(serverId, nodeId)) {
             return false;
         }

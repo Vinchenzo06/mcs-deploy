@@ -148,6 +148,39 @@ install_luckperms() {
   fi
 }
 
+# Télécharge ou met à jour un plugin Paper depuis Modrinth (repli : dernière
+# release GitHub). Le jar n'est remplacé que si une nouvelle version existe.
+install_plugin() {
+  local slug=$1 dir=$2 prefix=$3 repo=${4:-} url="" name
+  url=$(curl -fsSL -G -A "$USER_AGENT" "https://api.modrinth.com/v2/project/$slug/version" \
+          --data-urlencode 'loaders=["paper"]' 2>/dev/null \
+        | jq -r '[.[] | select(.version_type == "release")][0] // empty
+                 | (.files | (map(select(.primary))[0] // .[0])).url // empty' 2>/dev/null || true)
+  if [[ -z "$url" && -n "$repo" ]]; then
+    url=$(curl -fsSL -A "$USER_AGENT" "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null \
+          | jq -r --arg p "$prefix" '[.assets[] | select((.name | startswith($p)) and (.name | endswith(".jar")))][0].browser_download_url // empty' \
+            2>/dev/null || true)
+  fi
+  if [[ -z "$url" ]]; then
+    if compgen -G "$dir/$prefix-*.jar" >/dev/null; then
+      warn "$prefix : pas de mise à jour possible pour l'instant, version actuelle gardée"
+    else
+      warn "$prefix non téléchargé (Modrinth et GitHub injoignables) : relance sudo mcs-deploy lobby plus tard"
+    fi
+    return 0
+  fi
+  name=$(basename "${url%%\?*}")
+  [[ -f "$dir/$name" ]] && return 0
+  if download "$url" "$dir/$name.new"; then
+    rm -f "$dir/$prefix"-*.jar
+    mv -f "$dir/$name.new" "$dir/$name"
+    ok "$prefix : $name"
+  else
+    rm -f "$dir/$name.new"
+    warn "$prefix : téléchargement échoué, version actuelle gardée"
+  fi
+}
+
 restart_service() {
   systemctl daemon-reload
   systemctl enable "$1" >/dev/null 2>&1
@@ -246,7 +279,7 @@ load_config() {
   fi
 
   : "${TIMEZONE:=America/Toronto}" "${USER_AGENT:=mcs-deploy/0.3 (+https://github.com/Vinchenzo06/mcs-deploy)}"
-  : "${PAPER_VERSION:=26.1.2}" "${VELOCITY_VERSION:=4.2.1-SNAPSHOT}" "${FORCE_UPDATE:=false}"
+  : "${PAPER_VERSION:=26.1.2}" "${VELOCITY_VERSION:=4.2.1-SNAPSHOT}" "${FORCE_UPDATE:=false}" "${LOBBY_VIA:=true}"
   : "${API_XMX:=384M}" "${VELOCITY_XMX:=512M}" "${LOBBY_XMX:=512M}"
   : "${PORT_START:=25600}" "${PORT_END:=29999}" "${NODE_PORTS:=20}"
   : "${ENABLE_SSH_TUNNEL:=true}" "${SSH_TUNNEL_PORT:=2222}" "${WG_PORT:=51820}"
@@ -1432,7 +1465,7 @@ EOF
 }
 
 step_lobby() {
-  step "Lobby Paper + MCSLobbyPlugin + LuckPerms"
+  step "Lobby Paper + MCSLobbyPlugin + LuckPerms + ViaVersion"
   build_jar "$SRC_LOBBY" "$JARS_DIR/lobby/mcs-lobby-plugin.jar"
   need_java
 
@@ -1452,6 +1485,16 @@ step_lobby() {
   shopt -u nullglob
   install_luckperms bukkit "$LOBBY_DIR/plugins" LUCKPERMS_BUKKIT_URL
   [[ -f "$LP_ENV_FILE" ]] || write_lp_env
+
+  # Toutes les versions de client acceptées au lobby (1.8.9 PvP, vieux modpacks...) :
+  # ViaVersion (clients plus récents), ViaBackwards (plus anciens), ViaRewind (1.7–1.8)
+  if [[ "$LOBBY_VIA" == "true" ]]; then
+    install_plugin viaversion "$LOBBY_DIR/plugins" ViaVersion ViaVersion/ViaVersion
+    install_plugin viabackwards "$LOBBY_DIR/plugins" ViaBackwards ViaVersion/ViaBackwards
+    install_plugin viarewind "$LOBBY_DIR/plugins" ViaRewind ViaVersion/ViaRewind
+  else
+    rm -f "$LOBBY_DIR"/plugins/ViaVersion-*.jar "$LOBBY_DIR"/plugins/ViaBackwards-*.jar "$LOBBY_DIR"/plugins/ViaRewind-*.jar
+  fi
 
   # Passage de LuckPerms du fichier local (H2) à la base partagée : on exporte
   # une seule fois les groupes et joueurs actuels, réimportés après redémarrage
