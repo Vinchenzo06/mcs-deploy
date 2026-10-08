@@ -1006,10 +1006,18 @@ public class ServerService {
                 team = teamName(ranked ? 5 : 9, ranked ? p.getNetworkRank() : "default");
                 prefix = safeTextComponent(p.getNetworkPrefix());
             }
-            commands.add("team add " + team);
-            commands.add("team modify " + team + " color " + teamColor(p.getNameColor()));
-            commands.add("team modify " + team + " prefix " + prefix);
-            commands.add("team join " + team + " " + name);
+            if (legacyTeams(s)) {
+                // 1.8–1.12 : pas de commande /team ni de préfixe par commande ; seule la
+                // couleur du nom passe (scoreboard teams)
+                commands.add("scoreboard teams add " + team);
+                commands.add("scoreboard teams option " + team + " color " + teamColor(p.getNameColor()));
+                commands.add("scoreboard teams join " + team + " " + name);
+            } else {
+                commands.add("team add " + team);
+                commands.add("team modify " + team + " color " + teamColor(p.getNameColor()));
+                commands.add("team modify " + team + " prefix " + prefix);
+                commands.add("team join " + team + " " + name);
+            }
         }
         if (commands.isEmpty()) {
             return;
@@ -1033,6 +1041,12 @@ public class ServerService {
      * Équipe vanilla d'un titre : "mcs_1admin", "mcs_2owner", "mcs_5host", "mcs_5vip", "mcs_9default".
      * Le chiffre ordonne le Tab (trié par nom d'équipe) : admins, owner, rangs, autres.
      */
+    /** Minecraft avant 1.13 : équipes par « scoreboard teams » (pas de /team) */
+    static boolean legacyTeams(Server s) {
+        int[] v = JavaVersions.parse(s.getMinecraftVersion());
+        return v != null && v[0] == 1 && v[1] < 13;
+    }
+
     static String teamName(int order, String rank) {
         String r = rank == null ? "" : rank.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_]", "");
         if (r.isEmpty()) {
@@ -1114,10 +1128,11 @@ public class ServerService {
             teams.add(teamName(1, rank));
             teams.add(teamName(5, rank));
         }
+        boolean legacy = legacyTeams(server);
         CompletableFuture.runAsync(() -> {
             for (String t : teams) {
                 try {
-                    sendConsole(nodeId, id, "team remove " + t);
+                    sendConsole(nodeId, id, (legacy ? "scoreboard teams remove " : "team remove ") + t);
                 } catch (Exception e) {
                     log.debug("team remove {} : {}", t, e.getMessage());
                 }
