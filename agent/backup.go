@@ -19,8 +19,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -70,6 +72,9 @@ type backupResult struct {
 	RepoMB  int64     `json:"repo_mb"`
 	DataMB  int64     `json:"data_mb,omitempty"`
 	QuotaMB int64     `json:"quota_mb,omitempty"`
+	// Instantané créé mais incomplet (restic code 3 : fichiers disparus ou illisibles
+	// pendant la copie, ex. serveur supprimé ou monde qui change)
+	Warning string `json:"warning,omitempty"`
 }
 
 var snapshotIDPattern = regexp.MustCompile(`^[0-9a-f]{8,64}$`)
@@ -224,7 +229,7 @@ func runRestic(ctx context.Context, env []string, args ...string) ([]byte, error
 		if len(msg) > 400 {
 			msg = msg[len(msg)-400:]
 		}
-		return out, fmt.Errorf("restic %s : %v : %s", args[0], err, msg)
+		return out, fmt.Errorf("restic %s : %w : %s", args[0], err, msg)
 	}
 	return out, nil
 }
@@ -327,6 +332,11 @@ func BackupServer(dataPath string, req backupRequest) (backupResult, error) {
 		if err := ensureBackupRoute(req.Repository); err != nil {
 			return backupResult{}, err
 		}
+		// Échec rapide si le serveur de sauvegarde ne répond pas (sinon restic
+		// réessaie en silence pendant de longues minutes)
+		if err := backupServerReachable(req.Repository); err != nil {
+			return backupResult{}, err
+		}
 		if err := ensureRepo(ctx, env); err != nil {
 			return backupResult{}, err
 		}
@@ -356,13 +366,22 @@ func BackupServer(dataPath string, req backupRequest) (backupResult, error) {
 	args = append(args, dir)
 	start := time.Now()
 	out, err := runRestic(ctx, env, args...)
+	warning := ""
 	if err != nil {
-		return backupResult{}, err
+		// Code 3 : instantané créé, mais des fichiers n'ont pas pu être lus
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 3 {
+			warning = "incomplète : des fichiers ont changé ou disparu pendant la copie"
+			log.Printf("Sauvegarde du serveur %d : %v", req.ServerID, err)
+		} else {
+			return backupResult{}, err
+		}
 	}
 	sum, err := parseBackupSummary(out)
 	if err != nil {
 		return backupResult{}, err
 	}
+	res.Warning = warning
 	res.SnapshotID, res.DataAdded, res.TotalBytes, res.Files, res.Seconds =
 		sum.SnapshotID, sum.DataAdded, sum.TotalBytes, sum.Files, sum.Seconds
 	if res.Seconds == 0 {
@@ -395,6 +414,24 @@ func ensureBackupRoute(repository string) error {
 	if err != nil {
 		return fmt.Errorf("route vers le VPS par %s impossible : %s", egressIface, strings.TrimSpace(string(out)))
 	}
+	return nil
+}
+
+// backupServerReachable : une requête HTTP au serveur de sauvegarde, 10 s maximum.
+// Toute réponse (même 401) prouve que le chemin fonctionne.
+func backupServerReachable(repository string) error {
+	u, err := url.Parse(strings.TrimPrefix(repository, "rest:"))
+	if err != nil {
+		return fmt.Errorf("dépôt invalide")
+	}
+	u.User = nil
+	u.Path = "/"
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(u.String())
+	if err != nil {
+		return fmt.Errorf("serveur de sauvegarde injoignable (%s) : réessaie plus tard", u.Host)
+	}
+	resp.Body.Close()
 	return nil
 }
 

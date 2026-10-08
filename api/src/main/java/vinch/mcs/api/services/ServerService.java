@@ -682,6 +682,7 @@ public class ServerService {
         // Trouver le serveur par owner + name
         Server server = serverRepository.findByOwnerIdAndName(requestedByPlayerId, name)
                 .orElseThrow(() -> new RuntimeException("Serveur '" + name + "' introuvable"));
+        requireNotBusy(server.getId());
 
         deleteServer(server.getId(), deleteData);
     }
@@ -917,10 +918,19 @@ public class ServerService {
     }
 
     /** Suppression demandée par un joueur (propriétaire ou admin) */
+    /** Supprimer pendant une sauvegarde casse la sauvegarde (fichiers qui disparaissent) */
+    private void requireNotBusy(Long serverId) {
+        if (backupService.isBusy(serverId)) {
+            throw new RuntimeException("Une sauvegarde, restauration ou un déplacement de ce serveur est en cours : "
+                    + "réessaie dans quelques minutes.");
+        }
+    }
+
     public void deleteServerFor(Long serverId, Long requestedByPlayerId) throws Exception {
         Server server = serverRepository.findById(serverId)
                 .orElseThrow(() -> new RuntimeException("Serveur introuvable"));
         accessService.require(accessService.player(requestedByPlayerId), server, AccessService.Right.DELETE);
+        requireNotBusy(serverId);
         deleteServer(serverId, true);
     }
 

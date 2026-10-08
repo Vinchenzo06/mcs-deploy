@@ -1336,7 +1336,8 @@ public class McsCommand implements SimpleCommand {
     private void runBackup(Player player, Target t, boolean permanent) {
         pending(player, text((permanent ? "Sauvegarde permanente de " : "Sauvegarde de "))
                 .append(Component.text(t.ref(), NamedTextColor.WHITE))
-                .append(text("… (le monde est figé quelques secondes)")));
+                .append(text("… (le monde est figé quelques secondes ; la première sauvegarde d'un serveur "
+                        + "peut prendre plusieurs minutes)")));
         afterApi(player, apiClient.backupNow(t.id(), t.playerId(), permanent), t.ref(), r -> {
             String status = r.path("status").asText("");
             if ("SUCCESS".equals(status)) {

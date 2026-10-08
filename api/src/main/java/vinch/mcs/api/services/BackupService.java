@@ -1169,6 +1169,9 @@ public class BackupService {
                             + r.path("repo_mb").asLong() + " Mo de sauvegardes, quota " + r.path("quota_mb").asLong() + " Mo)";
                 } else {
                     status = "SUCCESS";
+                    if (r.hasNonNull("warning")) {
+                        message = "Sauvegarde " + r.path("warning").asText();
+                    }
                     snapshot = r.path("snapshot_id").asText(null);
                     addedMb = (int) (r.path("data_added").asLong(0) / (1024 * 1024));
                     totalMb = (int) (r.path("total_bytes").asLong(0) / (1024 * 1024));
