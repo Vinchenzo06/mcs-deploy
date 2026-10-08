@@ -746,6 +746,14 @@ public class McsCommand implements SimpleCommand {
             String status = t.server().path("status").asText("?");
             switch (status) {
                 case "RUNNING" -> {
+                    // Version du client différente de celle du serveur : prévenir (le serveur
+                    // peut avoir ViaVersion, donc on tente quand même)
+                    String mc = t.server().path("minecraftVersion").asText("");
+                    if (versionMismatch(player, mc)) {
+                        notice(player, text("⚠ ").append(serverName(ref)).append(text(" est en " + mc
+                                + ", ton client en " + player.getProtocolVersion().getMostRecentSupportedVersion()
+                                + " : sans ViaVersion sur ce serveur, connecte-toi avec un client " + mc + ".")));
+                    }
                     pending(player, text("Connexion à ").append(Component.text(ref, NamedTextColor.WHITE)).append(text("…")));
                     sendToServer(player, t.server().path("velocityName").asText());
                 }
@@ -812,6 +820,19 @@ public class McsCommand implements SimpleCommand {
                 }
             });
         });
+    }
+
+    /** Version du serveur connue (ex. 1.8.8) et absente des versions du protocole du client */
+    private static boolean versionMismatch(Player player, String serverVersion) {
+        if (serverVersion == null || !serverVersion.matches("\\d+\\.\\d+(\\.\\d+)?")) {
+            return false; // LATEST, instantanés : inconnu
+        }
+        try {
+            List<String> client = player.getProtocolVersion().getVersionsSupportedBy();
+            return client != null && !client.isEmpty() && !client.contains(serverVersion);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     // ============================================================ java ====

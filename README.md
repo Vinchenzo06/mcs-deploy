@@ -274,6 +274,17 @@ Mise en place, une fois :
   reconnue dans son journal), il est arrêté et le joueur reçoit un bouton par version, la
   version conseillée marquée ★. Vanilla n'est plus proposé à la création (pas de vrais
   comptes derrière le proxy) : Paper, Spigot, Fabric, Forge, NeoForge.
+- **Forwarding serveur par serveur (lot 36)** : Velocity est en `player-info-forwarding-mode =
+  "none"` et proxymanager applique le mode de chaque serveur (donné par l'API) : legacy pour
+  Paper/Spigot (toutes versions) et Forge 1.7–1.12 ; modern (secret Velocity) pour Fabric
+  1.16.5+, Forge 1.13+ et NeoForge. L'agent fait installer le mod nécessaire par l'image itzg
+  (Modrinth : FabricProxy-Lite, Proxy-Compatible-Forge + MixinBooter/UniMixins/ModernMixins/
+  MixinBootstrap selon la version) et réécrit sa config à chaque démarrage. Un serveur moddé
+  créé avant le lot 36 est recréé (fichiers intacts) à son prochain démarrage. Ambassador est
+  installé sur Velocity (changement de serveur des clients Forge 1.13–1.20.1). Fabric avant
+  1.16.5 : sans forwarding (comptes « offline »). `/mcs join` prévient quand la version du
+  client diffère de celle du serveur (rien n'est installé pour traduire : au propriétaire
+  d'ajouter ViaVersion s'il le souhaite).
 - **Garde-fous des serveurs (lot 35c)** : après « Done », l'agent vérifie que le serveur répond
   vraiment (ping Minecraft). Toutes les 20 s, il arrête un serveur dont le journal explose
   (plus de 30 Mo en 20 s, ou plus de 2 Go : erreurs en boucle ; seul le dernier Mo est gardé)

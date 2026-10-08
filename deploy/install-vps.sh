@@ -151,9 +151,9 @@ install_luckperms() {
 # Télécharge ou met à jour un plugin Paper depuis Modrinth (repli : dernière
 # release GitHub). Le jar n'est remplacé que si une nouvelle version existe.
 install_plugin() {
-  local slug=$1 dir=$2 prefix=$3 repo=${4:-} url="" name
+  local slug=$1 dir=$2 prefix=$3 repo=${4:-} loader=${5:-paper} url="" name
   url=$(curl -fsSL -G -A "$USER_AGENT" "https://api.modrinth.com/v2/project/$slug/version" \
-          --data-urlencode 'loaders=["paper"]' 2>/dev/null \
+          --data-urlencode "loaders=[\"$loader\"]" 2>/dev/null \
         | jq -r '[.[] | select(.version_type == "release")][0] // empty
                  | (.files | (map(select(.primary))[0] // .[0])).url // empty' 2>/dev/null || true)
   if [[ -z "$url" && -n "$repo" ]]; then
@@ -1250,6 +1250,7 @@ step_api() {
 DB_PASSWORD=$DB_PASSWORD
 LOBBY_API_KEY=$LOBBY_API_KEY
 VELOCITY_PLUGIN_KEY=$VELOCITY_PLUGIN_KEY
+VELOCITY_FORWARDING_SECRET=$FORWARDING_SECRET
 MCS_PORTS_START=$PORT_START
 MCS_PORTS_END=$PORT_END
 MCS_PORTS_PER_NODE=$NODE_PORTS
@@ -1363,6 +1364,8 @@ step_velocity() {
   rm -f "$VELOCITY_DIR"/plugins/proxymanager*.jar
   cp -f "${jars[@]}" "$VELOCITY_DIR/plugins/"
   install_luckperms velocity "$VELOCITY_DIR/plugins" LUCKPERMS_VELOCITY_URL
+  # Ambassador : changement de serveur pour les clients Forge 1.13–1.20.1 (lot 36)
+  install_plugin ambassador "$VELOCITY_DIR/plugins" Ambassador adde0109/Ambassador velocity
   [[ -f "$LP_ENV_FILE" ]] || write_lp_env
 
   echo -n "$FORWARDING_SECRET" > "$VELOCITY_DIR/forwarding.secret"
@@ -1376,7 +1379,9 @@ show-max-players = 500
 online-mode = true
 force-key-authentication = true
 prevent-client-proxy-connections = false
-player-info-forwarding-mode = "legacy"
+# "none" : proxymanager choisit le mode de chaque serveur (lot 36) : legacy pour
+# Paper/Spigot et vieux Forge, modern pour Fabric et Forge/NeoForge récents
+player-info-forwarding-mode = "none"
 forwarding-secret-file = "forwarding.secret"
 announce-forge = false
 kick-existing-players = false

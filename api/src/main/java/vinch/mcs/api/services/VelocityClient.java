@@ -2,7 +2,10 @@ package vinch.mcs.api.services;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
+import vinch.mcs.api.repositories.ServerRepository;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
@@ -21,6 +24,10 @@ public class VelocityClient {
             .build();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    @Autowired
+    @Lazy
+    private ServerRepository serverRepository;
+
     @Value("${mcs.velocity.url:http://127.0.0.1:8082}")
     private String velocityUrl;
 
@@ -31,9 +38,12 @@ public class VelocityClient {
      * Enregistre un nouveau serveur dans Velocity
      */
     public void registerServer(String name, String host, int port) throws Exception {
+        // Mode de forwarding de ce serveur (lot 36) : legacy par défaut
+        String forwarding = serverRepository.findByVelocityName(name).map(ProxyForwarding::modeFor).orElse("legacy");
         String body = objectMapper.writeValueAsString(Map.of(
                 "name", name,
-                "address", host + ":" + port
+                "address", host + ":" + port,
+                "forwarding", forwarding
         ));
 
         HttpRequest request = HttpRequest.newBuilder()

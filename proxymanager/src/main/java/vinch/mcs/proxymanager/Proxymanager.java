@@ -7,6 +7,7 @@ import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
+import com.velocitypowered.api.event.player.ServerLoginPluginMessageEvent;
 import com.velocitypowered.api.event.player.ServerPostConnectEvent;
 import com.velocitypowered.api.event.player.ServerPreConnectEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
@@ -48,6 +49,8 @@ public class Proxymanager {
     // (KickPlayer) ou de les déplacer (ConnectOther).
     public static final MinecraftChannelIdentifier MCS_CONNECT = MinecraftChannelIdentifier.create("mcs", "connect");
     private static final String LOBBY_SERVER = "lobby";
+    private static final String PLAYER_INFO_CHANNEL = "velocity:player_info";
+    private volatile IpMasker ipMasker;
 
     private PluginConfig config;
     private ApiClient apiClient;
@@ -63,6 +66,25 @@ public class Proxymanager {
         this.server = server;
         this.logger = logger;
         this.dataDirectory = dataDirectory;
+    }
+
+    /**
+     * Forwarding modern d'un serveur (Fabric, Forge récents) : Velocity étant en mode
+     * "none", c'est ici qu'on répond à sa demande d'infos du joueur (lot 36).
+     */
+    @Subscribe
+    public void onServerLoginPluginMessage(ServerLoginPluginMessageEvent event) {
+        if (ipMasker == null || !PLAYER_INFO_CHANNEL.equals(event.getIdentifier().getId())) {
+            return;
+        }
+        try {
+            byte[] data = ipMasker.modernForwardingData(event.getConnection(), event.getContents());
+            if (data != null) {
+                event.setResult(ServerLoginPluginMessageEvent.ResponseResult.reply(data));
+            }
+        } catch (Exception e) {
+            logger.error("Forwarding modern vers {} impossible", event.getConnection().getServerInfo().getName(), e);
+        }
     }
 
     @Subscribe
@@ -87,19 +109,20 @@ public class Proxymanager {
             return;
         }
 
-        // Masquage des IP des joueurs, avant tout enregistrement de serveur joueur
-        if (config.isMaskPlayerIps()) {
-            if (config.getIpMaskKey() == null || config.getIpMaskKey().length() < 16) {
-                logger.error("ip-mask-key absente ou trop courte : serveurs joueurs désactivés (relance le déploiement)");
-            } else {
-                playerServersAllowed = new IpMasker(logger, config.getIpMaskKey()).install(server);
-                if (!playerServersAllowed) {
-                    logger.error("Masquage des IP impossible : les serveurs joueurs ne seront PAS enregistrés");
-                }
-            }
+        // Masquage des IP et forwarding serveur par serveur (lot 36), avant tout
+        // enregistrement de serveur joueur
+        if (config.isMaskPlayerIps()
+                && (config.getIpMaskKey() == null || config.getIpMaskKey().length() < 16)) {
+            logger.error("ip-mask-key absente ou trop courte : serveurs joueurs désactivés (relance le déploiement)");
         } else {
-            logger.warn("ATTENTION : mask-player-ips=false, l'IP réelle des joueurs est envoyée aux serveurs");
-            playerServersAllowed = true;
+            if (!config.isMaskPlayerIps()) {
+                logger.warn("ATTENTION : mask-player-ips=false, l'IP réelle des joueurs est envoyée aux serveurs");
+            }
+            ipMasker = new IpMasker(logger, config.isMaskPlayerIps() ? config.getIpMaskKey() : null);
+            playerServersAllowed = ipMasker.install(server);
+            if (!playerServersAllowed) {
+                logger.error("Masquage des IP / forwarding impossible : les serveurs joueurs ne seront PAS enregistrés");
+            }
         }
 
         server.getChannelRegistrar().register(MCS_CONNECT);
@@ -143,6 +166,7 @@ public class Proxymanager {
                 String velocityName = serverNode.get("velocityName").asText();
                 String host = serverNode.get("host").asText();
                 int port = serverNode.get("port").asInt();
+                IpMasker.setMode(velocityName, serverNode.path("forwarding").asText("legacy"));
 
                 try {
                     InetSocketAddress address = new InetSocketAddress(host, port);

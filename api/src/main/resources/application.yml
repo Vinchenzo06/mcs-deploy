@@ -44,6 +44,8 @@ mcs:
   velocity:
     url: http://127.0.0.1:8082
     plugin-key: ${VELOCITY_PLUGIN_KEY}
+    # Secret du forwarding "modern" de Velocity (Fabric, Forge récents) : lot 36
+    forwarding-secret: ${VELOCITY_FORWARDING_SECRET:}
   backup:
     # Activé par "sudo mcs-add-backup" sur le VPS (MCS_BACKUP_ENABLED dans api.env)
     enabled: ${MCS_BACKUP_ENABLED:false}

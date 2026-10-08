@@ -82,6 +82,7 @@ public class ServerService {
         data.put("owner_name", p.ownerName());
         int java = JavaVersions.effective(server);
         data.put("java", java);
+        ProxyForwarding.apply(data, server);
         if (restore != null) {
             data.put("restore", restore);
         }
@@ -583,6 +584,7 @@ public class ServerService {
         data.put("storage_mb", storageMb);
         data.put("owner_name", server.getOwner().getMinecraftUsername());
         data.put("java", JavaVersions.effective(server));
+        ProxyForwarding.apply(data, server);
         if (restore != null) {
             data.put("restore", restore);
         }
@@ -704,8 +706,12 @@ public class ServerService {
 
         log.info("Démarrage du serveur {} (name={})", serverId, server.getName());
 
-        Map<String, Object> data = new HashMap<>();
-        data.put("server_id", server.getId());
+        // Données complètes : l'agent vérifie la config du forwarding (et recrée le
+        // conteneur si les mods de forwarding manquent, lot 36)
+        Map<String, Object> data = tx().execute(st -> {
+            Server s = serverRepository.findById(serverId).orElseThrow();
+            return createData(s, s.getTunnelPort(), s.getAllocatedStorageMb() == null ? 0 : s.getAllocatedStorageMb(), null);
+        });
 
         server.setStatus(ServerStatus.STARTING);
         serverRepository.save(server);
@@ -1213,6 +1219,7 @@ public class ServerService {
                     m.put("velocityName", s.getVelocityName());
                     m.put("host", "127.0.0.1");
                     m.put("port", s.getTunnelPort());
+                    m.put("forwarding", ProxyForwarding.modeFor(s));
                     return m;
                 })
                 .toList();

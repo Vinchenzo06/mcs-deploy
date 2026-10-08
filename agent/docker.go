@@ -24,6 +24,9 @@ type CreateServerRequest struct {
 	OwnerName string `json:"owner_name"` // Pour la séparation logique
 	// Version de Java (image itzg javaN) ; 0 = la plus récente (API d'avant le lot 35)
 	Java int `json:"java"`
+	// Forwarding du proxy (lot 36) : "legacy", "modern" ou "none" ; secret pour les mods
+	Forwarding       string `json:"forwarding"`
+	ForwardingSecret string `json:"forwarding_secret"`
 	// Serveur recréé à partir d'une sauvegarde (serveur supprimé, lot 31)
 	Restore *restoreRequest `json:"restore,omitempty"`
 }
@@ -88,6 +91,7 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 		}
 	}
 
+	ensureForwardingConfig(serverPath, req)
 	args := runArgs(serverPath, req, "run", "-d")
 	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
@@ -119,6 +123,7 @@ func runArgs(serverPath string, req CreateServerRequest, verb ...string) []strin
 		"--cpus", fmt.Sprintf("%d", req.CpuCores),
 	)
 	args = append(args, hardeningArgs(req.RamMb)...)
+	args = append(args, forwardingArgs(req)...)
 	args = append(args,
 		"--label", "mcs.managed=true",
 		"--label", fmt.Sprintf("mcs.server_id=%d", req.ServerID),
@@ -207,6 +212,7 @@ func RecreateServer(dataPath string, req CreateServerRequest, start bool) error 
 		return err
 	}
 	name := containerName(req.ServerID)
+	ensureForwardingConfig(serverPath, req)
 	_ = exec.Command("docker", "stop", "-t", "30", name).Run()
 	if out, err := exec.Command("docker", "rm", name).CombinedOutput(); err != nil &&
 		!strings.Contains(string(out), "No such container") {

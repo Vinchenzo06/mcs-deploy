@@ -116,6 +116,25 @@ func handleStartServer(conn *websocket.Conn, config *Config, commandId string, m
 		log.Printf("server.properties du serveur %d : %v", serverID, err)
 	}
 
+	// API du lot 36 : données complètes du serveur (forwarding des serveurs moddés)
+	if data, ok := msg["data"].(map[string]interface{}); ok && data["type"] != nil {
+		raw, _ := json.Marshal(data)
+		var req CreateServerRequest
+		if err := json.Unmarshal(raw, &req); err == nil && req.ServerID == serverID {
+			if needsForwardingMods(req) && containerForwarding(serverID) != req.Forwarding {
+				// Conteneur créé sans les mods de forwarding : recréé avec (fichiers intacts)
+				log.Printf("Serveur %d : conteneur recréé pour le forwarding %s", serverID, req.Forwarding)
+				if err := RecreateServer(config.Docker.DataPath, req, true); err != nil {
+					sendCommandFailure(conn, commandId, "start_failed", err)
+					return
+				}
+				sendCommandResult(conn, commandId, map[string]interface{}{"server_id": serverID, "status": "started"})
+				return
+			}
+			ensureForwardingConfig(serverDataPath(config.Docker.DataPath, serverID), req)
+		}
+	}
+
 	if err := StartServer(serverID); err != nil {
 		sendCommandFailure(conn, commandId, "start_failed", err)
 		return

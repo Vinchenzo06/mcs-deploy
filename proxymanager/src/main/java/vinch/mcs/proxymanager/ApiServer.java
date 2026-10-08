@@ -127,6 +127,8 @@ public class ApiServer {
 
         String name = json.get("name").asText();
         String address = json.get("address").asText();
+        // Mode de forwarding de ce serveur (lot 36), aussi pour un serveur déjà enregistré
+        IpMasker.setMode(name, json.path("forwarding").asText("legacy"));
 
         // Vérifier si déjà existant
         if (proxyServer.getServer(name).isPresent()) {
@@ -166,6 +168,7 @@ public class ApiServer {
         }
 
         proxyServer.unregisterServer(server.get().getServerInfo());
+        IpMasker.removeMode(name);
         logger.info("Serveur retiré de Velocity : {}", name);
 
         sendResponse(exchange, 200, "{\"success\":true}");
