@@ -19,7 +19,7 @@ Aucun secret n'est dans le dépôt : ils sont générés sur le VPS (`/etc/mcs/s
 ## 1. Installer un VPS (Termius, sur le VPS)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/bootstrap.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/bootstrap.sh -o bootstrap.sh && sudo bash bootstrap.sh
 sudo mcs-deploy
 ```
 
@@ -274,6 +274,18 @@ Mise en place, une fois :
   reconnue dans son journal), il est arrêté et le joueur reçoit un bouton par version, la
   version conseillée marquée ★. Vanilla n'est plus proposé à la création (pas de vrais
   comptes derrière le proxy) : Paper, Spigot, Fabric, Forge, NeoForge.
+- **Sortie Internet des serveurs (lot 37)** : sur chaque machine, par serveur : UDP limité au
+  DNS, ICMP limité, 3 Mo/s et 8 000 paquets/s maximum vers Internet, 20 nouvelles
+  connexions TCP/s et 256 connexions ouvertes ; nouvelles connexions journalisées
+  (`journalctl -k | grep MCS-OUT`). Un serveur qui tente d'envoyer plus de 6 Mo/s ou
+  15 000 paquets/s pendant une minute est arrêté ; propriétaire et admins sont prévenus.
+  Sur le VPS (`mcs-wg-guard`), en plus : le tunnel n'atteint aucun service du VPS (sauf les
+  sauvegardes 10.99.0.1:8100), UDP = DNS, 25 Mo/s et 200 nouvelles connexions/s par machine,
+  nouvelles connexions journalisées (`journalctl -k | grep MCS-WG-OUT`).
+  **Plainte d'abus** (IP du VPS, date, destination) : sur le VPS, `journalctl -k | grep
+  MCS-WG-OUT | grep <destination>` donne l'IP tunnel de la machine (10.99.0.x, voir
+  /etc/mcs/nodes) ; sur cette machine, `journalctl -k | grep MCS-OUT | grep <destination>`
+  donne l'adresse du conteneur, et `journalctl -u mcs-agent | grep "adresse <ip>"` le serveur.
 - **Forwarding serveur par serveur (lot 36)** : Velocity est en `player-info-forwarding-mode =
   "none"` et proxymanager applique le mode de chaque serveur (donné par l'API) : legacy pour
   Paper/Spigot (toutes versions) et Forge 1.7–1.12 ; modern (secret Velocity) pour Fabric

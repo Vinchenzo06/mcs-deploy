@@ -2,11 +2,11 @@
 # =============================================================================
 #  MCS - Première commande sur un VPS neuf (Ubuntu 24.04)
 #
-#    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/bootstrap.sh | sudo bash
+#    curl -fsSL https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/bootstrap.sh -o bootstrap.sh && sudo bash bootstrap.sh
 #
 #  Repo privé : ajoute un token GitHub (lecture seule) :
 #    curl -fsSL -H "Authorization: Bearer TOKEN" https://raw.githubusercontent.com/Vinchenzo06/mcs-deploy/main/deploy/bootstrap.sh \
-#      | sudo GITHUB_TOKEN=TOKEN bash
+#      -o bootstrap.sh && sudo GITHUB_TOKEN=TOKEN bash bootstrap.sh
 #
 #  Résultat : le dépôt est cloné dans /opt/mcs-deploy et la commande
 #  "mcs-deploy" est installée. Rien n'est encore installé côté Minecraft.

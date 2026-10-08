@@ -23,7 +23,7 @@ import java.util.concurrent.TimeoutException;
 /**
  * Restauration (propriétaire et admins seulement) :
  *  - d'un serveur existant : arrêt s'il tourne, données remplacées par la sauvegarde,
- *    redémarrage s'il tournait. Pas de sauvegarde de l'état actuel avant (choix de Vincent) ;
+ *    redémarrage s'il tournait. Pas de sauvegarde de l'état actuel avant (choix de l'administrateur) ;
  *  - d'un serveur supprimé (sauvegardes encore gardées au central) : le serveur est
  *    recréé sur la même machine avec ses réglages, ses données restaurées avant le
  *    premier démarrage, et ses anciennes sauvegardes lui sont rattachées.

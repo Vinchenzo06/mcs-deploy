@@ -21,4 +21,7 @@ public interface PlayerRepository extends JpaRepository<Player, Long> {
     java.util.List<String> findDistinctNetworkRanks();
 
     boolean existsByMinecraftUuid(UUID minecraftUuid);
+
+    /** Admins (avertis des abus détectés par les machines, lot 37) */
+    java.util.List<Player> findByRole(vinch.mcs.api.entities.PlayerRole role);
 }

@@ -33,12 +33,24 @@ const (
 	oldLogsMaxBytes   = 300 << 20
 	crashLoopRestarts = 3
 	crashLoopWindow   = 5 * time.Minute
+	// Abus (lot 37) : ce qu'un serveur TENTE d'envoyer vers Internet (avant les
+	// plafonds du pare-feu), soutenu pendant abuseTicks contrôles d'affilée
+	abuseBytesPerSec = 6 << 20 // 6 Mo/s : le double du plafond de débit
+	abusePktsPerSec  = 15000
+	abuseTicks       = 3 // 3 × 20 s = 1 min
 )
+
+type acctState struct {
+	ip          string
+	bytes, pkts uint64
+	strikes     int
+}
 
 type guardState struct {
 	logSize  int64
 	restarts int
 	crashes  []time.Time
+	acct     acctState
 }
 
 // watchServers : boucle de surveillance (lancée au démarrage de l'agent)
@@ -60,6 +72,7 @@ func watchServers(dataPath string, events chan<- serverEvent, stop <-chan struct
 			continue
 		}
 		seen := map[int64]bool{}
+		counters := readAccounting()
 		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 			f := strings.Fields(line)
 			if len(f) < 2 {
@@ -76,12 +89,21 @@ func watchServers(dataPath string, events chan<- serverEvent, stop <-chan struct
 				states[id] = st
 			}
 			guardServer(dataPath, id, f[1], st, events)
+			if f[1] == "running" {
+				guardEgress(id, st, counters, events)
+			} else if st.acct.ip != "" {
+				dropAccounting(st.acct.ip)
+				st.acct = acctState{}
+			}
 			if tick%30 == 0 { // toutes les 10 min
 				trimOldLogs(filepath.Join(serverDataPath(dataPath, id), "logs"))
 			}
 		}
-		for id := range states {
+		for id, st := range states {
 			if !seen[id] {
+				if st.acct.ip != "" {
+					dropAccounting(st.acct.ip)
+				}
 				delete(states, id)
 			}
 		}
@@ -147,7 +169,10 @@ func guardServer(dataPath string, id int64, state string, st *guardState, events
 // stopGuarded arrête le serveur, cherche une cause Java et prévient l'API
 func stopGuarded(id int64, kind, detail string, events chan<- serverEvent) {
 	name := containerName(id)
-	je := diagnoseJava(name)
+	var je *javaError
+	if kind != "abuse" {
+		je = diagnoseJava(name)
+	}
 	log.Printf("Serveur %d arrêté par le garde-fou (%s : %s)", id, kind, detail)
 	_ = exec.Command("docker", "stop", "-t", "15", name).Run()
 	ev := serverEvent{ServerID: id, Event: kind, Detail: detail}
@@ -266,4 +291,95 @@ func verifyResponding(name string) error {
 	// Pas de réponse sans cause connue : on laisse tourner (gros modpack lent ?)
 	log.Printf("Serveur %s : prêt mais ne répond pas encore au ping (%s)", name, last)
 	return nil
+}
+
+// ------------------------------------------------------------ sortie Internet ----
+
+type acctCounter struct {
+	pkts, bytes uint64
+}
+
+// readAccounting : compteurs de la chaîne MCS-ACCT, par adresse de conteneur
+func readAccounting() map[string]acctCounter {
+	out, err := iptables("-n", "-v", "-x", "-L", chainAcct)
+	res := map[string]acctCounter{}
+	if err != nil {
+		return res
+	}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		// pkts bytes target prot opt in out source destination
+		if len(f) < 9 || f[2] != "RETURN" {
+			continue
+		}
+		p, err1 := strconv.ParseUint(f[0], 10, 64)
+		b, err2 := strconv.ParseUint(f[1], 10, 64)
+		if err1 == nil && err2 == nil {
+			res[f[7]] = acctCounter{p, b}
+		}
+	}
+	return res
+}
+
+func dropAccounting(ip string) {
+	_, _ = iptables("-D", chainAcct, "-s", ip+"/32", "-j", "RETURN")
+}
+
+// containerIP : adresse du conteneur sur le réseau des serveurs
+func containerIP(name string) string {
+	out, err := exec.Command("docker", "inspect", "-f",
+		`{{with index .NetworkSettings.Networks "`+mcsNetwork+`"}}{{.IPAddress}}{{end}}`, name).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// guardEgress : comptage de la sortie Internet d'un serveur et arrêt en cas d'abus
+// soutenu (attaque, scan...). Les plafonds du pare-feu limitent déjà les dégâts ;
+// ici on coupe et on prévient.
+func guardEgress(id int64, st *guardState, counters map[string]acctCounter, events chan<- serverEvent) {
+	ip := containerIP(containerName(id))
+	if ip == "" {
+		return
+	}
+	if ip != st.acct.ip {
+		if st.acct.ip != "" {
+			dropAccounting(st.acct.ip)
+		}
+		st.acct = acctState{ip: ip}
+		if _, err := iptables("-C", chainAcct, "-s", ip+"/32", "-j", "RETURN"); err != nil {
+			if out, err := iptables("-A", chainAcct, "-s", ip+"/32", "-j", "RETURN"); err != nil {
+				log.Printf("Comptage de la sortie du serveur %d : %s", id, out)
+				return
+			}
+		}
+		// Correspondance adresse -> serveur gardée dans le journal (plaintes d'abus :
+		// journalctl -k | grep MCS-OUT donne l'adresse source)
+		log.Printf("Serveur %d : adresse %s (sortie Internet comptée)", id, ip)
+		return
+	}
+	c, ok := counters[ip]
+	if !ok {
+		return
+	}
+	prevBytes, prevPkts := st.acct.bytes, st.acct.pkts
+	st.acct.bytes, st.acct.pkts = c.bytes, c.pkts
+	if prevBytes == 0 && prevPkts == 0 || c.bytes < prevBytes || c.pkts < prevPkts {
+		return // premier relevé, ou compteurs remis à zéro
+	}
+	secs := guardInterval.Seconds()
+	bps := float64(c.bytes-prevBytes) / secs
+	pps := float64(c.pkts-prevPkts) / secs
+	if bps > abuseBytesPerSec || pps > abusePktsPerSec {
+		st.acct.strikes++
+	} else {
+		st.acct.strikes = 0
+		return
+	}
+	if st.acct.strikes >= abuseTicks {
+		st.acct.strikes = 0
+		stopGuarded(id, "abuse", fmt.Sprintf("envoi vers Internet de %.1f Mo/s et %.0f paquets/s pendant plus d'une minute",
+			bps/(1<<20), pps), events)
+	}
 }

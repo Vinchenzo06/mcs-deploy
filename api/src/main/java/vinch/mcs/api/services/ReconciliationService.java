@@ -43,6 +43,7 @@ public class ReconciliationService {
     private final ServerMetricsService metricsService;
     private final vinch.mcs.api.repositories.PendingDeletionRepository pendingDeletionRepository;
     private final NotificationService notificationService;
+    private final vinch.mcs.api.repositories.PlayerRepository playerRepository;
 
     /**
      * Événements en direct. Les opérations lancées par l'API (création, arrêt)
@@ -60,7 +61,7 @@ public class ReconciliationService {
             log.warn("Événement ignoré : le serveur {} n'est pas sur la machine {}", event.serverId(), event.nodeId());
             return;
         }
-        if ("flood".equals(event.event()) || "crashloop".equals(event.event())) {
+        if ("flood".equals(event.event()) || "crashloop".equals(event.event()) || "abuse".equals(event.event())) {
             stoppedByGuard(server, event);
             return;
         }
@@ -119,6 +120,25 @@ public class ReconciliationService {
             server.setLastStoppedAt(LocalDateTime.now());
             serverRepository.save(server);
             unregister(server);
+        }
+        if ("abuse".equals(event.event())) {
+            // Sortie Internet anormale (attaque, scan, plugin malveillant) : propriétaire
+            // et admins prévenus ; c'est l'IP du VPS qui serait signalée
+            String msg = "Ton serveur " + server.getName() + " a été arrêté : il envoyait énormément de données "
+                    + "vers Internet (" + event.detail() + "). Ça ressemble à une attaque ou à un plugin malveillant : "
+                    + "vérifie tes plugins et mods avant de le relancer.";
+            try {
+                notificationService.notify(server.getOwner().getId(), msg);
+                for (vinch.mcs.api.entities.Player admin : playerRepository.findByRole(vinch.mcs.api.entities.PlayerRole.ADMIN)) {
+                    if (!admin.getId().equals(server.getOwner().getId())) {
+                        notificationService.notify(admin.getId(), "[Abus] " + server.getVelocityName() + " (machine "
+                                + server.getNode().getId() + ") arrêté : " + event.detail());
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Messages d'abus pour {} : {}", server.getVelocityName(), e.getMessage());
+            }
+            return;
         }
         String why = "flood".equals(event.event())
                 ? "il écrivait des erreurs en boucle dans son journal"

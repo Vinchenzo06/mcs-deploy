@@ -35,7 +35,7 @@ import java.util.Optional;
         id = "proxymanager",
         name = "ProxyManager",
         version = "1.0.0",
-        authors = {"Vincent"}
+        authors = {"MCS"}
 )
 public class Proxymanager {
 

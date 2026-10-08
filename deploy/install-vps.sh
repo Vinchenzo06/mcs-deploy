@@ -538,6 +538,51 @@ fi
 SHEOF
   chmod 755 /usr/local/bin/mcs-rathole-sync
 
+  # mcs-wg-guard : garde-fous du VPS sur la sortie Internet des serveurs (lot 37)
+  cat > /usr/local/bin/mcs-wg-guard <<'SHEOF'
+#!/usr/bin/env bash
+# sudo mcs-wg-guard [up|down]
+#   Garde-fous du VPS sur ce qui arrive des machines par le tunnel wg-mcs (la sortie
+#   Internet des serveurs joueurs). En plus des plafonds posés par chaque agent :
+#   - les serveurs n'atteignent aucun service du VPS (seules les sauvegardes des
+#     machines, 10.99.0.1:8100, restent joignables par le tunnel) ;
+#   - UDP vers Internet limité au DNS ;
+#   - débit et nouvelles connexions plafonnés par machine ;
+#   - nouvelles connexions journalisées (journalctl -k | grep MCS-WG-OUT).
+#   Lancé par wg-quick (PostUp/PostDown), mcs-wg-sync et mcs-deploy.
+set -euo pipefail
+[[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
+action=${1:-up}
+ipt() { iptables -w "$@"; }
+while ipt -D INPUT -i wg-mcs -j MCS-WG-IN 2>/dev/null; do :; done
+while ipt -D FORWARD -i wg-mcs -j MCS-WG-FWD 2>/dev/null; do :; done
+for c in MCS-WG-IN MCS-WG-FWD; do
+  ipt -F "$c" 2>/dev/null || true
+  ipt -X "$c" 2>/dev/null || true
+done
+[[ "$action" == "down" ]] && exit 0
+
+ipt -N MCS-WG-IN
+ipt -A MCS-WG-IN -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN
+ipt -A MCS-WG-IN -d 10.99.0.1/32 -p tcp --dport 8100 -j RETURN
+ipt -A MCS-WG-IN -d 10.99.0.1/32 -p icmp -j RETURN
+ipt -A MCS-WG-IN -j DROP
+
+ipt -N MCS-WG-FWD
+ipt -A MCS-WG-FWD -p udp --dport 53 -j RETURN
+ipt -A MCS-WG-FWD -p udp -j DROP
+ipt -A MCS-WG-FWD -m hashlimit --hashlimit-above 25mb/s --hashlimit-burst 48mb \
+  --hashlimit-mode srcip --hashlimit-name mcs-wg-bw -j DROP
+ipt -A MCS-WG-FWD -p tcp --syn -m hashlimit --hashlimit-above 200/sec --hashlimit-burst 500 \
+  --hashlimit-mode srcip --hashlimit-name mcs-wg-syn -j DROP
+ipt -A MCS-WG-FWD -m conntrack --ctstate NEW -m limit --limit 10/sec --limit-burst 50 \
+  -j LOG --log-prefix "MCS-WG-OUT: "
+
+ipt -I INPUT 1 -i wg-mcs -j MCS-WG-IN
+ipt -I FORWARD 1 -i wg-mcs -j MCS-WG-FWD
+SHEOF
+  chmod 755 /usr/local/bin/mcs-wg-guard
+
   # mcs-wg-sync : régénère la config WireGuard du VPS (sortie Internet des serveurs)
   cat > /usr/local/bin/mcs-wg-sync <<'SHEOF'
 #!/usr/bin/env bash
@@ -568,6 +613,8 @@ trap 'rm -f "$tmp"' EXIT
   echo "PrivateKey = $(cat /etc/mcs/wg/vps.key)"
   echo "PostUp = iptables -w -t nat -A POSTROUTING -s 10.99.0.0/16 -o $pubif -j MASQUERADE"
   echo "PostDown = iptables -w -t nat -D POSTROUTING -s 10.99.0.0/16 -o $pubif -j MASQUERADE"
+  echo "PostUp = /usr/local/bin/mcs-wg-guard up"
+  echo "PostDown = /usr/local/bin/mcs-wg-guard down"
   shopt -s nullglob
   for f in "$nodes_dir"/*.env; do
     (
@@ -582,6 +629,7 @@ trap 'rm -f "$tmp"' EXIT
 install -m 600 "$tmp" "$conf"
 if ip link show wg-mcs >/dev/null 2>&1; then
   wg syncconf wg-mcs <(wg-quick strip wg-mcs)
+  /usr/local/bin/mcs-wg-guard up
 else
   systemctl enable --now wg-quick@wg-mcs >/dev/null 2>&1
 fi
@@ -1640,6 +1688,10 @@ step_firewall() {
     warn "Interface publique introuvable : sortie des serveurs non autorisée dans ufw"
   fi
   ufw --force enable >/dev/null
+  # Garde-fous de la sortie des serveurs (lot 37), remis en tête après ufw
+  if ip link show wg-mcs >/dev/null 2>&1 && [[ -x /usr/local/bin/mcs-wg-guard ]]; then
+    /usr/local/bin/mcs-wg-guard up && ok "Garde-fous wg-mcs : services du VPS fermés au tunnel, UDP = DNS, débit plafonné par machine"
+  fi
   ok "Ouverts : SSH ${ssh_ports% }, 25565, 2333, $api_ports, $WG_PORT/udp$([[ "$ENABLE_SSH_TUNNEL" == "true" ]] && echo ", $SSH_TUNNEL_PORT") ; transit wg-mcs → Internet (sauf SMTP)"
 }
 

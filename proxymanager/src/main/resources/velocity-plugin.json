@@ -2,7 +2,7 @@
   "id": "proxymanager",
   "name": "ProxyManager",
   "version": "${project.version}",
-  "authors": ["Vincent"],
+  "authors": ["MCS"],
   "main": "vinch.mcs.proxymanager.Proxymanager",
   "dependencies": [
     {"id": "luckperms", "optional": true}

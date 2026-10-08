@@ -30,6 +30,21 @@ const (
 	mcsBridge    = "mcs-br0"
 	chainForward = "MCS-ISOLATION"
 	chainInput   = "MCS-ISOLATION-IN"
+	chainAcct    = "MCS-ACCT" // comptage de la sortie Internet par serveur (lot 37)
+)
+
+// Limites de sortie Internet par serveur (lot 37). Un serveur gratuit peut faire
+// tourner n'importe quel plugin, y compris un outil d'attaque : sans limite, c'est
+// le VPS (par où tout sort) qui serait signalé et suspendu. Normalement un serveur
+// Minecraft envoie très peu vers Internet (téléchargements, API de plugins).
+const (
+	egressBandwidth = "3mb/s" // octets envoyés vers Internet par serveur
+	egressBurst     = "12mb"
+	egressPPS       = "8000/sec" // paquets par seconde par serveur
+	egressPPSBurst  = "16000"
+	egressSynRate   = "20/sec" // nouvelles connexions TCP par seconde
+	egressSynBurst  = "100"
+	egressMaxConns  = "256" // connexions TCP ouvertes en même temps
 )
 
 // Destinations interdites aux serveurs : réseaux privés, CGNAT, lien local
@@ -120,13 +135,37 @@ func ensureNetwork() error {
 
 // Règles attendues dans chaque chaîne (format de "iptables -S", sans l'en-tête -N).
 func expectedRules() map[string][]string {
+	b := " -i " + mcsBridge
+	syn := " -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN"
 	fwd := []string{
-		"-A " + chainForward + " -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN",
-		"-A " + chainForward + " -i " + mcsBridge + " -o " + mcsBridge + " -j DROP",
+		// Comptage de ce que chaque serveur envoie (garde-fou d'abus, lot 37)
+		"-A " + chainForward + b + " -j " + chainAcct,
+		"-A " + chainForward + " -o " + mcsBridge + " -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN",
+		"-A " + chainForward + b + " -o " + mcsBridge + " -j DROP",
 	}
 	for _, r := range blockedRanges {
-		fwd = append(fwd, "-A "+chainForward+" -d "+r+" -i "+mcsBridge+" -j DROP")
+		fwd = append(fwd, "-A "+chainForward+" -d "+r+b+" -j DROP")
 	}
+	// Sortie Internet (lot 37) : UDP limité au DNS, ICMP limité, débit, paquets et
+	// nouvelles connexions plafonnés par serveur, nouvelles connexions journalisées
+	// (pour retrouver le serveur en cause lors d'une plainte d'abus)
+	for _, dns := range containerDNS {
+		fwd = append(fwd, "-A "+chainForward+" -d "+dns+"/32"+b+" -p udp -m udp --dport 53 -j RETURN")
+	}
+	fwd = append(fwd,
+		"-A "+chainForward+b+" -p udp -j DROP",
+		"-A "+chainForward+b+" -p icmp -m limit --limit 5/sec --limit-burst 20 -j RETURN",
+		"-A "+chainForward+b+" -p icmp -j DROP",
+		"-A "+chainForward+b+" -m hashlimit --hashlimit-above "+egressBandwidth+" --hashlimit-burst "+egressBurst+
+			" --hashlimit-mode srcip --hashlimit-name mcs-bw -j DROP",
+		"-A "+chainForward+b+" -m hashlimit --hashlimit-above "+egressPPS+" --hashlimit-burst "+egressPPSBurst+
+			" --hashlimit-mode srcip --hashlimit-name mcs-pps -j DROP",
+		"-A "+chainForward+b+syn+" -m hashlimit --hashlimit-above "+egressSynRate+" --hashlimit-burst "+egressSynBurst+
+			" --hashlimit-mode srcip --hashlimit-name mcs-syn -j DROP",
+		"-A "+chainForward+b+syn+" -m connlimit --connlimit-above "+egressMaxConns+
+			" --connlimit-mask 32 --connlimit-saddr -j DROP",
+		"-A "+chainForward+b+` -m conntrack --ctstate NEW -m limit --limit 5/sec --limit-burst 20 -j LOG --log-prefix "MCS-OUT:"`,
+	)
 	in := []string{
 		"-A " + chainInput + " -i " + mcsBridge + " -m conntrack --ctstate RELATED,ESTABLISHED -j RETURN",
 		"-A " + chainInput + " -i " + mcsBridge + " -j DROP",
@@ -181,6 +220,12 @@ func firewallHealthy() bool {
 
 func applyFirewall() error {
 	rules := expectedRules()
+	// Chaîne de comptage : son contenu est géré par le garde-fou (une règle par serveur)
+	if _, err := iptables("-n", "-L", chainAcct); err != nil {
+		if out, err := iptables("-N", chainAcct); err != nil {
+			return fmt.Errorf("iptables -N %s : %s", chainAcct, out)
+		}
+	}
 	for _, chain := range []string{chainForward, chainInput} {
 		if _, err := iptables("-n", "-L", chain); err != nil {
 			if out, err := iptables("-N", chain); err != nil {
@@ -192,6 +237,9 @@ func applyFirewall() error {
 		}
 		for _, rule := range rules[chain] {
 			args := strings.Fields(rule)
+			for i := range args {
+				args[i] = strings.Trim(args[i], `"`) // --log-prefix "MCS-OUT:"
+			}
 			if out, err := iptables(args...); err != nil {
 				return fmt.Errorf("iptables %s : %s", rule, out)
 			}
