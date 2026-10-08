@@ -42,6 +42,7 @@ public class ReconciliationService {
     private final VelocityClient velocityClient;
     private final ServerMetricsService metricsService;
     private final vinch.mcs.api.repositories.PendingDeletionRepository pendingDeletionRepository;
+    private final NotificationService notificationService;
 
     /**
      * Événements en direct. Les opérations lancées par l'API (création, arrêt)
@@ -57,6 +58,10 @@ public class ReconciliationService {
         }
         if (server.getNode() == null || !server.getNode().getId().equals(event.nodeId())) {
             log.warn("Événement ignoré : le serveur {} n'est pas sur la machine {}", event.serverId(), event.nodeId());
+            return;
+        }
+        if ("flood".equals(event.event()) || "crashloop".equals(event.event())) {
+            stoppedByGuard(server, event);
             return;
         }
         metricsService.recordHealth(server.getId(), event.event());
@@ -97,6 +102,45 @@ public class ReconciliationService {
             case "unhealthy" -> log.warn("Serveur {} ({}) ne répond plus (healthcheck)",
                     server.getId(), server.getVelocityName());
             default -> { }
+        }
+    }
+
+    /**
+     * Garde-fou de l'agent (lot 35c) : serveur arrêté parce que son journal explosait
+     * (erreurs en boucle) ou qu'il plantait en boucle. Le propriétaire est prévenu,
+     * avec la version de Java à essayer si l'agent en a reconnu la cause.
+     */
+    private void stoppedByGuard(Server server, AgentServerEvent event) {
+        log.warn("Serveur {} ({}) arrêté par le garde-fou de la machine : {} ({})", server.getId(),
+                server.getVelocityName(), event.event(), event.detail());
+        ServerStatus status = server.getStatus();
+        if (status == ServerStatus.RUNNING || status == ServerStatus.STARTING || status == ServerStatus.ERROR) {
+            server.setStatus(ServerStatus.STOPPED);
+            server.setLastStoppedAt(LocalDateTime.now());
+            serverRepository.save(server);
+            unregister(server);
+        }
+        String why = "flood".equals(event.event())
+                ? "il écrivait des erreurs en boucle dans son journal"
+                : "il plantait en boucle";
+        StringBuilder msg = new StringBuilder("Ton serveur " + server.getName() + " a été arrêté : " + why + ".");
+        boolean javaCause = event.javaDirection() != null || (event.javaNeeded() != null && event.javaNeeded() > 0);
+        if (javaCause) {
+            int current = JavaVersions.effective(server);
+            int suggested = JavaVersions.suggest(event.javaNeeded() == null ? 0 : event.javaNeeded(),
+                    event.javaDirection(), server, current);
+            msg.append(" Cause : sa version de Java (Java ").append(current).append(").");
+            if (suggested != current) {
+                msg.append(" Essaie : /mcs java ").append(server.getName()).append(" ").append(suggested).append(" start");
+            }
+        } else {
+            msg.append(" Regarde la fin de son journal (/mcs console ").append(server.getName())
+                    .append(" ou le fichier logs/latest.log) avant de le relancer.");
+        }
+        try {
+            notificationService.notify(server.getOwner().getId(), msg.toString());
+        } catch (Exception e) {
+            log.warn("Message au propriétaire de {} : {}", server.getVelocityName(), e.getMessage());
         }
     }
 

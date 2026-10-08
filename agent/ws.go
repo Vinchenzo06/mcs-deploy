@@ -153,6 +153,13 @@ func runConnection(config *Config, stopChan chan struct{}, events <-chan serverE
 			if ev.ExitCode != nil {
 				msg["exit_code"] = *ev.ExitCode
 			}
+			if ev.Detail != "" {
+				msg["detail"] = ev.Detail
+			}
+			if ev.JavaDirection != "" || ev.JavaNeeded > 0 {
+				msg["java_needed"] = ev.JavaNeeded
+				msg["java_direction"] = ev.JavaDirection
+			}
 			if err := writeJSON(conn, msg); err != nil {
 				return err
 			}

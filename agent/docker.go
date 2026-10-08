@@ -181,7 +181,8 @@ func firstStart(serverPath string, req CreateServerRequest) error {
 		}
 		return fmt.Errorf("le serveur n'a pas démarré à temps : %w", err)
 	}
-	return nil
+	// « Done » ne suffit pas : le serveur doit vraiment accepter les connexions
+	return verifyResponding(name)
 }
 
 // RecreateServer : nouveau conteneur pour un serveur existant (changement de
@@ -414,7 +415,7 @@ func StartServer(serverID int64) error {
 		return fmt.Errorf("le serveur n'a pas démarré à temps : %w", err)
 	}
 
-	return nil
+	return verifyResponding(containerName(serverID))
 }
 
 // StopServer arrête un conteneur en cours

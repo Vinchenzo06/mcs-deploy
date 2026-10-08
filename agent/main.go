@@ -11,7 +11,7 @@ import (
 )
 
 // Version de l'agent (fait foi, indépendamment du fichier de config)
-const AgentVersion = "0.14.0"
+const AgentVersion = "0.14.1"
 
 // Vérifie régulièrement que l'isolation réseau est toujours en place
 // (un redémarrage de Docker ou un rechargement du pare-feu peut l'effacer).
@@ -84,6 +84,8 @@ func main() {
 	// Événements Docker (démarrage, arrêt, santé) transmis à l'API en direct
 	events := make(chan serverEvent, 256)
 	go watchDockerEvents(events, stopChan)
+	// Garde-fous : journal qui explose, plantages en boucle (lot 35c)
+	go watchServers(config.Docker.DataPath, events, stopChan)
 
 	for {
 		select {

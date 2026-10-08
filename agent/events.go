@@ -17,8 +17,12 @@ import (
 
 type serverEvent struct {
 	ServerID int64  `json:"server_id"`
-	Event    string `json:"event"` // start, die, healthy, unhealthy
+	Event    string `json:"event"` // start, die, healthy, unhealthy, flood, crashloop
 	ExitCode *int   `json:"exit_code,omitempty"`
+	// Garde-fous (flood, crashloop) : explication et diagnostic Java éventuel
+	Detail        string `json:"detail,omitempty"`
+	JavaNeeded    int    `json:"java_needed,omitempty"`
+	JavaDirection string `json:"java_direction,omitempty"`
 }
 
 type dockerEvent struct {

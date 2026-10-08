@@ -818,7 +818,7 @@ public class McsCommand implements SimpleCommand {
 
     /** /mcs java <serveur> [8|11|16|17|21|25|auto] [start] */
     private void handleJava(Player player, String[] args) {
-        if (args.length < 2 || args.length > 4) {
+        if (args.length < 2 || args.length > 5) {
             usage(player, "/mcs java <serveur> [8|11|16|17|21|25|auto]", "/mcs java ");
             return;
         }
@@ -828,7 +828,14 @@ public class McsCommand implements SimpleCommand {
                     + String.join(", ", JAVA_VERSIONS) + " ou auto."));
             return;
         }
-        boolean start = args.length == 4 && "start".equalsIgnoreCase(args[3]);
+        boolean start = false;
+        boolean confirm = false;
+        for (int i = 3; i < args.length; i++) {
+            start |= "start".equalsIgnoreCase(args[i]);
+            confirm |= "confirm".equalsIgnoreCase(args[i]);
+        }
+        final boolean startAfter = start;
+        final boolean confirmed = confirm;
         withServer(player, args[1], t -> {
             String ref = t.ref();
             if (!t.can("FILES")) {
@@ -840,10 +847,38 @@ public class McsCommand implements SimpleCommand {
                     int current = s.path("java").asInt(0);
                     notice(player, text("").append(serverName(ref)).append(text(" utilise Java " + current
                             + (s.path("javaAuto").asBoolean(true) ? " (automatique)." : " (choisi)."))));
-                    player.sendMessage(javaButtons(ref, current, 0, false));
+                    player.sendMessage(javaButtons(ref, current, s.path("javaRecommended").asInt(0), false));
                 });
                 return;
             }
+            if (!confirmed && !version.equals("auto")) {
+                // Version éloignée de celle conseillée : confirmation d'abord (un mauvais Java
+                // peut faire tourner le serveur sans qu'il accepte de connexions)
+                afterApi(player, apiClient.getServerStats(t.id()), ref, s -> {
+                    int recommended = s.path("javaRecommended").asInt(0);
+                    if (recommended == 0 || recommended == Integer.parseInt(version)) {
+                        applyJava(player, t, ref, version, startAfter);
+                        return;
+                    }
+                    notice(player, text("⚠ Java conseillé pour " + capitalize(s.path("serverType").asText("")) + " "
+                            + s.path("minecraftVersion").asText("") + " : " + recommended + ". Avec Java " + version
+                            + ", le serveur risque de ne pas démarrer ou de refuser les connexions."));
+                    player.sendMessage(buttons(
+                            button("Continuer avec Java " + version, NamedTextColor.RED,
+                                    "/mcs java " + ref + " " + version + (startAfter ? " start" : "") + " confirm",
+                                    "Utiliser quand même Java " + version),
+                            button("Utiliser Java " + recommended, NamedTextColor.GREEN,
+                                    "/mcs java " + ref + " " + recommended + (startAfter ? " start" : ""),
+                                    "Version conseillée")));
+                });
+                return;
+            }
+            applyJava(player, t, ref, version, startAfter);
+        });
+    }
+
+    private void applyJava(Player player, Target t, String ref, String version, boolean start) {
+        {
             pending(player, text("Passage de ").append(Component.text(ref, NamedTextColor.WHITE))
                     .append(text(" à Java " + version + "… (le premier usage d'une version la télécharge sur la machine)")));
             afterApi(player, apiClient.setJava(t.id(), t.playerId(), version, start), ref, r -> {
@@ -872,7 +907,7 @@ public class McsCommand implements SimpleCommand {
                     }
                 }
             });
-        });
+        }
     }
 
     /** Problème de version de Java : explication et un bouton par version */
@@ -891,8 +926,9 @@ public class McsCommand implements SimpleCommand {
             int n = Integer.parseInt(v);
             String label = "Java " + v + (n == suggested ? " ★" : "") + (n == current ? " (actuel)" : "");
             NamedTextColor color = n == suggested ? NamedTextColor.GREEN : n == current ? NamedTextColor.DARK_GRAY : NamedTextColor.AQUA;
-            list.add(button(label, color, "/mcs java " + ref + " " + v + (start ? " start" : ""),
-                    n == suggested ? "Conseillé d'après le journal du serveur" : "Utiliser Java " + v));
+            // Depuis un problème détecté : choix en connaissance de cause, pas de confirmation
+            list.add(button(label, color, "/mcs java " + ref + " " + v + (start ? " start confirm" : ""),
+                    n == suggested ? "Version conseillée" : "Utiliser Java " + v));
         }
         list.add(button("Auto", NamedTextColor.GRAY, "/mcs java " + ref + " auto" + (start ? " start" : ""),
                 "Selon la version de Minecraft"));

@@ -6,5 +6,6 @@ package vinch.mcs.api.websocket;
  * @param event    "start", "die", "healthy" (Minecraft répond) ou "unhealthy"
  * @param exitCode code de sortie pour "die" (null sinon)
  */
-public record AgentServerEvent(Long nodeId, Long serverId, String event, Integer exitCode) {
+public record AgentServerEvent(Long nodeId, Long serverId, String event, Integer exitCode,
+                               String detail, Integer javaNeeded, String javaDirection) {
 }

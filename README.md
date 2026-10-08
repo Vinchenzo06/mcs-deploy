@@ -274,6 +274,12 @@ Mise en place, une fois :
   reconnue dans son journal), il est arrêté et le joueur reçoit un bouton par version, la
   version conseillée marquée ★. Vanilla n'est plus proposé à la création (pas de vrais
   comptes derrière le proxy) : Paper, Spigot, Fabric, Forge, NeoForge.
+- **Garde-fous des serveurs (lot 35c)** : après « Done », l'agent vérifie que le serveur répond
+  vraiment (ping Minecraft). Toutes les 20 s, il arrête un serveur dont le journal explose
+  (plus de 30 Mo en 20 s, ou plus de 2 Go : erreurs en boucle ; seul le dernier Mo est gardé)
+  ou qui plante en boucle (3 fois en 5 min), et garde les vieux journaux compressés sous
+  300 Mo. Le propriétaire est prévenu, avec la version de Java à essayer si c'est la cause.
+  Choisir une version de Java autre que celle conseillée demande une confirmation.
 - **Toutes les versions de client au lobby (lot 35)** : ViaVersion, ViaBackwards et ViaRewind
   sont installés sur le lobby et mis à jour à chaque `mcs-deploy` (Modrinth, sinon GitHub).
   Un client 1.7 à la plus récente entre au lobby ; pour rejoindre un serveur d'une autre

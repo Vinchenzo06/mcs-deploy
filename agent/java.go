@@ -90,6 +90,15 @@ func diagnoseJavaLine(line string) *javaError {
 		}
 		return &javaError{Direction: "newer", Detail: detail}
 	}
+	// Vieux Netty (Paper/Spigot 1.8–1.12) sur un Java récent : erreurs en boucle à chaque connexion
+	if strings.Contains(line, "Unable to access address of buffer") {
+		return &javaError{Direction: "older", Detail: detail}
+	}
+	// Java 16+ : accès refusé aux classes internes de Java (vieux serveurs, vieux mods)
+	if strings.Contains(line, "InaccessibleObjectException") ||
+		(strings.Contains(line, "module java.base does not") && strings.Contains(line, "to unnamed module")) {
+		return &javaError{Direction: "older", Detail: detail}
+	}
 	if strings.Contains(line, "cannot be cast to") && strings.Contains(line, "URLClassLoader") {
 		// Forge 1.16 et avant sur un Java 9+ : il lui faut Java 8
 		return &javaError{Needed: 8, Direction: "older", Detail: detail}

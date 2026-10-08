@@ -98,8 +98,15 @@ public final class JavaVersions {
      * dans le bon sens (plus récente / plus ancienne que la version actuelle).
      */
     public static int suggest(JsonNode result, Server s, int current) {
-        int needed = result.path("java_needed").asInt(0);
-        String dir = result.path("java_direction").asText("");
+        return suggest(result.path("java_needed").asInt(0), result.path("java_direction").asText(""), s, current);
+    }
+
+    public static int suggest(int needed, String direction, Server s, int current) {
+        String dir = direction == null || "unknown".equals(direction) ? "" : direction;
+        if (dir.isEmpty() && needed == 0) {
+            int auto = auto(s.getServerType(), s.getMinecraftVersion());
+            return auto != current ? auto : current;
+        }
         if (dir.isEmpty() && needed > 0) {
             dir = needed > current ? "newer" : "older";
         }

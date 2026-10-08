@@ -110,7 +110,10 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
         }
         Integer exitCode = json.hasNonNull("exit_code") ? json.get("exit_code").asInt() : null;
         eventPublisher.publishEvent(new AgentServerEvent(
-                nodeId, json.get("server_id").asLong(), json.get("event").asText(), exitCode));
+                nodeId, json.get("server_id").asLong(), json.get("event").asText(), exitCode,
+                json.path("detail").asText(null),
+                json.hasNonNull("java_needed") ? json.get("java_needed").asInt() : null,
+                json.path("java_direction").asText(null)));
     }
 
     // Mesures périodiques des serveurs de la machine

@@ -144,6 +144,7 @@ public class ServerMetricsService {
         out.put("minecraftVersion", server.getMinecraftVersion());
         out.put("java", JavaVersions.effective(server));
         out.put("javaAuto", server.getJavaVersion() == null);
+        out.put("javaRecommended", JavaVersions.auto(server.getServerType(), server.getMinecraftVersion()));
         out.put("allocatedRamMb", server.getAllocatedRamMb());
         out.put("allocatedCpuCores", server.getAllocatedCpuCores());
         out.put("allocatedStorageMb", server.getAllocatedStorageMb());
