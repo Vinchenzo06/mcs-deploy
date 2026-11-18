@@ -263,6 +263,20 @@ while IFS= read -r repo; do
       '.[$u] = $p' "$ack.o" > "$ack.n" && mv "$ack.n" "$ack.o"
   fi
 done < <(jq -c '.repos[]' "$ETC/export.json")
+# Dépôts retirés par le VPS (serveur supprimé, ancien dépôt de machine vidé) : le
+# dossier est effacé seulement s'il ne contient plus aucun instantané. Sinon il est
+# gardé et signalé (rien n'est jamais supprimé à l'aveugle). Un dépôt vide effacé
+# par erreur ne perd rien : l'agent le recrée à la sauvegarde suivante.
+for dir in "$DATA_DIR"/srv* "$DATA_DIR"/node*; do
+  user=${dir##*/}
+  [[ -f "$dir/config" && "$user" =~ ^(srv|node)[0-9]+$ ]] || continue
+  jq -e --arg u "$user" 'any(.repos[]; .user == $u)' "$ETC/export.json" >/dev/null && continue
+  if compgen -G "$dir/snapshots/*" >/dev/null; then
+    echo "  ! $user : retiré par le VPS mais contient encore des instantanés, gardé"
+  else
+    rm -rf -- "$dir" && echo "  $user : dépôt vide retiré"
+  fi
+done
 # Accusé au VPS : les sauvegardes expirées dont l'instantané n'existe plus passent en DELETED
 jq -n --arg g "$started" --slurpfile r "$ack" --slurpfile o "$ack.o" '{generated: $g, repos: $r[0], originals: $o[0]}' > "$ack.n"
 if ssh -T -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=yes \

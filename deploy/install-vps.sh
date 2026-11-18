@@ -406,8 +406,40 @@ PYEOF
 #!/usr/bin/env bash
 echo "=== Services ==="
 for s in postgresql rathole-server wg-quick@wg-mcs mcs-api caddy minecraft-velocity minecraft-lobby; do
-  printf "  %-20s %s\n" "$s" "$(systemctl is-active "$s")"
+  st=$(systemctl is-active "$s")
+  [[ "$st" == "active" ]] && mark=" " || mark="⚠"
+  printf "%s %-20s %s\n" "$mark" "$s" "$st"
 done
+echo
+echo "=== Sauvegardes ==="
+if [[ ! -f /etc/mcs/backup/enabled ]]; then
+  echo "  non configurées (sudo mcs-add-backup)"
+else
+  if ss -ltn 'sport = :8100' | grep -q '10.99.0.1:8100'; then
+    echo "  serveur de sauvegarde : relié"
+  else
+    echo "⚠ serveur de sauvegarde : NON relié (tunnel SSH de la maison, ou wg-mcs en panne)"
+  fi
+  res=$(systemctl show mcs-backup-vps -p Result --value 2>/dev/null)
+  ts=$(systemctl show mcs-backup-vps -p ExecMainExitTimestamp --value 2>/dev/null)
+  ts_s=0
+  if [[ -n "$ts" && "$ts" != "n/a" ]]; then ts_s=$(date -d "$ts" +%s 2>/dev/null || echo 0); fi
+  if [[ "$res" != "success" ]] || (( $(date +%s) - ts_s > 2 * 86400 )); then mark="⚠"; else mark=" "; fi
+  if (( ts_s > 0 )); then when=$(date -d "@$ts_s" '+%Y-%m-%d %H:%M'); else when="jamais"; fi
+  printf "%s VPS : dernier passage %s (%s)\n" "$mark" "$when" "${res:-?}"
+  # Serveurs : la plus récente réussie au central ; alerte si plus de 2 jours alors
+  # qu'au moins un serveur n'est pas rangé à froid (COLD = rien de neuf à sauvegarder)
+  runuser -u postgres -- psql -qtA -d mcs_db -F $'\t' -c "
+    SELECT COALESCE(to_char(max(COALESCE(b.completed_at, b.created_at)), 'YYYY-MM-DD HH24:MI'), 'jamais'),
+           COALESCE(extract(epoch FROM now() - max(COALESCE(b.completed_at, b.created_at)))::bigint, -1),
+           (SELECT count(*) FROM servers WHERE COALESCE(park_state, 'DIRTY') <> 'COLD' AND status <> 'ERROR')
+    FROM backups b WHERE b.status = 'SUCCESS' AND b.location = 'CENTRAL'" 2>/dev/null \
+  | while IFS=$'\t' read -r last age active; do
+      if (( ${active:-0} > 0 )) && (( age < 0 || age > 2 * 86400 )); then mark="⚠"; else mark=" "; fi
+      printf "%s serveurs : dernière réussie %s  (%s serveur(s) à suivre)\n" "$mark" "$last" "${active:-?}"
+    done
+  echo "  détail : sudo mcs-backup-status"
+fi
 echo
 echo "=== Ports en écoute ==="
 ss -ltnp | grep -E ':(25565|25566|8081|8082|2333|2222|80|443)\b' | awk '{print "  " $4 "  " $6}'
@@ -593,7 +625,7 @@ SHEOF
 #   qui est visible, jamais celle du volontaire.
 set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
-trap 'echo "✘ mcs-add-backup : échec ligne $LINENO : $BASH_COMMAND" >&2' ERR
+trap 'echo "✘ mcs-wg-sync : échec ligne $LINENO : $BASH_COMMAND" >&2' ERR
 # shellcheck disable=SC1091
 source /etc/mcs/runtime.env
 nodes_dir=/etc/mcs/nodes
@@ -630,8 +662,11 @@ install -m 600 "$tmp" "$conf"
 if ip link show wg-mcs >/dev/null 2>&1; then
   wg syncconf wg-mcs <(wg-quick strip wg-mcs)
   /usr/local/bin/mcs-wg-guard up
-else
-  systemctl enable --now wg-quick@wg-mcs >/dev/null 2>&1
+elif ! systemctl enable --now wg-quick@wg-mcs >/dev/null 2>&1; then
+  echo "✘ Le tunnel wg-mcs ne démarre pas :" >&2
+  journalctl -u wg-quick@wg-mcs -n 4 --no-pager -o cat >&2 || true
+  echo "  (Permission denied sur mcs-wg-guard = AppArmor : sudo mcs-deploy egress)" >&2
+  exit 1
 fi
 SHEOF
   chmod 755 /usr/local/bin/mcs-wg-sync
@@ -1034,6 +1069,22 @@ fi
 # Expirées sans instantané (échec d'enregistrement) : rien à supprimer
 "${psql[@]}" -c "UPDATE backups SET status = 'DELETED' WHERE status = 'EXPIRED' AND snapshot_id IS NULL" >/dev/null
 
+# Dépôts devenus inutiles (lot 39) : serveur supprimé ("srv<id>") ou ancien dépôt de
+# machine ("node<id>"), sans aucune sauvegarde vivante dedans. Ils quittent l'export,
+# et le serveur de sauvegarde efface leur dossier s'il est vide. Un serveur qui
+# sauvegarde à nouveau recrée son dépôt (BackupService.repoFor).
+"${psql[@]}" >/dev/null <<'SQL'
+DELETE FROM backup_repos r
+WHERE (   (r.name ~ '^srv[0-9]+$' AND NOT EXISTS (SELECT 1 FROM servers s WHERE 'srv' || s.id = r.name))
+       OR  r.name ~ '^node[0-9]+$')
+  AND NOT EXISTS (
+      SELECT 1 FROM backups b
+      WHERE b.status IN ('RUNNING', 'SUCCESS', 'EXPIRED')
+        AND (   b.storage_path = r.name
+             OR b.legacy_repo = r.name
+             OR (b.storage_path IS NULL AND b.location = 'CENTRAL' AND 'node' || b.node_id = r.name)));
+SQL
+
 # 2. Export : un dépôt par serveur ("srv<id>", lot 32) et les anciens par machine ("node<id>")
 #    forget : expirées, et originaux déjà recopiés dans le dépôt de leur serveur
 #    copy   : instantanés d'un ancien dépôt de machine à recopier dans ce dépôt de serveur
@@ -1283,9 +1334,34 @@ step_egress() {
   printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/90-mcs-egress.conf
   sysctl -q -p /etc/sysctl.d/90-mcs-egress.conf
   install_helpers
+  apparmor_allow_wg_guard
   mcs-wg-sync
   ip link show wg-mcs >/dev/null 2>&1 || die "Tunnel wg-mcs absent. Logs : journalctl -u wg-quick@wg-mcs -n 50"
+  # Le lien peut exister alors que le service est en échec (lancé à la main) :
+  # c'est le service qui remonte le tunnel au prochain redémarrage du VPS
+  systemctl is-active --quiet wg-quick@wg-mcs \
+    || die "wg-quick@wg-mcs n'est pas actif : le tunnel ne reviendrait pas après un redémarrage. Logs : journalctl -u wg-quick@wg-mcs -n 50"
   ok "WireGuard actif (UDP $WG_PORT, réseau 10.99.0.0/16, sortie NAT par le VPS)"
+}
+
+# Ubuntu 25.04+ confine wg-quick avec AppArmor : PostUp ne peut lancer que ce que
+# le profil permet, et mcs-wg-guard était refusé (« Permission denied »), ce qui
+# empêchait le tunnel de démarrer après un redémarrage (panne du 21 octobre 2026).
+# Exception limitée à ce seul script, dans le fichier local prévu par le profil.
+apparmor_allow_wg_guard() {
+  local prof rule='/usr/local/bin/mcs-wg-guard Ux,' local_file=/etc/apparmor.d/local/wg-quick
+  prof=$(grep -l '^profile wg-quick' /etc/apparmor.d/* 2>/dev/null | head -1 || true)
+  [[ -n "$prof" ]] || return 0
+  if ! grep -q 'include if exists <local/wg-quick>' "$prof"; then
+    warn "Profil AppArmor $prof sans <local/wg-quick> : mcs-wg-guard risque d'être bloqué au démarrage du tunnel"
+    return 0
+  fi
+  install -d -m 755 /etc/apparmor.d/local
+  if ! grep -qsF "$rule" "$local_file"; then
+    echo "# MCS : garde-fous de la sortie Internet des serveurs, lancés par PostUp/PostDown" >> "$local_file"
+    echo "$rule" >> "$local_file"
+  fi
+  apparmor_parser -r "$prof" || warn "Rechargement du profil AppArmor $prof impossible"
 }
 
 step_api() {
