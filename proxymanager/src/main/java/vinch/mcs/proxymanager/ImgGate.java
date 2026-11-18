@@ -100,7 +100,9 @@ public class ImgGate {
     }
 
     public String describe() {
-        return host + " -> " + ownerName + "/" + lobbyName;
+        return host + " -> " + ownerName + "/" + lobbyName
+                + (iconSource.isEmpty() ? "" : ", icône " + iconSource)
+                + (motd == null ? "" : ", message perso");
     }
 
     /** Ce joueur est-il entré par l'adresse IMG ? */
@@ -303,9 +305,11 @@ public class ImgGate {
                 problem("format d'image non lu (PNG, JPG ou GIF ; pas WEBP)");
                 return;
             }
+            boolean first = favicon == null;
             favicon = Favicon.create(toIcon(src));
-            if (iconProblem != null) {
-                logger.info("Icône IMG chargée depuis {}", iconSource);
+            if (first || iconProblem != null) {
+                logger.info("Icône IMG chargée depuis {} ({}x{} réduite en 64x64)", iconSource,
+                        src.getWidth(), src.getHeight());
             }
             iconProblem = null;
         } catch (Exception e) {

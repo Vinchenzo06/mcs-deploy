@@ -1646,6 +1646,9 @@ EOF
   ok "Velocity en écoute sur :25565 (API plugin sur :8082)"
   # Lot 41 : le lobby IMG n'est jamais supprimé (ni à la main, ni après 6 mois)
   if [[ -n "$IMG_HOST" && -n "$IMG_LOBBY" ]]; then
+    # Les commandes du kit sont posées par system/rathole/egress : on s'assure que
+    # mcs-protect existe même quand seule l'étape velocity est lancée
+    [[ -x /usr/local/bin/mcs-protect ]] || install_helpers
     if mcs-protect "$IMG_LOBBY" on >/dev/null 2>&1; then
       ok "Entrée IMG : $IMG_HOST -> $IMG_LOBBY (protégé contre la suppression)"
     else
