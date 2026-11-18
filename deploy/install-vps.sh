@@ -1352,13 +1352,19 @@ step_https() {
     apt-get install -y -qq caddy >/dev/null || die "Installation de Caddy impossible (apt install caddy)"
   fi
 
+  # Les autres sites du VPS (ex. img.asearia.ca) posent chacun leur bloc dans
+  # /etc/caddy/sites/<nom>.caddy : ce dossier n'est jamais touché par le kit.
+  install -d -m 755 /etc/caddy/sites
+
   # Seul le canal des agents est public : les routes d'administration de l'API
   # restent joignables uniquement depuis le VPS (127.0.0.1:8081)
   {
     echo "# Généré par install-vps.sh - réécrit à chaque déploiement"
+    echo "# Ne pas modifier : ajoute tes sites dans /etc/caddy/sites/<nom>.caddy"
     if [[ -n "$ACME_EMAIL" ]]; then
       printf '{\n\temail %s\n}\n\n' "$ACME_EMAIL"
     fi
+    printf 'import /etc/caddy/sites/*.caddy\n\n'
     cat <<EOF
 $API_DOMAIN {
 	@agent path /ws/agent
@@ -1370,13 +1376,17 @@ $API_DOMAIN {
 	}
 }
 EOF
-  } > /etc/caddy/Caddyfile
-  caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 \
-    || die "Caddyfile invalide : caddy validate --config /etc/caddy/Caddyfile"
+  } > /etc/caddy/Caddyfile.new
+  # Validé avant de remplacer : un site cassé dans /etc/caddy/sites ne coupe
+  # jamais ce qui tourne déjà (l'ancien Caddyfile reste en place)
+  if ! caddy validate --config /etc/caddy/Caddyfile.new --adapter caddyfile >/dev/null 2>&1; then
+    die "Caddyfile invalide (souvent un fichier de /etc/caddy/sites) : caddy validate --config /etc/caddy/Caddyfile.new"
+  fi
+  mv -f /etc/caddy/Caddyfile.new /etc/caddy/Caddyfile
 
   # Let's Encrypt a besoin des ports 80 et 443
   ufw allow 80/tcp comment 'HTTP (certificats Lets Encrypt)' >/dev/null
-  ufw allow 443/tcp comment 'HTTPS (API des agents)' >/dev/null
+  ufw allow 443/tcp comment 'HTTPS (API des agents et sites)' >/dev/null
   systemctl enable caddy >/dev/null 2>&1
   systemctl reload caddy 2>/dev/null || systemctl restart caddy
 

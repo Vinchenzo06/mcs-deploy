@@ -169,6 +169,10 @@ se connectent en `wss://`, et l'API n'est plus joignable depuis Internet (seul l
 canal des agents est exposé). Les machines déjà jumelées doivent recevoir un nouveau
 code (`sudo mcs-add-node --renew <id>`) pour passer en HTTPS.
 
+Le Caddyfile est réécrit à chaque déploiement : ne le modifie pas à la main. Pour
+servir un autre site sur le même VPS, pose son bloc dans `/etc/caddy/sites/<nom>.caddy`
+(le kit l'importe et ne touche jamais à ce dossier), puis `sudo systemctl reload caddy`.
+
 ## Réglages
 
 Tout fonctionne sans configuration. Pour changer un réglage commun à la plateforme
