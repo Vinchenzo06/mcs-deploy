@@ -212,6 +212,12 @@ public class ApiClient {
         return call("POST", "/api/v1/players/limits", body, Duration.ofSeconds(10));
     }
 
+    /** Serveur « pseudo/nom » sans contrôle d'accès (usage interne du proxy : lobby IMG) */
+    public CompletableFuture<JsonNode> getServerByUsernameAndName(String username, String name) {
+        return call("GET", "/api/v1/servers/by-username-name?username=" + enc(username) + "&name=" + enc(name), null,
+                Duration.ofSeconds(5));
+    }
+
     public CompletableFuture<JsonNode> resolveServer(long playerId, String ref) {
         return call("GET", "/api/v1/servers/resolve?playerId=" + playerId + "&ref=" + enc(ref), null,
                 Duration.ofSeconds(10));

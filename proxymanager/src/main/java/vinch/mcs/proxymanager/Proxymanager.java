@@ -56,6 +56,7 @@ public class Proxymanager {
     private ApiClient apiClient;
     private ApiServer apiServer;
     private PlayerSync playerSync;
+    private ImgGate imgGate;
 
     // Faux tant que le masquage des IP (s'il est demandé) n'est pas en place :
     // aucun serveur joueur n'est alors enregistré (fail-closed)
@@ -136,6 +137,15 @@ public class Proxymanager {
         }
 
         playerSync = new PlayerSync(server, apiClient, logger);
+
+        // Entrée IMG (lot 40) : adresse dédiée -> lobby IMG
+        imgGate = new ImgGate(server, apiClient, logger, config.getImgHost(), config.getImgLobby());
+        if (imgGate.enabled()) {
+            server.getEventManager().register(this, imgGate);
+            logger.info("Entrée IMG active : {}", imgGate.describe());
+        } else if (!config.getImgHost().isBlank() || !config.getImgLobby().isBlank()) {
+            logger.warn("Entrée IMG désactivée : img-host et img-lobby (pseudo/nom) sont tous deux requis");
+        }
         registerCommands();
 
         logger.info("ProxyManager démarré avec succès");
@@ -285,6 +295,18 @@ public class Proxymanager {
             CommandSource source = invocation.source();
             if (!(source instanceof Player player)) {
                 source.sendMessage(Component.text("Cette commande est réservée aux joueurs.").color(NamedTextColor.RED));
+                return;
+            }
+
+            // Entré par l'adresse IMG : son lobby est celui d'IMG
+            if (imgGate != null && imgGate.isImgPlayer(player)) {
+                Optional<RegisteredServer> img = imgGate.lobbyServer();
+                if (img.isEmpty()) {
+                    player.sendMessage(Component.text("Le lobby IMG est éteint pour le moment.").color(NamedTextColor.RED));
+                    return;
+                }
+                player.createConnectionRequest(img.get()).fireAndForget();
+                player.sendMessage(Component.text("Téléportation vers le lobby IMG...").color(NamedTextColor.GREEN));
                 return;
             }
 

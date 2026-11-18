@@ -24,6 +24,11 @@ public class PluginConfig {
     private boolean maskPlayerIps = true;
     private String ipMaskKey = "";
 
+    // Entrée IMG (lot 40) : adresse tapée par les membres et lobby IMG « pseudo/nom ».
+    // Vides = désactivé.
+    private String imgHost = "";
+    private String imgLobby = "";
+
     public static PluginConfig load(Path dataDirectory) throws IOException {
         Path configFile = dataDirectory.resolve("config.yml");
 
@@ -51,6 +56,8 @@ public class PluginConfig {
                 if (data.containsKey("local-api-key")) config.setLocalApiKey((String) data.get("local-api-key"));
                 if (data.containsKey("mask-player-ips")) config.setMaskPlayerIps(Boolean.TRUE.equals(data.get("mask-player-ips")));
                 if (data.containsKey("ip-mask-key")) config.setIpMaskKey(String.valueOf(data.get("ip-mask-key")));
+                if (data.get("img-host") != null) config.setImgHost(String.valueOf(data.get("img-host")));
+                if (data.get("img-lobby") != null) config.setImgLobby(String.valueOf(data.get("img-lobby")));
             }
             return config;
         }

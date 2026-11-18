@@ -1225,6 +1225,7 @@ public class ServerService {
         m.put("displayName", s.getDisplayName());
         m.put("status", s.getStatus().name());
         m.put("ownerUsername", s.getOwner().getMinecraftUsername());
+        m.put("ownerId", s.getOwner().getId()); // le proxy démarre le lobby IMG en son nom (lot 40)
         return m;
     }
 

@@ -284,6 +284,7 @@ load_config() {
   : "${PORT_START:=25600}" "${PORT_END:=29999}" "${NODE_PORTS:=20}"
   : "${ENABLE_SSH_TUNNEL:=true}" "${SSH_TUNNEL_PORT:=2222}" "${WG_PORT:=51820}"
   : "${API_DOMAIN:=}" "${ACME_EMAIL:=}"
+  : "${IMG_HOST:=}" "${IMG_LOBBY:=}"
   : "${SRC_API:=api}" "${SRC_PROXY:=proxymanager}" "${SRC_LOBBY:=lobby-plugin}"
   : "${QUOTA_DEFAULT:=1 6144 2}" "${QUOTA_VIP:=2 12288 4}"
   : "${QUOTA_PREMIUM:=2 16384 5}" "${QUOTA_ADMIN:=16 32768 32}"
@@ -1560,6 +1561,8 @@ local-api-port: 8082
 local-api-key: $VELOCITY_PLUGIN_KEY
 mask-player-ips: true
 ip-mask-key: $IP_MASK_KEY
+img-host: "$IMG_HOST"
+img-lobby: "$IMG_LOBBY"
 EOF
   chown -R "$MC_USER:$MC_USER" "$VELOCITY_DIR"
 

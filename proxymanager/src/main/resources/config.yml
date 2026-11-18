@@ -17,3 +17,8 @@ local-api-key: CHANGE_ME_PLUGIN
 mask-player-ips: true
 # Clé secrète de la pseudo-IP (générée par le kit de déploiement)
 ip-mask-key: ""
+
+# Entrée IMG (lot 40) : les joueurs qui tapent cette adresse arrivent sur le lobby
+# IMG (serveur MCS privé « pseudo/nom ») au lieu du lobby MCS. Vides = désactivé.
+img-host: ""
+img-lobby: ""
