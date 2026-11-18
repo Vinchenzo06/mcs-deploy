@@ -308,7 +308,8 @@ public class ParkingService {
         List<Long> delete = new ArrayList<>();
         tx().executeWithoutResult(x -> {
             for (Server s : serverRepository.findAll()) {
-                if (s.getStatus() != ServerStatus.STOPPED || backupService.isBusy(s.getId())) {
+                if (s.getStatus() != ServerStatus.STOPPED || backupService.isBusy(s.getId())
+                        || Boolean.TRUE.equals(s.getIsProtected())) {
                     continue;
                 }
                 LocalDateTime last = s.getLastStartedAt() != null ? s.getLastStartedAt() : s.getCreatedAt();

@@ -616,6 +616,11 @@ public class ServerService {
     public void deleteServer(Long serverId, boolean deleteData, boolean skipAgent) throws Exception {
         Server server = serverRepository.findById(serverId)
                 .orElseThrow(() -> new RuntimeException("Serveur non trouvé : " + serverId));
+        if (Boolean.TRUE.equals(server.getIsProtected())) {
+            throw new RuntimeException("Le serveur " + server.getName() + " est protégé : il ne peut pas être supprimé. "
+                    + "Pour lever la protection, sur le VPS : sudo mcs-protect "
+                    + server.getOwner().getMinecraftUsername() + "/" + server.getName() + " off");
+        }
 
         log.info("Suppression définitive du serveur {} (name={} velocityName={})",
                 serverId, server.getName(), server.getVelocityName());

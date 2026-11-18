@@ -139,10 +139,15 @@ public class Proxymanager {
         playerSync = new PlayerSync(server, apiClient, logger);
 
         // Entrée IMG (lot 40) : adresse dédiée -> lobby IMG
-        imgGate = new ImgGate(server, apiClient, logger, config.getImgHost(), config.getImgLobby());
+        imgGate = new ImgGate(server, apiClient, logger, config.getImgHost(), config.getImgLobby(),
+                config.getImgIcon(), config.getImgMotd(), dataDirectory);
         if (imgGate.enabled()) {
             server.getEventManager().register(this, imgGate);
             logger.info("Entrée IMG active : {}", imgGate.describe());
+            // Icône de la liste des serveurs : tout de suite, puis toutes les 10 min
+            // (suit le logo du site farmdb s'il change)
+            server.getScheduler().buildTask(this, imgGate::reloadIcon)
+                    .repeat(java.time.Duration.ofMinutes(10)).schedule();
         } else if (!config.getImgHost().isBlank() || !config.getImgLobby().isBlank()) {
             logger.warn("Entrée IMG désactivée : img-host et img-lobby (pseudo/nom) sont tous deux requis");
         }

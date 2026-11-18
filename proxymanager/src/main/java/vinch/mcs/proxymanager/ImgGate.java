@@ -5,14 +5,30 @@ import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.player.KickedFromServerEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
+import com.velocitypowered.api.event.proxy.ProxyPingEvent;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
+import com.velocitypowered.api.proxy.server.ServerPing;
+import com.velocitypowered.api.util.Favicon;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.slf4j.Logger;
 
+import javax.imageio.ImageIO;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
@@ -29,11 +45,16 @@ import java.util.concurrent.TimeUnit;
  * expulse. Seuls ceux qui ont accès au lobby IMG (invités) entrent ; s'il est
  * éteint, il démarre au nom de son propriétaire et le joueur se reconnecte.
  *
+ * Dans la liste des serveurs du jeu, l'adresse IMG a sa propre icône (img-icon :
+ * fichier ou URL, ex. le logo du site farmdb, rechargée toutes les 10 min), son
+ * propre message (img-motd) et ne compte que les joueurs entrés par l'adresse IMG.
+ *
  * Désactivé tant que img-host ou img-lobby est vide.
  */
 public class ImgGate {
 
     private static final Duration WAKE_COOLDOWN = Duration.ofMinutes(2);
+    private static final int MAX_ICON_BYTES = 8 * 1024 * 1024;
 
     private final ProxyServer server;
     private final ApiClient api;
@@ -48,9 +69,17 @@ public class ImgGate {
     private volatile String lobbyVelocityName;
     private volatile Instant lastWake = Instant.EPOCH;
 
+    // Liste des serveurs du jeu
+    private final String iconSource;
+    private final Path dataDirectory;
+    private final Component motd;
+    private volatile Favicon favicon;
+    private volatile String iconProblem;
+
     record Lobby(long id, long ownerId, String velocityName, String status) {}
 
-    public ImgGate(ProxyServer server, ApiClient api, Logger logger, String host, String lobbyRef) {
+    public ImgGate(ProxyServer server, ApiClient api, Logger logger, String host, String lobbyRef,
+                   String iconSource, String motd, Path dataDirectory) {
         this.server = server;
         this.api = api;
         this.logger = logger;
@@ -59,6 +88,11 @@ public class ImgGate {
         int slash = ref.indexOf('/');
         this.ownerName = slash > 0 ? ref.substring(0, slash).trim() : "";
         this.lobbyName = slash > 0 ? ref.substring(slash + 1).trim() : "";
+        this.iconSource = iconSource == null ? "" : iconSource.trim();
+        this.dataDirectory = dataDirectory;
+        // Codes couleur « & » (comme les préfixes LuckPerms), \n pour la 2e ligne
+        this.motd = motd == null || motd.isBlank() ? null
+                : LegacyComponentSerializer.legacyAmpersand().deserialize(motd.replace("\\n", "\n"));
     }
 
     public boolean enabled() {
@@ -226,6 +260,110 @@ public class ImgGate {
         }
         event.setResult(KickedFromServerEvent.RedirectPlayer.create(lobby.get(),
                 Component.text("IMG » Retour au lobby IMG : ").color(NamedTextColor.GOLD).append(reason)));
+    }
+
+    // ------------------------------------------------------------ liste des serveurs ----
+
+    /** Ping de la liste des serveurs par l'adresse IMG : icône, message et compte IMG */
+    @Subscribe
+    public void onPing(ProxyPingEvent event) {
+        if (!enabled()) {
+            return;
+        }
+        boolean img = event.getConnection().getVirtualHost()
+                .map(InetSocketAddress::getHostString)
+                .map(ImgGate::normalize)
+                .filter(host::equals)
+                .isPresent();
+        if (!img) {
+            return;
+        }
+        ServerPing.Builder b = event.getPing().asBuilder()
+                .onlinePlayers(imgPlayers.size())
+                .clearSamplePlayers(); // jamais les pseudos des joueurs MCS
+        Favicon icon = favicon;
+        if (icon != null) {
+            b.favicon(icon);
+        }
+        if (motd != null) {
+            b.description(motd);
+        }
+        event.setPing(b.build());
+    }
+
+    /** (Re)charge l'icône IMG ; appelé au démarrage puis toutes les 10 minutes */
+    public void reloadIcon() {
+        if (iconSource.isEmpty()) {
+            return;
+        }
+        try {
+            byte[] data = readIcon();
+            BufferedImage src = ImageIO.read(new ByteArrayInputStream(data));
+            if (src == null) {
+                problem("format d'image non lu (PNG, JPG ou GIF ; pas WEBP)");
+                return;
+            }
+            favicon = Favicon.create(toIcon(src));
+            if (iconProblem != null) {
+                logger.info("Icône IMG chargée depuis {}", iconSource);
+            }
+            iconProblem = null;
+        } catch (Exception e) {
+            problem(e.getMessage());
+        }
+    }
+
+    private void problem(String why) {
+        if (!why.equals(iconProblem)) { // une seule fois par problème, pas toutes les 10 min
+            logger.warn("Icône IMG ({}) : {}{}", iconSource, why,
+                    favicon == null ? " ; icône de Velocity gardée" : " ; ancienne icône gardée");
+        }
+        iconProblem = why;
+    }
+
+    private byte[] readIcon() throws Exception {
+        if (iconSource.startsWith("http://") || iconSource.startsWith("https://")) {
+            HttpResponse<InputStream> r = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build()
+                    .send(HttpRequest.newBuilder(URI.create(iconSource)).timeout(Duration.ofSeconds(10)).GET().build(),
+                            HttpResponse.BodyHandlers.ofInputStream());
+            try (InputStream in = r.body()) {
+                if (r.statusCode() != 200) {
+                    throw new IllegalStateException("réponse HTTP " + r.statusCode()
+                            + (r.statusCode() == 404 ? " (aucun logo choisi sur le site ?)" : ""));
+                }
+                byte[] data = in.readNBytes(MAX_ICON_BYTES + 1);
+                if (data.length > MAX_ICON_BYTES) {
+                    throw new IllegalStateException("image de plus de 8 Mo");
+                }
+                return data;
+            }
+        }
+        Path file = Path.of(iconSource);
+        if (!file.isAbsolute() && dataDirectory != null) {
+            file = dataDirectory.resolve(file);
+        }
+        if (Files.size(file) > MAX_ICON_BYTES) {
+            throw new IllegalStateException("image de plus de 8 Mo");
+        }
+        return Files.readAllBytes(file);
+    }
+
+    /** N'importe quelle image -> 64×64 (exigé par Minecraft), proportions gardées, centrée */
+    static BufferedImage toIcon(BufferedImage src) {
+        BufferedImage out = new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB);
+        double scale = Math.min(64.0 / src.getWidth(), 64.0 / src.getHeight());
+        int w = Math.max(1, (int) Math.round(src.getWidth() * scale));
+        int h = Math.max(1, (int) Math.round(src.getHeight() * scale));
+        Graphics2D g = out.createGraphics();
+        try {
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+            g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g.drawImage(src, (64 - w) / 2, (64 - h) / 2, w, h, null);
+        } finally {
+            g.dispose();
+        }
+        return out;
     }
 
     @Subscribe

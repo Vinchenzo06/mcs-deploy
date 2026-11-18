@@ -92,6 +92,12 @@ public class Server {
     @Builder.Default
     private Boolean showNetworkRank = true;
 
+    // Protégé (lot 41, ex. le lobby IMG) : jamais supprimé, ni à la main ni après
+    // 6 mois sans démarrage (sudo mcs-protect sur le VPS)
+    @Column(name = "is_protected", nullable = false)
+    @Builder.Default
+    private Boolean isProtected = false;
+
     // Sauvegardes sur la machine (lot 30) : mot de passe du dépôt restic local,
     // et sa taille au dernier passage (comptée dans le quota disque du serveur)
     @Column(name = "local_backup_password", length = 64)

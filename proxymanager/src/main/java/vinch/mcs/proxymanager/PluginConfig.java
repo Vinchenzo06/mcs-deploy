@@ -28,6 +28,10 @@ public class PluginConfig {
     // Vides = désactivé.
     private String imgHost = "";
     private String imgLobby = "";
+    // Liste des serveurs du jeu pour l'adresse IMG (lot 41) : icône (fichier ou URL)
+    // et message (codes « & », \n = 2e ligne). Vides = ceux de Velocity.
+    private String imgIcon = "";
+    private String imgMotd = "";
 
     public static PluginConfig load(Path dataDirectory) throws IOException {
         Path configFile = dataDirectory.resolve("config.yml");
@@ -58,6 +62,8 @@ public class PluginConfig {
                 if (data.containsKey("ip-mask-key")) config.setIpMaskKey(String.valueOf(data.get("ip-mask-key")));
                 if (data.get("img-host") != null) config.setImgHost(String.valueOf(data.get("img-host")));
                 if (data.get("img-lobby") != null) config.setImgLobby(String.valueOf(data.get("img-lobby")));
+                if (data.get("img-icon") != null) config.setImgIcon(String.valueOf(data.get("img-icon")));
+                if (data.get("img-motd") != null) config.setImgMotd(String.valueOf(data.get("img-motd")));
             }
             return config;
         }

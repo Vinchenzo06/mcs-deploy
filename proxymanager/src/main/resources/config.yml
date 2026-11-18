@@ -22,3 +22,8 @@ ip-mask-key: ""
 # IMG (serveur MCS privé « pseudo/nom ») au lieu du lobby MCS. Vides = désactivé.
 img-host: ""
 img-lobby: ""
+# Liste des serveurs du jeu quand on y entre img-host : icône (fichier, chemin
+# relatif à ce dossier, ou URL ; n'importe quelle taille, réduite en 64×64) et
+# message (codes couleur « & », \n pour la 2e ligne). Vides = ceux de Velocity.
+img-icon: ""
+img-motd: ""

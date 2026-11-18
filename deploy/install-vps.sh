@@ -284,7 +284,8 @@ load_config() {
   : "${PORT_START:=25600}" "${PORT_END:=29999}" "${NODE_PORTS:=20}"
   : "${ENABLE_SSH_TUNNEL:=true}" "${SSH_TUNNEL_PORT:=2222}" "${WG_PORT:=51820}"
   : "${API_DOMAIN:=}" "${ACME_EMAIL:=}"
-  : "${IMG_HOST:=}" "${IMG_LOBBY:=}"
+  : "${IMG_HOST:=}" "${IMG_LOBBY:=}" "${IMG_ICON=http://127.0.0.1:3100/logo}"
+  : "${IMG_MOTD=&6&lInfiniteMoneyGlitch\\n&7Lobby de la team}"
   : "${SRC_API:=api}" "${SRC_PROXY:=proxymanager}" "${SRC_LOBBY:=lobby-plugin}"
   : "${QUOTA_DEFAULT:=1 6144 2}" "${QUOTA_VIP:=2 12288 4}"
   : "${QUOTA_PREMIUM:=2 16384 5}" "${QUOTA_ADMIN:=16 32768 32}"
@@ -849,6 +850,43 @@ SHEOF
   chmod 755 /usr/local/bin/mcs-node-owner
 
   # mcs-disk-quota : changer le quota disque d'un serveur
+  # mcs-protect : serveur protégé contre toute suppression (lot 41, ex. lobby IMG)
+  cat > /usr/local/bin/mcs-protect <<'SHEOF'
+#!/usr/bin/env bash
+# sudo mcs-protect                         liste des serveurs protégés
+# sudo mcs-protect <pseudo/nom> [on|off]   protège (on, défaut) ou non un serveur
+#   Protégé = jamais supprimé : ni par /mcs delete, ni après 6 mois sans démarrage.
+set -uo pipefail
+[[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
+psql=(runuser -u postgres -- psql -qtA -d mcs_db -v ON_ERROR_STOP=1)
+if [[ $# -eq 0 ]]; then
+  echo "Serveurs protégés :"
+  "${psql[@]}" -c "SELECT '  ' || p.minecraft_username || '/' || s.name FROM servers s
+                   JOIN players p ON p.id = s.owner_id WHERE s.is_protected ORDER BY 1"
+  exit 0
+fi
+ref=$1
+[[ "$ref" == ?*/?* ]] || { echo "Usage : sudo mcs-protect <pseudo/nom> [on|off]"; exit 1; }
+case "${2:-on}" in
+  on) val=true ;;
+  off) val=false ;;
+  *) echo "Usage : sudo mcs-protect <pseudo/nom> [on|off]"; exit 1 ;;
+esac
+id=$("${psql[@]}" -v owner="${ref%%/*}" -v name="${ref#*/}" -v val="$val" <<'SQL'
+UPDATE servers s SET is_protected = :val FROM players p
+WHERE p.id = s.owner_id AND lower(p.minecraft_username) = lower(:'owner') AND s.name = :'name'
+RETURNING s.id;
+SQL
+) || exit 1
+[[ -n "$id" ]] || { echo "Serveur $ref introuvable"; exit 1; }
+if [[ "$val" == true ]]; then
+  echo "✔ $ref (n°$id) protégé : il ne peut plus être supprimé"
+else
+  echo "✔ $ref (n°$id) n'est plus protégé"
+fi
+SHEOF
+  chmod 755 /usr/local/bin/mcs-protect
+
   cat > /usr/local/bin/mcs-disk-quota <<'SHEOF'
 #!/usr/bin/env bash
 # sudo mcs-disk-quota                  liste les serveurs et leur quota
@@ -1563,6 +1601,8 @@ mask-player-ips: true
 ip-mask-key: $IP_MASK_KEY
 img-host: "$IMG_HOST"
 img-lobby: "$IMG_LOBBY"
+img-icon: "$IMG_ICON"
+img-motd: "${IMG_MOTD//\"/\\\"}"
 EOF
   chown -R "$MC_USER:$MC_USER" "$VELOCITY_DIR"
 
@@ -1604,6 +1644,14 @@ EOF
   fi
   wait_port 8082 30 || warn "L'API locale du proxymanager (:8082) ne répond pas, vérifie ses logs"
   ok "Velocity en écoute sur :25565 (API plugin sur :8082)"
+  # Lot 41 : le lobby IMG n'est jamais supprimé (ni à la main, ni après 6 mois)
+  if [[ -n "$IMG_HOST" && -n "$IMG_LOBBY" ]]; then
+    if mcs-protect "$IMG_LOBBY" on >/dev/null 2>&1; then
+      ok "Entrée IMG : $IMG_HOST -> $IMG_LOBBY (protégé contre la suppression)"
+    else
+      warn "Lobby IMG $IMG_LOBBY introuvable : crée-le (/mcs create), puis sudo mcs-protect $IMG_LOBBY"
+    fi
+  fi
 }
 
 step_lobby() {
