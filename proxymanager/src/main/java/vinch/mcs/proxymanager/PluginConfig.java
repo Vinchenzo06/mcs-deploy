@@ -33,6 +33,11 @@ public class PluginConfig {
     private String imgIcon = "";
     private String imgMotd = "";
 
+    // Site IMG Farm DB (lot 43) : /link CODE lie un compte Minecraft à un compte du site.
+    // Vides = /link désactivé.
+    private String farmdbUrl = "";
+    private String farmdbToken = "";
+
     public static PluginConfig load(Path dataDirectory) throws IOException {
         Path configFile = dataDirectory.resolve("config.yml");
 
@@ -64,6 +69,8 @@ public class PluginConfig {
                 if (data.get("img-lobby") != null) config.setImgLobby(String.valueOf(data.get("img-lobby")));
                 if (data.get("img-icon") != null) config.setImgIcon(String.valueOf(data.get("img-icon")));
                 if (data.get("img-motd") != null) config.setImgMotd(String.valueOf(data.get("img-motd")));
+                if (data.get("farmdb-url") != null) config.setFarmdbUrl(String.valueOf(data.get("farmdb-url")));
+                if (data.get("farmdb-token") != null) config.setFarmdbToken(String.valueOf(data.get("farmdb-token")));
             }
             return config;
         }

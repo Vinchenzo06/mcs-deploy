@@ -27,3 +27,8 @@ img-lobby: ""
 # message (codes couleur « & », \n pour la 2e ligne). Vides = ceux de Velocity.
 img-icon: ""
 img-motd: ""
+
+# Site IMG Farm DB (lot 43) : /link CODE lie le compte Minecraft d'un joueur à son
+# compte du site. URL locale du site et jeton (= MC_API_TOKEN du site). Vides = désactivé.
+farmdb-url: ""
+farmdb-token: ""

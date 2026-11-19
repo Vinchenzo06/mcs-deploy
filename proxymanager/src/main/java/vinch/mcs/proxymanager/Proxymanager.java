@@ -287,6 +287,15 @@ public class Proxymanager {
                 new GotoCommand()
         );
 
+        // /link CODE : liaison du compte Minecraft au site IMG Farm DB (lot 43)
+        if (!config.getFarmdbUrl().isBlank() && config.getFarmdbToken().length() >= 32) {
+            commandManager.register(commandManager.metaBuilder("link").build(),
+                    new LinkCommand(logger, config.getFarmdbUrl(), config.getFarmdbToken()));
+            logger.info("/link actif vers {}", config.getFarmdbUrl());
+        } else if (!config.getFarmdbUrl().isBlank()) {
+            logger.warn("/link désactivé : farmdb-token absent ou trop court");
+        }
+
         // /mcs sur le proxy : disponible sur le lobby et sur tous les serveurs de jeu
         commandManager.register(
                 commandManager.metaBuilder("mcs").build(),

@@ -286,6 +286,7 @@ load_config() {
   : "${API_DOMAIN:=}" "${ACME_EMAIL:=}"
   : "${IMG_HOST:=}" "${IMG_LOBBY:=}" "${IMG_ICON=http://127.0.0.1:3100/logo}"
   : "${IMG_MOTD=&6&lInfiniteMoneyGlitch\\n&7Lobby de la team}"
+  : "${FARMDB_URL:=}"
   : "${SRC_API:=api}" "${SRC_PROXY:=proxymanager}" "${SRC_LOBBY:=lobby-plugin}"
   : "${QUOTA_DEFAULT:=1 6144 2}" "${QUOTA_VIP:=2 12288 4}"
   : "${QUOTA_PREMIUM:=2 16384 5}" "${QUOTA_ADMIN:=16 32768 32}"
@@ -302,7 +303,7 @@ load_config() {
     source "$SECRETS_FILE"
   fi
   local k
-  for k in DB_PASSWORD LOBBY_API_KEY VELOCITY_PLUGIN_KEY RCON_PASSWORD FORWARDING_SECRET IP_MASK_KEY LP_DB_PASSWORD BACKUP_VPS_HTTP_PASSWORD BACKUP_VPS_REPO_PASSWORD; do
+  for k in DB_PASSWORD LOBBY_API_KEY VELOCITY_PLUGIN_KEY RCON_PASSWORD FORWARDING_SECRET IP_MASK_KEY LP_DB_PASSWORD BACKUP_VPS_HTTP_PASSWORD BACKUP_VPS_REPO_PASSWORD FARMDB_TOKEN; do
     save_secret "$k" "${!k:-$(gen_secret)}"
   done
 
@@ -1603,6 +1604,8 @@ img-host: "$IMG_HOST"
 img-lobby: "$IMG_LOBBY"
 img-icon: "$IMG_ICON"
 img-motd: "${IMG_MOTD//\"/\\\"}"
+farmdb-url: "$FARMDB_URL"
+farmdb-token: $FARMDB_TOKEN
 EOF
   chown -R "$MC_USER:$MC_USER" "$VELOCITY_DIR"
 
