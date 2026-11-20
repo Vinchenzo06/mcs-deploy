@@ -54,6 +54,13 @@ public class ApiServer {
         logger.info("API locale du plugin démarrée sur 127.0.0.1:{}", port);
     }
 
+    /** Route ajoutée après le démarrage (lot 50 : /img/members pour le site IMG Farm DB) */
+    public void addContext(String path, HttpHandler handler) {
+        if (httpServer != null) {
+            httpServer.createContext(path, handler);
+        }
+    }
+
     public void stop() {
         if (httpServer != null) {
             httpServer.stop(0);

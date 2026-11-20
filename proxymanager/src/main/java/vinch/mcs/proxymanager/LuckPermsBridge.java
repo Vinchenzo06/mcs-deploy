@@ -6,7 +6,9 @@ import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.luckperms.api.LuckPerms;
 import net.luckperms.api.LuckPermsProvider;
 import net.luckperms.api.cacheddata.CachedMetaData;
+import net.luckperms.api.node.NodeType;
 import net.luckperms.api.node.types.InheritanceNode;
+import net.luckperms.api.node.types.MetaNode;
 
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -49,6 +51,37 @@ public class LuckPermsBridge implements RankSource {
                 user.data().add(node);
             } else {
                 user.data().remove(node);
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<Settings> settings(UUID uuid) {
+        return luckPerms.getUserManager().loadUser(uuid).thenApply(user -> {
+            Integer own = null;
+            for (MetaNode n : user.getNodes(NodeType.META)) {
+                if ("max-servers".equals(n.getMetaKey())) {
+                    own = parseOrNull(n.getMetaValue());
+                }
+            }
+            boolean adminGroup = false;
+            for (InheritanceNode n : user.getNodes(NodeType.INHERITANCE)) {
+                if ("admin".equalsIgnoreCase(n.getGroupName())) {
+                    adminGroup = true;
+                }
+            }
+            CachedMetaData meta = user.getCachedData().getMetaData();
+            boolean admin = user.getCachedData().getPermissionData().checkPermission("mcs.admin").asBoolean();
+            return new Settings(own, parse(meta.getMetaValue("max-servers"), 1), admin, adminGroup);
+        });
+    }
+
+    @Override
+    public CompletableFuture<Void> setMaxServers(UUID uuid, Integer maxServers) {
+        return luckPerms.getUserManager().modifyUser(uuid, user -> {
+            user.data().clear(NodeType.META.predicate(n -> "max-servers".equals(n.getMetaKey())));
+            if (maxServers != null) {
+                user.data().add(MetaNode.builder("max-servers", String.valueOf(maxServers)).build());
             }
         });
     }

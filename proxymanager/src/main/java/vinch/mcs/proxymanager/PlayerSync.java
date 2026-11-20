@@ -40,6 +40,11 @@ public class PlayerSync {
         return source != null;
     }
 
+    /** LuckPerms du proxy, ou null s'il n'est pas installé */
+    public RankSource source() {
+        return source;
+    }
+
     /**
      * Groupe LuckPerms "host" (titre ʜᴏsᴛ) d'un joueur, puis resynchronisation s'il
      * est en ligne. Renvoie false si LuckPerms n'est pas sur le proxy.

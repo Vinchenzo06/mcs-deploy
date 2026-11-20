@@ -17,4 +17,17 @@ public interface RankSource {
      */
     record Meta(int maxServers, int totalRamMb, int totalCpuCores, boolean admin, String rank, String prefixJson,
                 String nameColor, Integer backupIntervalHours, Integer backupKeepLast, Integer backupKeepWeekly) {}
+
+    /**
+     * Réglages d'un joueur modifiables depuis le site IMG Farm DB (lot 50) :
+     * ownMaxServers = méta « max-servers » posée sur le joueur lui-même (null = celle de son groupe),
+     * maxServers = valeur effective, admin = permission mcs.admin effective,
+     * adminGroup = le joueur est lui-même dans le groupe « admin ».
+     */
+    record Settings(Integer ownMaxServers, int maxServers, boolean admin, boolean adminGroup) {}
+
+    CompletableFuture<Settings> settings(UUID uuid);
+
+    /** null = retire la valeur propre au joueur (il reprend celle de son groupe) */
+    CompletableFuture<Void> setMaxServers(UUID uuid, Integer maxServers);
 }

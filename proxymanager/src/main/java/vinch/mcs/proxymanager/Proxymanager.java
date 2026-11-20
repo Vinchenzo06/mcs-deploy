@@ -303,6 +303,12 @@ public class Proxymanager {
                 imgGate.setMembers(farmdbMembers);
                 logger.info("Lobby IMG ouvert aux membres liés du site IMG Farm DB");
             }
+            // Lot 50 : réglages MCS des membres (serveurs max, admin) depuis le site
+            if (apiServer != null) {
+                apiServer.addContext("/img/members",
+                        new ImgMembersHandler(server, apiClient, playerSync, logger, config.getFarmdbToken()));
+                logger.info("Réglages des membres ouverts au site IMG Farm DB (127.0.0.1:{}/img/members)", config.getLocalApiPort());
+            }
         } else if (!config.getFarmdbUrl().isBlank()) {
             logger.warn("/link désactivé : farmdb-token absent ou trop court");
         }
