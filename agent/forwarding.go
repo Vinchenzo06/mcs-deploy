@@ -15,9 +15,7 @@ package main
 import (
 	"fmt"
 	"log"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -106,28 +104,26 @@ func ensureForwardingConfig(serverPath string, req CreateServerRequest) {
 	if !needsForwardingMods(req) {
 		return
 	}
-	dir := filepath.Join(serverPath, "config")
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := mkdirServer(serverPath, "config"); err != nil {
 		log.Printf("Forwarding du serveur %d : %v", req.ServerID, err)
 		return
 	}
-	_ = os.Chown(dir, containerUID, containerGID)
 	mode := strings.ToUpper(req.Forwarding)
 	var err error
 	switch mapServerType(req.Type) {
 	case "FABRIC":
-		err = setTomlKeys(filepath.Join(dir, "FabricProxy-Lite.toml"), "", map[string]string{
+		err = setTomlKeys(serverPath, "config/FabricProxy-Lite.toml", "", map[string]string{
 			"secret": tomlString(req.ForwardingSecret),
 		})
 	default:
 		if minor, _ := mcMinor(req.Version); minor <= 12 {
-			err = setForgeCfg(filepath.Join(dir, "proxy-compatible-forge.cfg"), map[string]string{
+			err = setForgeCfg(serverPath, "config/proxy-compatible-forge.cfg", map[string]string{
 				"B:enabled": "true",
 				"S:mode":    mode,
 				"S:secret":  req.ForwardingSecret,
 			})
 		} else {
-			err = setTomlKeys(filepath.Join(dir, "proxy-compatible-forge.toml"), "forwarding", map[string]string{
+			err = setTomlKeys(serverPath, "config/proxy-compatible-forge.toml", "forwarding", map[string]string{
 				"enabled": "true",
 				"mode":    tomlString(mode),
 				"secret":  tomlString(req.ForwardingSecret),
@@ -145,8 +141,8 @@ func tomlString(s string) string {
 
 // setTomlKeys remplace (ou ajoute) des clés d'un fichier TOML simple, dans une
 // section ("" = haut du fichier) ; le reste du fichier est gardé tel quel
-func setTomlKeys(path, section string, values map[string]string) error {
-	data, _ := os.ReadFile(path)
+func setTomlKeys(serverPath, rel, section string, values map[string]string) error {
+	data, _ := readServerFile(serverPath, rel)
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 	if len(data) == 0 {
 		lines = nil
@@ -202,12 +198,12 @@ func setTomlKeys(path, section string, values map[string]string) error {
 			lines = append(lines, missing...)
 		}
 	}
-	return writeOwned(path, strings.Join(lines, "\n")+"\n")
+	return writeServerFile(serverPath, rel, []byte(strings.Join(lines, "\n")+"\n"))
 }
 
 // setForgeCfg : fichier de config Forge 1.12 (« forwarding { S:mode=LEGACY } »)
-func setForgeCfg(path string, values map[string]string) error {
-	data, _ := os.ReadFile(path)
+func setForgeCfg(serverPath, rel string, values map[string]string) error {
+	data, _ := readServerFile(serverPath, rel)
 	text := string(data)
 	if !strings.Contains(text, "forwarding {") {
 		var b strings.Builder
@@ -216,7 +212,7 @@ func setForgeCfg(path string, values map[string]string) error {
 			fmt.Fprintf(&b, "    %s=%s\n", k, v)
 		}
 		b.WriteString("}\n\n")
-		return writeOwned(path, b.String()+text)
+		return writeServerFile(serverPath, rel, []byte(b.String()+text))
 	}
 	lines := strings.Split(text, "\n")
 	in := false
@@ -249,13 +245,5 @@ func setForgeCfg(path string, values map[string]string) error {
 		}
 		lines = append(lines[:end], append(missing, lines[end:]...)...)
 	}
-	return writeOwned(path, strings.Join(lines, "\n"))
-}
-
-func writeOwned(path, content string) error {
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
-		return err
-	}
-	_ = os.Chown(path, containerUID, containerGID)
-	return nil
+	return writeServerFile(serverPath, rel, []byte(strings.Join(lines, "\n")))
 }

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -103,15 +102,13 @@ func handleConsoleCommand(conn *websocket.Conn, commandId string, msg map[string
 // setServerProperty change (ou ajoute) une clé de server.properties sans toucher
 // au reste ; sans fichier (serveur jamais démarré), ne fait rien
 func setServerProperty(serverPath, key, value string) error {
-	file := filepath.Join(serverPath, "server.properties")
-	info, err := os.Stat(file)
-	if err != nil {
+	if _, err := statServerFile(serverPath, "server.properties"); err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	raw, err := os.ReadFile(file)
+	raw, err := readServerFile(serverPath, "server.properties")
 	if err != nil {
 		return err
 	}
@@ -133,6 +130,6 @@ func setServerProperty(serverPath, key, value string) error {
 			lines = append(lines, key+"="+value)
 		}
 	}
-	// Réécrit en place : le fichier garde son propriétaire (uid du conteneur)
-	return os.WriteFile(file, []byte(strings.Join(lines, "\n")), info.Mode().Perm())
+	// Réécrit en place (sans suivre de lien hors du dossier du serveur, lot 47)
+	return writeServerFile(serverPath, "server.properties", []byte(strings.Join(lines, "\n")))
 }

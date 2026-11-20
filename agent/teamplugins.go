@@ -15,10 +15,11 @@ import (
 	"strings"
 )
 
-// Plugins de la team IMG (lot 46) : avec chaque démarrage d'un serveur marqué « team »
-// (sudo mcs-team sur le VPS), l'API envoie les jars de la team (ex. img-farm). L'agent les
-// pose dans plugins/, les remplace s'ils ont changé, et retire ceux qu'il avait posés et
-// qui ne sont plus envoyés (liste dans plugins/.mcs-team-plugins).
+// Plugins de la team IMG (lot 46) : avec la création et chaque démarrage d'un serveur de la
+// team, l'API envoie les jars de la team (ex. img-farm). L'agent les pose dans plugins/, les
+// remplace s'ils ont changé, et retire ceux qu'il avait posés et qui ne sont plus envoyés.
+// Un jar posé par MCS puis supprimé par le propriétaire n'est plus jamais remis (lot 49).
+// Liste dans plugins/.mcs-team-plugins : « nom » = posé par MCS, « -nom » = refusé.
 //
 // Le dossier du serveur appartient au conteneur : tout passe par os.Root, qui refuse de
 // suivre un lien symbolique hors du dossier (l'agent tourne en root).
@@ -86,20 +87,37 @@ func syncTeamPlugins(serverPath string, serverID int64, wanted *[]teamPlugin) {
 	}
 	defer dir.Close()
 
-	// Plugins posés par MCS au démarrage précédent
+	// Plugins posés par MCS au démarrage précédent, et ceux que le propriétaire a supprimés
 	previous := map[string]bool{}
+	refused := map[string]bool{}
 	if f, err := dir.Open(teamPluginsList); err == nil {
 		sc := bufio.NewScanner(io.LimitReader(f, 64*1024))
 		for sc.Scan() {
-			if name := strings.TrimSpace(sc.Text()); teamPluginName.MatchString(name) {
-				previous[name] = true
+			line := strings.TrimSpace(sc.Text())
+			if name, ok := strings.CutPrefix(line, "-"); ok && teamPluginName.MatchString(name) {
+				refused[name] = true
+			} else if teamPluginName.MatchString(line) {
+				previous[line] = true
 			}
 		}
 		f.Close()
 	}
 
-	var names []string
+	var names, stillRefused []string
 	for _, p := range *wanted {
+		if refused[p.Name] {
+			stillRefused = append(stillRefused, p.Name)
+			continue
+		}
+		if previous[p.Name] {
+			if _, err := dir.Lstat(p.Name); errors.Is(err, fs.ErrNotExist) {
+				// Posé par MCS puis supprimé par le propriétaire : il n'en veut pas
+				log.Printf("Serveur %d : %s supprimé par le propriétaire, pas réinstallé", serverID, p.Name)
+				delete(previous, p.Name)
+				stillRefused = append(stillRefused, p.Name)
+				continue
+			}
+		}
 		if !teamPluginName.MatchString(p.Name) {
 			log.Printf("Plugins de la team, serveur %d : nom refusé %q", serverID, p.Name)
 			continue
@@ -137,11 +155,15 @@ func syncTeamPlugins(serverPath string, serverID int64, wanted *[]teamPlugin) {
 		}
 	}
 
-	if len(names) == 0 {
+	lines := append([]string{}, names...)
+	for _, n := range stillRefused {
+		lines = append(lines, "-"+n)
+	}
+	if len(lines) == 0 {
 		_ = dir.Remove(teamPluginsList)
 		return
 	}
-	if err := writeInRoot(dir, teamPluginsList, []byte(strings.Join(names, "\n")+"\n")); err != nil {
+	if err := writeInRoot(dir, teamPluginsList, []byte(strings.Join(lines, "\n")+"\n")); err != nil {
 		log.Printf("Plugins de la team, serveur %d : %v", serverID, err)
 	}
 }

@@ -289,6 +289,7 @@ public class ServerService {
                 .allocatedCpuCores(request.getCpuCores())
                 .allocatedStorageMb(storageMb)
                 .status(ServerStatus.CREATING)
+                .isTeam(Boolean.TRUE.equals(request.getTeam()))
                 .build();
 
         server = serverRepository.save(server);

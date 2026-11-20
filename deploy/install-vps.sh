@@ -896,7 +896,8 @@ SHEOF
 # sudo mcs-team <pseudo/nom> [on|off]   ajoute (on, défaut) ou retire un serveur de la team
 #   Un serveur de la team (Paper ou Spigot) reçoit à chaque démarrage les plugins de
 #   /var/lib/mcs/jars/team/ (ex. img-farm), mis à jour s'ils ont changé ; retiré de la
-#   team, ils sont enlevés au démarrage suivant. Ajouté = aussi protégé (mcs-protect).
+#   team, ils sont enlevés au démarrage suivant. Jamais supprimé pour inactivité, mais son
+#   propriétaire peut le supprimer. Un serveur créé par l'adresse IMG l'est d'office (lot 49).
 set -uo pipefail
 [[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
 psql=(runuser -u postgres -- psql -qtA -d mcs_db -v ON_ERROR_STOP=1)
@@ -920,7 +921,7 @@ case "${2:-on}" in
   *) echo "Usage : sudo mcs-team <pseudo/nom> [on|off]"; exit 1 ;;
 esac
 row=$("${psql[@]}" -F ' ' -v owner="${ref%%/*}" -v name="${ref#*/}" -v val="$val" <<'SQL'
-UPDATE servers s SET is_team = :val, is_protected = (s.is_protected OR :val) FROM players p
+UPDATE servers s SET is_team = :val FROM players p
 WHERE p.id = s.owner_id AND lower(p.minecraft_username) = lower(:'owner') AND s.name = :'name'
 RETURNING s.id, s.server_type;
 SQL
@@ -928,13 +929,12 @@ SQL
 [[ -n "$row" ]] || { echo "Serveur $ref introuvable"; exit 1; }
 id=${row%% *}; type=${row#* }
 if [[ "$val" == true ]]; then
-  echo "✔ $ref (n°$id) fait partie de la team (et il est protégé)"
+  echo "✔ $ref (n°$id) fait partie de la team (jamais supprimé pour inactivité)"
   [[ "$type" == PAPER || "$type" == SPIGOT ]] \
     || echo "  ! Serveur $type : les plugins de la team ne s'installent que sur Paper ou Spigot"
   echo "  Redémarre-le pour installer les plugins de la team."
 else
   echo "✔ $ref (n°$id) ne fait plus partie de la team : ses plugins de la team partent au prochain démarrage"
-  echo "  (toujours protégé : sudo mcs-protect $ref off pour l'enlever)"
 fi
 SHEOF
   chmod 755 /usr/local/bin/mcs-team

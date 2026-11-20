@@ -172,11 +172,11 @@ public class ApiClient {
 
     /** replaceDeleted : accepte de supprimer les sauvegardes d'un serveur supprimé qui occupe une place */
     public CompletableFuture<JsonNode> createServer(long ownerPlayerId, String name, String type, String version,
-                                                    int ramMb, int cpuCores, boolean replaceDeleted) {
+                                                    int ramMb, int cpuCores, boolean replaceDeleted, boolean team) {
         return call("POST", "/api/v1/servers", java.util.Map.of(
                 "ownerPlayerId", ownerPlayerId, "name", name, "displayName", name, "serverType", type,
                 "minecraftVersion", version, "ramMb", ramMb, "cpuCores", cpuCores, "storageMb", 0,
-                "replaceDeleted", replaceDeleted),
+                "replaceDeleted", replaceDeleted, "team", team),
                 Duration.ofMinutes(2));
     }
 

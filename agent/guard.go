@@ -18,7 +18,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -96,7 +95,7 @@ func watchServers(dataPath string, events chan<- serverEvent, stop <-chan struct
 				st.acct = acctState{}
 			}
 			if tick%30 == 0 { // toutes les 10 min
-				trimOldLogs(filepath.Join(serverDataPath(dataPath, id), "logs"))
+				trimOldLogs(serverDataPath(dataPath, id))
 			}
 		}
 		for id, st := range states {
@@ -141,8 +140,8 @@ func guardServer(dataPath string, id int64, state string, st *guardState, events
 	}
 
 	// Journal qui explose
-	logFile := filepath.Join(serverDataPath(dataPath, id), "logs", "latest.log")
-	info, err := os.Stat(logFile)
+	serverPath := serverDataPath(dataPath, id)
+	info, err := statServerFile(serverPath, "logs/latest.log")
 	if err != nil {
 		st.logSize = -1
 		return
@@ -157,7 +156,7 @@ func guardServer(dataPath string, id int64, state string, st *guardState, events
 			detail = fmt.Sprintf("journal +%d Mo en %d s (%d Mo au total)", growth>>20, int(guardInterval.Seconds()), size>>20)
 		}
 		stopGuarded(id, "flood", detail, events)
-		if err := keepTail(logFile, floodKeepBytes); err != nil {
+		if err := keepTail(serverPath, "logs/latest.log", floodKeepBytes); err != nil {
 			log.Printf("Serveur %d : réduction du journal impossible : %v", id, err)
 		} else {
 			log.Printf("Serveur %d : journal ramené à son dernier Mo", id)
@@ -190,9 +189,15 @@ func stopGuarded(id int64, kind, detail string, events chan<- serverEvent) {
 	}
 }
 
-// keepTail ne garde que la fin d'un fichier (serveur arrêté)
-func keepTail(path string, keep int64) error {
-	f, err := os.Open(path)
+// keepTail ne garde que la fin d'un fichier du serveur (serveur arrêté) ; sans suivre
+// de lien hors du dossier du serveur (lot 47)
+func keepTail(serverPath, rel string, keep int64) error {
+	root, err := os.OpenRoot(serverPath)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	f, err := root.Open(rel)
 	if err != nil {
 		return err
 	}
@@ -209,27 +214,28 @@ func keepTail(path string, keep int64) error {
 		f.Close()
 		return err
 	}
-	tmp := path + ".mcs-tail"
-	out, err := os.Create(tmp)
+	tail, err := io.ReadAll(io.LimitReader(f, keep))
+	f.Close()
 	if err != nil {
-		f.Close()
 		return err
 	}
-	_, _ = out.WriteString("[MCS] Journal raccourci : le serveur écrivait des erreurs en boucle, seule la fin est gardée.\n")
-	_, cerr := io.Copy(out, f)
-	f.Close()
-	out.Close()
-	if cerr != nil {
-		os.Remove(tmp)
-		return cerr
-	}
-	_ = os.Chown(tmp, containerUID, containerGID)
-	return os.Rename(tmp, path)
+	head := []byte("[MCS] Journal raccourci : le serveur écrivait des erreurs en boucle, seule la fin est gardée.\n")
+	return writeInRoot(root, rel, append(head, tail...))
 }
 
 // trimOldLogs : journaux compressés au-delà de 300 Mo, les plus anciens partent
-func trimOldLogs(dir string) {
-	entries, err := os.ReadDir(dir)
+func trimOldLogs(serverPath string) {
+	root, err := os.OpenRoot(serverPath)
+	if err != nil {
+		return
+	}
+	defer root.Close()
+	d, err := root.Open("logs")
+	if err != nil {
+		return
+	}
+	entries, err := d.ReadDir(-1)
+	d.Close()
 	if err != nil {
 		return
 	}
@@ -248,7 +254,7 @@ func trimOldLogs(dir string) {
 		if err != nil {
 			continue
 		}
-		files = append(files, file{filepath.Join(dir, e.Name()), info.Size(), info.ModTime()})
+		files = append(files, file{"logs/" + e.Name(), info.Size(), info.ModTime()})
 		total += info.Size()
 	}
 	if total <= oldLogsMaxBytes {
@@ -259,7 +265,7 @@ func trimOldLogs(dir string) {
 		if total <= oldLogsMaxBytes {
 			break
 		}
-		if os.Remove(f.path) == nil {
+		if root.Remove(f.path) == nil {
 			total -= f.size
 		}
 	}

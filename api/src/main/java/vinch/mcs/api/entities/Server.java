@@ -98,8 +98,9 @@ public class Server {
     @Builder.Default
     private Boolean isProtected = false;
 
-    // Serveur de la team IMG (lot 46, sudo mcs-team) : reçoit les plugins de la team
-    // (/var/lib/mcs/jars/team/*.jar, ex. img-farm) à chaque démarrage
+    // Serveur de la team IMG (lot 46, sudo mcs-team ; lot 49 : automatique à la création
+    // par l'entrée IMG ou le site) : reçoit les plugins de la team (/var/lib/mcs/jars/team/*.jar,
+    // ex. img-farm) à chaque démarrage ; jamais supprimé pour inactivité
     @Column(name = "is_team", nullable = false)
     @Builder.Default
     private Boolean isTeam = false;

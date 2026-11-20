@@ -35,4 +35,6 @@ public class CreateServerRequest {
     private Long forceNodeId;
     // Accepte de supprimer les sauvegardes d'un serveur supprimé qui occupe encore une place
     private Boolean replaceDeleted;
+    // Serveur de la team IMG (lot 49) : créé depuis l'entrée IMG ou le site IMG Farm DB
+    private Boolean team;
 }

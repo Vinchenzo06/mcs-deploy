@@ -237,6 +237,13 @@ seulement). Les serveurs de jeu n'y sont **jamais** branchés : leur propriétai
 fichiers, donc au mot de passe. Titre d'un groupe : `lp group vip meta setprefix 20 "&aᴠɪᴘ "`
 (dans `sudo mcs-rcon`). L'étape `bootstrap` ne réécrit plus les quotas et préfixes déjà réglés.
 
+## Entrée IMG et site IMG Farm DB
+
+- `img.asearia.ca` mène au lobby IMG (`IMG_HOST`, `IMG_LOBBY` dans `mcs.env`), protégé contre la suppression.
+- Y entrent : les invités du lobby (`/mcs invite`) **et** les membres du site IMG Farm DB qui ont lié leur
+  compte Minecraft (`/link`) et ne sont pas bloqués sur le site (lot 48 ; réponse du site gardée 60 s).
+  Bloquer un membre sur le site lui ferme le lobby IMG (sauf s'il y est aussi invité).
+
 ## Sessions de farm IMG (plugin img-farm)
 
 Pour la team IMG seulement, quand `FARMDB_URL` est réglé. Le plugin Paper `img-farm` mesure en jeu
@@ -248,12 +255,14 @@ complète (Farming → Mes sessions).
   le VPS. Un message venant d'un client est ignoré ; 20 requêtes par minute et par joueur au maximum.
 - `sudo mcs-deploy velocity` compile le plugin (Java 21, API Paper 1.21.4 : serveurs Paper 1.21 ou plus
   récents) et le pose dans `/var/lib/mcs/jars/team/`, le dossier des **plugins de la team**.
-- **Serveurs de la team** (lot 46) : `sudo mcs-team pseudo/nom` (sans argument : la liste). À chaque
-  démarrage d'un serveur Paper ou Spigot de la team, l'API envoie les plugins de la team à l'agent, qui
-  les pose dans `plugins/`, les remplace s'ils ont changé et retire ceux qu'il avait posés et qui ne
-  sont plus dans le dossier. `sudo mcs-team pseudo/nom off` : retirés au démarrage suivant. Un serveur
-  ajouté à la team est aussi protégé (`mcs-protect`). Plus de copie à la main : une nouvelle version
-  arrive au prochain redémarrage.
+- **Serveurs de la team** (lots 46 et 49) : un serveur créé avec `/mcs create` par un joueur entré par
+  `img.asearia.ca` en fait partie d'office ; sinon `sudo mcs-team pseudo/nom` (sans argument : la liste,
+  `off` pour le retirer). Un serveur de la team n'est **jamais supprimé pour inactivité**, mais son
+  propriétaire peut le supprimer normalement (seul le lobby IMG est protégé, `mcs-protect`).
+- À la création et à chaque démarrage d'un serveur Paper ou Spigot de la team, l'API envoie les plugins de
+  la team à l'agent, qui les pose dans `plugins/`, les remplace s'ils ont changé et retire ceux qu'il avait
+  posés et qui ne sont plus dans le dossier. Une nouvelle version arrive au prochain redémarrage. Un jar
+  posé par MCS que le propriétaire supprime de `plugins/` n'est plus remis (il n'en veut pas).
 - En jeu (compte lié avec `/link`) : `/farm start <item> [30m | 640]`, `/farm auto <item> …` en
   regardant le coffre de collecte, `/farm construction [base | module]`, `/farm pause | reprendre |
   stop | annuler`. À la fin : choix du type, puis **Envoyer au site** ou **Jeter**.

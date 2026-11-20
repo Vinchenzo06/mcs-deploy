@@ -308,8 +308,9 @@ public class ParkingService {
         List<Long> delete = new ArrayList<>();
         tx().executeWithoutResult(x -> {
             for (Server s : serverRepository.findAll()) {
+                // Protégés (lobby IMG) et serveurs de la team (lot 49) : jamais supprimés pour inactivité
                 if (s.getStatus() != ServerStatus.STOPPED || backupService.isBusy(s.getId())
-                        || Boolean.TRUE.equals(s.getIsProtected())) {
+                        || Boolean.TRUE.equals(s.getIsProtected()) || Boolean.TRUE.equals(s.getIsTeam())) {
                     continue;
                 }
                 LocalDateTime last = s.getLastStartedAt() != null ? s.getLastStartedAt() : s.getCreatedAt();

@@ -143,6 +143,23 @@ public class ImgGate {
                 .isPresent();
     }
 
+    /** Membres du site (lot 48) : null = seules les invitations comptent */
+    private volatile FarmdbMembers members;
+
+    public void setMembers(FarmdbMembers members) {
+        this.members = members;
+    }
+
+    /** Ce serveur Velocity est-il le lobby IMG ? */
+    public boolean isLobby(String velocityName) {
+        String name = lobbyVelocityName;
+        if (name == null) {
+            fetchLobby();
+            name = lobbyVelocityName;
+        }
+        return name != null && name.equals(velocityName);
+    }
+
     private Lobby fetchLobby() {
         try {
             JsonNode s = api.getServerByUsernameAndName(ownerName, lobbyName).get(5, TimeUnit.SECONDS);
@@ -193,19 +210,28 @@ public class ImgGate {
             logger.warn("Profil MCS de {} : {}", player.getUsername(), e.getMessage());
         }
 
-        boolean allowed;
+        // Accès : invité sur le lobby IMG (MCS) ou membre lié du site IMG Farm DB (lot 48)
+        boolean allowed = false;
+        boolean checked = false;
         try {
             JsonNode answer = api.checkAccess(lobby.velocityName(), player.getUniqueId()).get(4, TimeUnit.SECONDS);
             allowed = answer.path("allowed").asBoolean(false);
+            checked = true;
         } catch (Exception e) {
             logger.warn("Accès de {} au lobby IMG impossible à vérifier : {}", player.getUsername(), e.getMessage());
+        }
+        if (!allowed && members != null && members.isMember(player.getUniqueId())) {
+            allowed = true;
+            checked = true;
+        }
+        if (!checked) {
             player.disconnect(msg("IMG » Vérification d'accès impossible pour le moment, réessaie."));
             return;
         }
         if (!allowed) {
-            logger.info("{} refusé à l'entrée IMG (pas invité sur {})", player.getUsername(), lobby.velocityName());
+            logger.info("{} refusé à l'entrée IMG (ni invité sur {}, ni membre lié du site)", player.getUsername(), lobby.velocityName());
             player.disconnect(msg("IMG » Cette adresse est réservée aux membres de la team IMG.\n"
-                    + "Demande une invitation, puis reconnecte-toi."));
+                    + "Membre ? Va sur play.asearia.ca et tape /link avec le code de ton profil sur le site, puis reviens."));
             return;
         }
 

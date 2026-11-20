@@ -57,6 +57,7 @@ public class Proxymanager {
     private ApiServer apiServer;
     private PlayerSync playerSync;
     private ImgGate imgGate;
+    private FarmdbMembers farmdbMembers;
 
     // Faux tant que le masquage des IP (s'il est demandé) n'est pas en place :
     // aucun serveur joueur n'est alors enregistré (fail-closed)
@@ -296,6 +297,12 @@ public class Proxymanager {
             server.getChannelRegistrar().register(FarmRelay.CHANNEL);
             server.getEventManager().register(this, new FarmRelay(logger, config.getFarmdbUrl(), config.getFarmdbToken()));
             logger.info("Relais img:farm actif (sessions de farm)");
+            // Lot 48 : les membres liés du site entrent dans le lobby IMG sans invitation
+            farmdbMembers = new FarmdbMembers(logger, config.getFarmdbUrl(), config.getFarmdbToken());
+            if (imgGate != null && imgGate.enabled()) {
+                imgGate.setMembers(farmdbMembers);
+                logger.info("Lobby IMG ouvert aux membres liés du site IMG Farm DB");
+            }
         } else if (!config.getFarmdbUrl().isBlank()) {
             logger.warn("/link désactivé : farmdb-token absent ou trop court");
         }
@@ -303,7 +310,7 @@ public class Proxymanager {
         // /mcs sur le proxy : disponible sur le lobby et sur tous les serveurs de jeu
         commandManager.register(
                 commandManager.metaBuilder("mcs").build(),
-                new McsCommand(server, apiClient, playerSync, logger)
+                mcsCommand()
         );
     }
 
@@ -409,12 +416,33 @@ public class Proxymanager {
                 return;
             }
             reason = answer.path("reason").asText("Accès refusé.");
+            if (imgMember(name, player)) {
+                return;
+            }
         } catch (Exception e) {
             logger.warn("Contrôle d'accès de {} vers {} impossible : {}", player.getUsername(), name, e.getMessage());
             reason = "Vérification d'accès impossible pour le moment, réessaie.";
+            if (imgMember(name, player)) {
+                return;
+            }
         }
         event.setResult(ServerPreConnectEvent.ServerResult.denied());
         player.sendMessage(Component.text("MCS » ✖ " + reason).color(NamedTextColor.RED));
+    }
+
+    /** /mcs ; lot 49 : créé par un joueur entré par l'adresse IMG = serveur de la team */
+    private McsCommand mcsCommand() {
+        McsCommand cmd = new McsCommand(server, apiClient, playerSync, logger);
+        if (imgGate != null && imgGate.enabled()) {
+            cmd.setTeamCreator(imgGate::isImgPlayer);
+        }
+        return cmd;
+    }
+
+    /** Lot 48 : le lobby IMG est ouvert aux membres liés du site, en plus des invités */
+    private boolean imgMember(String velocityName, Player player) {
+        return farmdbMembers != null && imgGate != null && imgGate.enabled()
+                && imgGate.isLobby(velocityName) && farmdbMembers.isMember(player.getUniqueId());
     }
 
     @Subscribe

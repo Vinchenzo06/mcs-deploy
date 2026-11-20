@@ -94,6 +94,8 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 	}
 
 	ensureForwardingConfig(serverPath, req)
+	// Serveur de la team (lot 49) : plugins posés avant le tout premier démarrage
+	syncTeamPlugins(serverPath, req.ServerID, req.TeamPlugins)
 	args := runArgs(serverPath, req, "run", "-d")
 	out, err := exec.Command("docker", args...).CombinedOutput()
 	if err != nil {
@@ -147,7 +149,7 @@ func isBukkit(t string) bool {
 
 // bungeecordReady : spigot.yml existe et le forwarding y est déjà activé
 func bungeecordReady(serverPath string) bool {
-	data, err := os.ReadFile(filepath.Join(serverPath, "spigot.yml"))
+	data, err := readServerFile(serverPath, "spigot.yml")
 	if err != nil {
 		return false
 	}
@@ -314,20 +316,18 @@ func fileExists(path string) bool {
 // configureBungeecord modifie spigot.yml et server.properties pour le mode legacy
 func configureBungeecord(serverPath string) error {
 	// Modifier spigot.yml : settings.bungeecord = true
-	spigotPath := filepath.Join(serverPath, "spigot.yml")
-	if err := setYamlValue(spigotPath, "settings.bungeecord", "true"); err != nil {
+	if err := setYamlValue(serverPath, "spigot.yml", "settings.bungeecord", "true"); err != nil {
 		return fmt.Errorf("spigot.yml : %w", err)
 	}
 
 	// Modifier server.properties
-	propsPath := filepath.Join(serverPath, "server.properties")
-	if err := setPropertyValue(propsPath, "online-mode", "false"); err != nil {
+	if err := setPropertyValue(serverPath, "server.properties", "online-mode", "false"); err != nil {
 		return fmt.Errorf("server.properties online-mode : %w", err)
 	}
-	if err := setPropertyValue(propsPath, "enforce-secure-profile", "false"); err != nil {
+	if err := setPropertyValue(serverPath, "server.properties", "enforce-secure-profile", "false"); err != nil {
 		return fmt.Errorf("server.properties enforce-secure-profile : %w", err)
 	}
-	if err := setPropertyValue(propsPath, "prevent-proxy-connections", "false"); err != nil {
+	if err := setPropertyValue(serverPath, "server.properties", "prevent-proxy-connections", "false"); err != nil {
 		return fmt.Errorf("server.properties prevent-proxy-connections : %w", err)
 	}
 
@@ -335,8 +335,8 @@ func configureBungeecord(serverPath string) error {
 }
 
 // setPropertyValue modifie ou ajoute une ligne clé=valeur dans server.properties
-func setPropertyValue(path, key, value string) error {
-	data, err := os.ReadFile(path)
+func setPropertyValue(serverPath, rel, key, value string) error {
+	data, err := readServerFile(serverPath, rel)
 	if err != nil {
 		return err
 	}
@@ -355,13 +355,13 @@ func setPropertyValue(path, key, value string) error {
 		lines = append(lines, key+"="+value)
 	}
 
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0644)
+	return writeServerFile(serverPath, rel, []byte(strings.Join(lines, "\n")))
 }
 
 // setYamlValue modifie une valeur dans un fichier YAML simple (sans préserver les commentaires)
 // Approche simple : on cherche la ligne qui commence par la clé et on modifie sa valeur
-func setYamlValue(path, dotPath, value string) error {
-	data, err := os.ReadFile(path)
+func setYamlValue(serverPath, rel, dotPath, value string) error {
+	data, err := readServerFile(serverPath, rel)
 	if err != nil {
 		return err
 	}
@@ -397,7 +397,7 @@ func setYamlValue(path, dotPath, value string) error {
 		// On est dans la section parent et on cherche la clé
 		if insideParent && strings.HasPrefix(trimmed, key+":") {
 			lines[i] = strings.Repeat(" ", indent) + key + ": " + value
-			return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0644)
+			return writeServerFile(serverPath, rel, []byte(strings.Join(lines, "\n")))
 		}
 	}
 

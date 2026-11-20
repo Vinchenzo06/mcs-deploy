@@ -43,6 +43,13 @@ public class McsCommand implements SimpleCommand {
     private final PlayerSync playerSync;
     private final Logger logger;
 
+    /** Lot 49 : un serveur créé par un joueur entré par l'adresse IMG est un serveur de la team */
+    private java.util.function.Predicate<Player> teamCreator = p -> false;
+
+    public void setTeamCreator(java.util.function.Predicate<Player> teamCreator) {
+        this.teamCreator = teamCreator;
+    }
+
     public McsCommand(ProxyServer server, ApiClient apiClient, PlayerSync playerSync, Logger logger) {
         this.server = server;
         this.apiClient = apiClient;
@@ -506,11 +513,12 @@ public class McsCommand implements SimpleCommand {
 
         final int finalRamMb = ramMb;
         final int finalCpuCores = cpuCores;
+        final boolean team = teamCreator.test(player);
 
         playerSync.sync(player)
                 .thenCompose(v -> apiClient.getPlayerByUuid(player.getUniqueId()))
                 .thenCompose(playerInfo -> apiClient.createServer(
-                        playerInfo.get("id").asLong(), name, type, version, finalRamMb, finalCpuCores, replaceDeleted))
+                        playerInfo.get("id").asLong(), name, type, version, finalRamMb, finalCpuCores, replaceDeleted, team))
                 .whenComplete((result, error) -> run(() -> {
                     if (!player.isActive()) {
                         return;
@@ -541,6 +549,12 @@ public class McsCommand implements SimpleCommand {
                     player.sendMessage(Component.text("   " + capitalize(type) + " " + version
                             + "  ·  RAM " + size(finalRamMb) + "  ·  " + cores(finalCpuCores)
                             + (storage > 0 ? "  ·  Disque " + size(storage) : ""), NamedTextColor.GRAY));
+                    if (team) {
+                        player.sendMessage(Component.text("   Serveur de la team IMG"
+                                + ("PAPER".equals(type) || "SPIGOT".equals(type)
+                                        ? " : plugin img-farm installé (/farm). Pour t'en passer, supprime-le de plugins/."
+                                        : "."), NamedTextColor.GOLD));
+                    }
                     player.sendMessage(buttons(joinButton(serverName), infoButton(serverName)));
                 }));
     }
