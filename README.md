@@ -235,6 +235,26 @@ seulement). Les serveurs de jeu n'y sont **jamais** branchés : leur propriétai
 fichiers, donc au mot de passe. Titre d'un groupe : `lp group vip meta setprefix 20 "&aᴠɪᴘ "`
 (dans `sudo mcs-rcon`). L'étape `bootstrap` ne réécrit plus les quotas et préfixes déjà réglés.
 
+## Sessions de farm IMG (plugin img-farm)
+
+Pour la team IMG seulement, quand `FARMDB_URL` est réglé. Le plugin Paper `img-farm` mesure en jeu
+une session de farm (ou le temps d'une construction) et l'envoie au site IMG Farm DB, où le membre la
+complète (Farming → Mes sessions).
+
+- Le serveur de jeu n'a **aucun jeton** et ne joint pas le site : le plugin envoie un message au proxy
+  (canal `img:farm`), qui ajoute l'UUID réel du joueur et le nom du serveur, puis appelle le site sur
+  le VPS. Un message venant d'un client est ignoré ; 20 requêtes par minute et par joueur au maximum.
+- `sudo mcs-deploy velocity` compile le plugin dans `/var/lib/mcs/jars/img-farm/img-farm.jar`
+  (Java 21, API Paper 1.21.4 : serveurs Paper 1.21 ou plus récents).
+- Installation, pour un serveur Paper de la team :
+  1. sur le VPS, `sudo mcs-protect pseudo/nom on` (il ne sera jamais supprimé) : la commande affiche
+     son numéro ;
+  2. copie le jar dans `/opt/mcs-data/servers/<numéro>/plugins/` sur la machine qui l'héberge ;
+  3. redémarre le serveur.
+- En jeu (compte lié avec `/link`) : `/farm start <item> [30m | 640]`, `/farm auto <item> …` en
+  regardant le coffre de collecte, `/farm construction [base | module]`, `/farm pause | reprendre |
+  stop | annuler`. À la fin : choix du type, puis **Envoyer au site** ou **Jeter**.
+
 ## Sauvegardes
 
 Un **serveur de sauvegarde** (chez toi) garde des sauvegardes chiffrées (restic) de tous

@@ -288,6 +288,7 @@ load_config() {
   : "${IMG_MOTD=&6&lInfiniteMoneyGlitch\\n&7Lobby de la team}"
   : "${FARMDB_URL:=}"
   : "${SRC_API:=api}" "${SRC_PROXY:=proxymanager}" "${SRC_LOBBY:=lobby-plugin}"
+  : "${SRC_IMGFARM:=img-farm-plugin}"
   : "${QUOTA_DEFAULT:=1 6144 2}" "${QUOTA_VIP:=2 12288 4}"
   : "${QUOTA_PREMIUM:=2 16384 5}" "${QUOTA_ADMIN:=16 32768 32}"
 
@@ -1656,6 +1657,16 @@ EOF
       ok "Entrée IMG : $IMG_HOST -> $IMG_LOBBY (protégé contre la suppression)"
     else
       warn "Lobby IMG $IMG_LOBBY introuvable : crée-le (/mcs create), puis sudo mcs-protect $IMG_LOBBY"
+    fi
+  fi
+  # Lot 44 : plugin img-farm (sessions de farm des serveurs de la team, relayées par le proxy).
+  # Compilé ici pour être copié dans plugins/ des serveurs de la team ; un échec ne bloque pas le proxy.
+  if [[ -n "$FARMDB_URL" ]]; then
+    if ( build_jar "$SRC_IMGFARM" "$JARS_DIR/img-farm/img-farm.jar" ); then
+      chmod 644 "$JARS_DIR/img-farm/img-farm.jar"
+      ok "Plugin img-farm : $JARS_DIR/img-farm/img-farm.jar (à copier dans plugins/ des serveurs de la team)"
+    else
+      warn "Plugin img-farm non compilé (voir ci-dessus) : le proxy fonctionne quand même"
     fi
   fi
 }

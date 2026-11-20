@@ -1,0 +1,10 @@
+name: ImgFarm
+version: ${project.version}
+main: vinch.img.farm.ImgFarmPlugin
+api-version: '1.21'
+authors: [IMG]
+description: Sessions de farm mesurées en jeu, envoyées au site IMG Farm DB par le proxy
+commands:
+  farm:
+    description: Mesurer une session de farm ou de construction pour le site de la team
+    usage: /farm

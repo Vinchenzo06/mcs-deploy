@@ -292,6 +292,10 @@ public class Proxymanager {
             commandManager.register(commandManager.metaBuilder("link").build(),
                     new LinkCommand(logger, config.getFarmdbUrl(), config.getFarmdbToken()));
             logger.info("/link actif vers {}", config.getFarmdbUrl());
+            // Sessions de farm du plugin img-farm (lot 44) : canal img:farm -> site
+            server.getChannelRegistrar().register(FarmRelay.CHANNEL);
+            server.getEventManager().register(this, new FarmRelay(logger, config.getFarmdbUrl(), config.getFarmdbToken()));
+            logger.info("Relais img:farm actif (sessions de farm)");
         } else if (!config.getFarmdbUrl().isBlank()) {
             logger.warn("/link désactivé : farmdb-token absent ou trop court");
         }
