@@ -65,7 +65,8 @@ public class PlayerController {
                     request.getNameColor(),
                     request.getBackupIntervalHours(),
                     request.getBackupKeepLast(),
-                    request.getBackupKeepWeekly()
+                    request.getBackupKeepWeekly(),
+                    request.getImgMember()
             );
             return ResponseEntity.ok(Map.of(
                     "success", true,

@@ -633,6 +633,7 @@ public class McsCommand implements SimpleCommand {
             case "proprietaire" -> "propriétaire";
             case "gerant" -> "gérant";
             case "hebergeur" -> "hébergeur (ta machine)";
+            case "equipe" -> "équipe IMG";
             default -> relation;
         };
     }

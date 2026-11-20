@@ -248,6 +248,11 @@ fichiers, donc au mot de passe. Titre d'un groupe : `lp group vip meta setprefix
 - **Rôle IMG** (lot 51) : groupe LuckPerms `img` (poids 40 : au-dessus de default/vip/premium, sous host et
   admin), donné à chaque connexion aux membres liés et non bloqués du site, retiré aux autres (site
   injoignable = rien ne change). Il devient leur rang réseau (politique de sauvegarde `rank:img`).
+- **Serveurs de la team** et rôle IMG (lot 52) : tout membre du rôle IMG peut rejoindre, démarrer/arrêter,
+  ouvrir la console et les fichiers de **tous** les serveurs de la team (ils apparaissent dans son `/mcs list`,
+  rôle « équipe IMG ») ; seul le propriétaire (et les admins) supprime. Sur un serveur de la team, personne
+  ne gère les accès (`/mcs invite`, `remove`, `public/private` refusés), sauf les admins. Le proxy envoie
+  l'appartenance au rôle IMG à l'API à chaque connexion (`players.img_member`).
 - Admin → Membres du site (lots 50-51) : **quotas du rôle IMG** (serveurs, RAM, CPU), **quotas propres** à un
   membre qui passent par-dessus, et **admin MCS**. Le site appelle l'API locale du proxy
   (`127.0.0.1:8082/img/...`, jeton `FARMDB_TOKEN`), qui écrit dans LuckPerms (méta `max-servers`,

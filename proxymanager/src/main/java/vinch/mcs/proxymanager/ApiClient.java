@@ -196,7 +196,8 @@ public class ApiClient {
     public CompletableFuture<JsonNode> updatePlayerLimits(UUID uuid, int maxServers, int totalRamMb, int totalCpuCores,
                                                         boolean admin, String rank, String prefix,
                                                         String nameColor, Integer backupIntervalHours,
-                                                        Integer backupKeepLast, Integer backupKeepWeekly) {
+                                                        Integer backupKeepLast, Integer backupKeepWeekly,
+                                                        boolean imgMember) {
         java.util.Map<String, Object> body = new java.util.HashMap<>();
         body.put("uuid", uuid.toString());
         body.put("maxServers", maxServers);
@@ -209,6 +210,7 @@ public class ApiClient {
         body.put("backupIntervalHours", backupIntervalHours);
         body.put("backupKeepLast", backupKeepLast);
         body.put("backupKeepWeekly", backupKeepWeekly);
+        body.put("imgMember", imgMember);
         return call("POST", "/api/v1/players/limits", body, Duration.ofSeconds(10));
     }
 

@@ -32,4 +32,7 @@ public class UpdatePlayerLimitsRequest {
     private Integer backupIntervalHours;
     private Integer backupKeepLast;
     private Integer backupKeepWeekly;
+
+    // Rôle IMG (lot 52) : null = ne change pas (le lobby ne l'envoie pas)
+    private Boolean imgMember;
 }

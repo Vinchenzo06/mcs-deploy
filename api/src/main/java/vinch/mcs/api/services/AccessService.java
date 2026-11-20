@@ -67,11 +67,30 @@ public class AccessService {
         return collaboratorRepository.findByServerIdAndPlayerId(s.getId(), p.getId());
     }
 
+    /** Serveur de la team IMG (lot 52) : les accès suivent le rôle IMG, personne ne les gère */
+    private static final Set<Right> ACCESS_RIGHTS = EnumSet.of(Right.INVITE, Right.REMOVE, Right.VISIBILITY);
+    private static final Set<Right> TEAM_RIGHTS = EnumSet.of(Right.JOIN, Right.POWER, Right.CONSOLE, Right.FILES);
+
+    public static boolean isTeamServer(Server s) {
+        return Boolean.TRUE.equals(s.getIsTeam());
+    }
+
+    public static boolean isImgMember(Player p) {
+        return Boolean.TRUE.equals(p.getImgMember());
+    }
+
     public Set<Right> rightsOf(Player p, Server s) {
         if (isOwner(p, s)) {
-            return EnumSet.allOf(Right.class);
+            EnumSet<Right> all = EnumSet.allOf(Right.class);
+            if (isTeamServer(s) && !isAdmin(p)) {
+                all.removeAll(ACCESS_RIGHTS);
+            }
+            return all;
         }
         EnumSet<Right> rights = EnumSet.noneOf(Right.class);
+        if (isTeamServer(s) && isImgMember(p)) {
+            rights.addAll(TEAM_RIGHTS);
+        }
         if (isAdmin(p)) {
             rights.addAll(EnumSet.allOf(Right.class));
             rights.remove(Right.INVITE); // les admins n'invitent personne
@@ -92,11 +111,20 @@ public class AccessService {
         return rights;
     }
 
-    /** Serveurs des autres où le joueur est invité */
+    /** Serveurs des autres où le joueur est invité, et serveurs de la team pour un membre IMG */
     public List<Server> sharedWith(Player p) {
-        return collaboratorRepository.findByPlayerId(p.getId()).stream()
-                .map(ServerCollaborator::getServer)
-                .toList();
+        java.util.LinkedHashMap<Long, Server> out = new java.util.LinkedHashMap<>();
+        for (ServerCollaborator c : collaboratorRepository.findByPlayerId(p.getId())) {
+            out.put(c.getServer().getId(), c.getServer());
+        }
+        if (isImgMember(p)) {
+            for (Server s : serverRepository.findByIsTeamTrue()) {
+                if (!isOwner(p, s)) {
+                    out.putIfAbsent(s.getId(), s);
+                }
+            }
+        }
+        return List.copyOf(out.values());
     }
 
     /** Relation principale du joueur avec le serveur, pour l'affichage */
@@ -111,6 +139,9 @@ public class AccessService {
         if (isHost(p, s)) {
             return "hebergeur";
         }
+        if (isTeamServer(s) && isImgMember(p)) {
+            return "equipe";
+        }
         if (isAdmin(p)) {
             return "admin";
         }
@@ -118,6 +149,10 @@ public class AccessService {
     }
 
     public void require(Player p, Server s, Right right) {
+        if (isTeamServer(s) && ACCESS_RIGHTS.contains(right) && !rightsOf(p, s).contains(right)) {
+            throw new RuntimeException("Serveur de la team IMG : tous les membres du rôle IMG y ont accès, "
+                    + "les accès ne se gèrent pas.");
+        }
         if (!rightsOf(p, s).contains(right)) {
             throw new RuntimeException(switch (right) {
                 case JOIN -> "Ce serveur est privé : demande une invitation à son propriétaire.";

@@ -28,7 +28,7 @@ public class LuckPermsBridge implements RankSource {
     public CompletableFuture<Meta> load(UUID uuid) {
         return luckPerms.getUserManager().loadUser(uuid).thenApply(user -> {
             if (user == null) {
-                return new Meta(1, 1024, 1, false, "default", "", "", null, null, null);
+                return new Meta(1, 1024, 1, false, "default", "", "", null, null, null, false);
             }
             CachedMetaData meta = user.getCachedData().getMetaData();
             boolean admin = user.getCachedData().getPermissionData().checkPermission("mcs.admin").asBoolean();
@@ -42,7 +42,8 @@ public class LuckPermsBridge implements RankSource {
                     meta.getMetaValue("name-color") == null ? "" : meta.getMetaValue("name-color"),
                     parseOrNull(meta.getMetaValue("backup-interval")),
                     parseOrNull(meta.getMetaValue("backup-keep-last")),
-                    parseOrNull(meta.getMetaValue("backup-keep-weekly")));
+                    parseOrNull(meta.getMetaValue("backup-keep-weekly")),
+                    ownGroup(user, "img"));
         });
     }
 

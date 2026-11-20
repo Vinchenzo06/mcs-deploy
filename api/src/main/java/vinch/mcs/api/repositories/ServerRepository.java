@@ -25,6 +25,9 @@ public interface ServerRepository extends JpaRepository<Server, Long> {
     @Query("SELECT s FROM Server s WHERE s.owner.id = :playerId")
     List<Server> findByOwnerId(Long playerId);
 
+    /** Serveurs de la team IMG (lot 52) */
+    List<Server> findByIsTeamTrue();
+
     @Query("SELECT COUNT(s) FROM Server s WHERE s.owner.id = :playerId")
     long countByOwnerId(Long playerId);
 

@@ -62,6 +62,12 @@ public class Player {
     @Column(name = "network_rank", length = 32)
     private String networkRank;
 
+    // Membre de la team IMG (lot 52) : rôle LuckPerms « img », envoyé par le proxy à la connexion.
+    // Sur les serveurs de la team : rejoindre, démarrer/arrêter, console et fichiers.
+    @Column(name = "img_member", nullable = false)
+    @Builder.Default
+    private Boolean imgMember = false;
+
     @Column(name = "network_prefix", length = 1024)
     private String networkPrefix;
 
