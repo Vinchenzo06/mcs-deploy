@@ -180,6 +180,11 @@ public class ApiClient {
                 Duration.ofMinutes(2));
     }
 
+    /** Serveurs de la team vus par ce joueur (lot 53) */
+    public CompletableFuture<JsonNode> teamServers(long playerId) {
+        return call("GET", "/api/v1/servers/team?playerId=" + playerId, null, Duration.ofSeconds(10));
+    }
+
     public CompletableFuture<JsonNode> getPlayerServers(long playerId) {
         return call("GET", "/api/v1/players/" + playerId + "/servers", null, Duration.ofSeconds(10));
     }

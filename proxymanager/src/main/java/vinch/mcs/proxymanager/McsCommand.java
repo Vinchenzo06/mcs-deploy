@@ -274,7 +274,7 @@ public class McsCommand implements SimpleCommand {
     // ============================================================ erreurs ====
 
     /** Message lisible à partir d'une erreur de l'API (sans "java.lang...", ni code HTTP) */
-    private static String errorText(Throwable error) {
+    static String errorText(Throwable error) {
         Throwable t = unwrap(error);
         if (t instanceof java.net.http.HttpTimeoutException) {
             return "Pas de réponse à temps. Réessaie dans un instant.";

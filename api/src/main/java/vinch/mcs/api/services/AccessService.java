@@ -127,6 +127,19 @@ public class AccessService {
         return List.copyOf(out.values());
     }
 
+    /** Tous les serveurs de la team, décrits pour ce joueur (droits compris), par nom */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> teamServersFor(Player p) {
+        return serverRepository.findByIsTeamTrue().stream()
+                .sorted(java.util.Comparator.comparing(Server::getName))
+                .map(s -> {
+                    Map<String, Object> m = describeFor(p, s);
+                    m.put("lastStartedAt", s.getLastStartedAt() == null ? null : s.getLastStartedAt().toString());
+                    return m;
+                })
+                .toList();
+    }
+
     /** Relation principale du joueur avec le serveur, pour l'affichage */
     public String relation(Player p, Server s) {
         if (isOwner(p, s)) {

@@ -80,6 +80,12 @@ public class AccessController {
         });
     }
 
+    /** Serveurs de la team IMG vus par ce joueur (lot 53 : page Serveur du site IMG Farm DB) */
+    @GetMapping("/servers/team")
+    public ResponseEntity<?> team(@RequestParam Long playerId) {
+        return handle(() -> Map.of("servers", accessService.teamServersFor(accessService.player(playerId))));
+    }
+
     @PostMapping("/servers/{id}/start")
     public ResponseEntity<?> start(@PathVariable Long id, @RequestParam Long playerId) {
         // Sur sa machine si possible, sinon sur une autre à partir de son rangement (lot 33)

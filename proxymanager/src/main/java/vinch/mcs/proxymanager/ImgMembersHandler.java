@@ -42,6 +42,7 @@ public class ImgMembersHandler implements HttpHandler {
     private final Logger logger;
     private final byte[] token;
     private final ObjectMapper json = new ObjectMapper();
+    private final ImgServersHandler servers;
 
     public ImgMembersHandler(ProxyServer proxy, ApiClient api, PlayerSync playerSync, Logger logger, String token) {
         this.proxy = proxy;
@@ -49,6 +50,7 @@ public class ImgMembersHandler implements HttpHandler {
         this.playerSync = playerSync;
         this.logger = logger;
         this.token = token.getBytes(StandardCharsets.UTF_8);
+        this.servers = new ImgServersHandler(proxy, api, playerSync, logger);
     }
 
     private boolean authorized(HttpExchange exchange) {
@@ -70,14 +72,19 @@ public class ImgMembersHandler implements HttpHandler {
                 send(exchange, 405, error("POST seulement"));
                 return;
             }
+            byte[] raw = exchange.getRequestBody().readNBytes(64 * 1024);
+            JsonNode body = raw.length == 0 ? json.createObjectNode() : json.readTree(raw);
+            String path = exchange.getRequestURI().getPath().replaceAll("/+$", "");
+            // Lot 53 : serveurs de la team (page Serveur du site)
+            if (path.equals("/img/servers") || path.startsWith("/img/servers/")) {
+                servers.handle(path, body, (code, out) -> sendQuietly(exchange, code, out));
+                return;
+            }
             RankSource lp = playerSync.source();
             if (lp == null) {
                 send(exchange, 503, error("LuckPerms absent du proxy : réglages indisponibles"));
                 return;
             }
-            byte[] raw = exchange.getRequestBody().readNBytes(64 * 1024);
-            JsonNode body = raw.length == 0 ? json.createObjectNode() : json.readTree(raw);
-            String path = exchange.getRequestURI().getPath().replaceAll("/+$", "");
             if (path.equals("/img/role")) {
                 role(exchange, lp, body);
             } else if (path.equals("/img/members")) {

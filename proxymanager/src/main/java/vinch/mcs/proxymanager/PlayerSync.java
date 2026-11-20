@@ -62,16 +62,21 @@ public class PlayerSync {
 
     /** Ne échoue jamais : en cas de problème, les dernières valeurs connues restent */
     public CompletableFuture<Void> sync(Player player) {
+        return syncUuid(player.getUniqueId());
+    }
+
+    /** Même chose pour un joueur peut-être hors ligne (lot 53 : création depuis le site) */
+    public CompletableFuture<Void> syncUuid(java.util.UUID uuid) {
         if (source == null) {
             return CompletableFuture.completedFuture(null);
         }
-        return source.load(player.getUniqueId())
-                .thenCompose(m -> apiClient.updatePlayerLimits(player.getUniqueId(), m.maxServers(), m.totalRamMb(),
+        return source.load(uuid)
+                .thenCompose(m -> apiClient.updatePlayerLimits(uuid, m.maxServers(), m.totalRamMb(),
                         m.totalCpuCores(), m.admin(), m.rank(), m.prefixJson(), m.nameColor(),
                         m.backupIntervalHours(), m.backupKeepLast(), m.backupKeepWeekly(), m.img()))
                 .handle((r, error) -> {
                     if (error != null) {
-                        logger.warn("Synchronisation LuckPerms de {} : {}", player.getUsername(), error.getMessage());
+                        logger.warn("Synchronisation LuckPerms de {} : {}", uuid, error.getMessage());
                     }
                     return (Void) null;
                 });

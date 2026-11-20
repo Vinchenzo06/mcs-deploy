@@ -253,6 +253,11 @@ fichiers, donc au mot de passe. Titre d'un groupe : `lp group vip meta setprefix
   rôle « équipe IMG ») ; seul le propriétaire (et les admins) supprime. Sur un serveur de la team, personne
   ne gère les accès (`/mcs invite`, `remove`, `public/private` refusés), sauf les admins. Le proxy envoie
   l'appartenance au rôle IMG à l'API à chaque connexion (`players.img_member`).
+- **Page Serveur du site** (lot 53) : liste des serveurs de la team (état, joueurs connectés), démarrer,
+  arrêter, redémarrer, supprimer et créer (serveur de la team d'office), **au nom du membre connecté au site**
+  (son compte Minecraft lié) et avec ses droits MCS : le site n'a aucun pouvoir propre. Routes `/img/servers…`
+  de l'API locale du proxy ; API : `GET /api/v1/servers/team?playerId=`. Le membre doit s'être connecté au
+  moins une fois au réseau.
 - Admin → Membres du site (lots 50-51) : **quotas du rôle IMG** (serveurs, RAM, CPU), **quotas propres** à un
   membre qui passent par-dessus, et **admin MCS**. Le site appelle l'API locale du proxy
   (`127.0.0.1:8082/img/...`, jeton `FARMDB_TOKEN`), qui écrit dans LuckPerms (méta `max-servers`,
