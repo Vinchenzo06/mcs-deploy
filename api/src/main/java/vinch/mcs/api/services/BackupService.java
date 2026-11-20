@@ -242,10 +242,8 @@ public class BackupService {
             Server s = serverRepository.findById(serverId).orElseThrow(() -> new RuntimeException("Serveur introuvable"));
             Player p = accessService.player(playerId);
             boolean admin = AccessService.isAdmin(p);
-            if (!admin) {
-                throw new RuntimeException("Les sauvegardes suivent le rôle du propriétaire : seuls les admins "
-                        + "peuvent faire une exception pour un serveur.");
-            }
+            // Lot 58 : le propriétaire règle son serveur, dans les limites de son rôle ; les admins tout
+            requireOwnerOrAdmin(p, s);
             if (local && !localEnabled(s)) {
                 throw new RuntimeException("La machine de ce serveur ne garde pas de sauvegardes : tout va au central.");
             }
@@ -753,7 +751,9 @@ public class BackupService {
             }
         }
         if (lastAuto == null) {
-            lastAuto = s.getCreatedAt(); // pas encore de sauvegarde automatique : depuis la création
+            // Pas encore de sauvegarde automatique : la première 1 h après la création (lot 58 ;
+            // avant, 24 h : un nouveau serveur restait une journée sans aucune copie)
+            lastAuto = s.getCreatedAt() == null ? null : s.getCreatedAt().minusHours(23);
         }
         boolean dailyOn = rules.get(BackupKind.DAILY).max() > 0;
         boolean weeklyDue = rules.get(BackupKind.WEEKLY).max() > 0 && olderThan(lastWeekly, Duration.ofDays(7), now);
@@ -1262,7 +1262,7 @@ public class BackupService {
                     throw new RuntimeException("Les sauvegardes permanentes sont désactivées pour ce serveur.");
                 }
             } else {
-                accessService.require(p, s, AccessService.Right.POWER);
+                requireOwnerOrAdmin(p, s);
                 if (localEnabled(s) && localEffective(s).get(BackupKind.MANUAL).max() > 0) {
                     location = LOCAL;
                 } else if (effective(s).get(BackupKind.MANUAL).max() <= 0) {
@@ -1387,12 +1387,74 @@ public class BackupService {
         return m;
     }
 
-    /** Sauvegardes (hors supprimées), réglages et limites d'un serveur ; droit POWER */
+    /** Seuls le propriétaire et les admins voient et gèrent les sauvegardes d'un serveur (lot 58) */
+    private static void requireOwnerOrAdmin(Player p, Server s) {
+        if (!AccessService.isAdmin(p) && !AccessService.isOwner(p, s)) {
+            throw new RuntimeException("Seuls le propriétaire du serveur et les admins gèrent ses sauvegardes.");
+        }
+    }
+
+    /**
+     * Vue d'ensemble pour les admins (lot 58) : chaque serveur avec sa dernière sauvegarde
+     * réussie, son dernier problème s'il est plus récent, et les réglages du réseau.
+     */
+    public Map<String, Object> overview(Long playerId) {
+        return tx().execute(status -> {
+            if (!AccessService.isAdmin(accessService.player(playerId))) {
+                throw new RuntimeException("Réservé aux admins du réseau.");
+            }
+            List<Map<String, Object>> servers = new ArrayList<>();
+            for (Server s : serverRepository.findAll()) {
+                if (s.getStatus() == ServerStatus.DELETED) {
+                    continue;
+                }
+                List<Backup> ok = at(backupRepository.findByServerTagIdAndStatusOrderByCreatedAtDesc(s.getId(), "SUCCESS"), CENTRAL);
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", s.getId());
+                m.put("name", s.getName());
+                m.put("velocityName", s.getVelocityName());
+                m.put("owner", s.getOwner() == null ? null : s.getOwner().getMinecraftUsername());
+                m.put("status", s.getStatus().name());
+                m.put("team", Boolean.TRUE.equals(s.getIsTeam()));
+                m.put("protected", Boolean.TRUE.equals(s.getIsProtected()));
+                m.put("createdAt", s.getCreatedAt() == null ? null : s.getCreatedAt().toString());
+                m.put("kept", ok.size());
+                m.put("customized", policyRepository.findByScope("server:" + s.getId()).isPresent());
+                m.put("running", runningServers.contains(s.getId()));
+                Backup last = ok.isEmpty() ? null : ok.get(0);
+                if (last != null) {
+                    m.put("lastSuccess", last.getCreatedAt() == null ? null : last.getCreatedAt().toString());
+                    m.put("totalMb", last.getTotalMb());
+                }
+                for (Backup b : backupRepository.findTop30ByServerTagIdOrderByCreatedAtDesc(s.getId())) {
+                    if (!at(b, CENTRAL) || "DELETED".equals(b.getStatus()) || "EXPIRED".equals(b.getStatus())) {
+                        continue;
+                    }
+                    if (("FAILED".equals(b.getStatus()) || "NO_SPACE".equals(b.getStatus()))
+                            && (last == null || b.getCreatedAt().isAfter(last.getCreatedAt()))) {
+                        m.put("problem", b.getMessage() == null ? b.getStatus() : b.getMessage());
+                        m.put("problemAt", b.getCreatedAt().toString());
+                    }
+                    break; // seule la plus récente compte
+                }
+                servers.add(m);
+            }
+            servers.sort(Comparator.comparing(m -> String.valueOf(m.get("name"))));
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("enabled", enabled);
+            out.put("servers", servers);
+            out.put("network", rulesToMap(resolve("network")));
+            out.put("minimum", rulesToMap(minimum()));
+            return out;
+        });
+    }
+
+    /** Sauvegardes (hors supprimées), réglages et limites d'un serveur ; propriétaire et admins (lot 58) */
     public Map<String, Object> list(Long serverId, Long playerId) {
         return tx().execute(status -> {
             Server s = serverRepository.findById(serverId).orElseThrow(() -> new RuntimeException("Serveur introuvable"));
             Player p = accessService.player(playerId);
-            accessService.require(p, s, AccessService.Right.POWER);
+            requireOwnerOrAdmin(p, s);
             Map<BackupKind, Rule> rules = effective(s);
             Map<BackupKind, Rule> localRules = localEffective(s);
             List<Backup> all = backupRepository.findByServerTagIdAndStatusOrderByCreatedAtDesc(s.getId(), "SUCCESS");
@@ -1404,7 +1466,8 @@ public class BackupService {
             out.put("limits", rulesToMap(limits(s.getOwner())));
             out.put("minimum", rulesToMap(minimum()));
             out.put("customized", policyRepository.findByScope("server:" + s.getId()).isPresent());
-            out.put("canConfigure", AccessService.isAdmin(p));
+            out.put("canConfigure", true); // propriétaire (dans les limites de son rôle) ou admin
+            out.put("admin", AccessService.isAdmin(p));
             out.put("rank", s.getOwner().getNetworkRank() == null ? "default" : s.getOwner().getNetworkRank());
             out.put("parkState", s.getParkState());
             out.put("canRestore", AccessService.isAdmin(p) || AccessService.isOwner(p, s));

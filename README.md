@@ -268,6 +268,11 @@ fichiers, donc au mot de passe. Titre d'un groupe : `lp group vip meta setprefix
   Lot 55 (agent 0.18.1) : correctif (réponses de l'agent rendues en Map : Spring Boot 4 répond en Jackson 3, qui
   ne sait pas écrire un JsonNode de Jackson 2), arrêt forcé `POST /api/v1/servers/{id}/kill` (`docker kill`) et
   page d'un serveur sur le site (`/img/servers/<id>/stats` : le serveur + CPU, RAM, disque, joueurs).
+- **Sauvegardes depuis le site** (lot 58) : voir, sauvegarder maintenant, garder pour toujours, restaurer et régler
+  le rythme d'un serveur ; **propriétaire et admins seulement** (aussi en jeu : `/mcs backup` n'est plus ouvert à
+  tous ceux qui peuvent démarrer le serveur). Le propriétaire règle son serveur dans les limites de son rôle.
+  Première sauvegarde automatique 1 h après la création (avant : 24 h). Vue d'ensemble pour les admins :
+  `GET /api/v1/backups/overview?playerId=` ; proxy : `/img/servers/<id>/backups…`, `/img/backups/overview|network`.
 - Admin → Membres du site (lots 50-51) : **quotas du rôle IMG** (serveurs, RAM, CPU), **quotas propres** à un
   membre qui passent par-dessus, et **admin MCS**. Le site appelle l'API locale du proxy
   (`127.0.0.1:8082/img/...`, jeton `FARMDB_TOKEN`), qui écrit dans LuckPerms (méta `max-servers`,

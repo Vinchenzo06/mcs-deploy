@@ -120,6 +120,16 @@ public class BackupController {
         }
     }
 
+    /** Vue d'ensemble des sauvegardes de tous les serveurs (admins, lot 58) */
+    @GetMapping("/api/v1/backups/overview")
+    public ResponseEntity<?> overview(@RequestParam Long playerId) {
+        try {
+            return ResponseEntity.ok(backupService.overview(playerId));
+        } catch (Exception e) {
+            return error(e);
+        }
+    }
+
     // ------------------------------------------------------------ restauration ----
 
     @PostMapping("/api/v1/servers/{id}/restore")

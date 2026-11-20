@@ -33,6 +33,14 @@ import java.util.regex.Pattern;
  *   POST /img/servers/{id}/files/mkdir    {uuid, path}
  *   POST /img/servers/{id}/files/rename   {uuid, from, to}
  *   POST /img/servers/{id}/files/delete   {uuid, path}
+ * Sauvegardes (lot 58, propriétaire et admins seulement, vérifié par l'API) :
+ *   POST /img/servers/{id}/backups                     {uuid}  -> liste, réglages, limites
+ *   POST /img/servers/{id}/backups/now                 {uuid}  -> sauvegarde manuelle
+ *   POST /img/servers/{id}/backups/rule                {uuid, kind, max, duration, reset}
+ *   POST /img/servers/{id}/backups/{bid}/permanent     {uuid, permanent}
+ *   POST /img/servers/{id}/backups/{bid}/restore       {uuid}
+ *   POST /img/backups/overview                         {uuid}  -> tous les serveurs (admins)
+ *   POST /img/backups/network                          {uuid, kind, max, duration, reset} (admins)
  * Une action longue répond « pending » après 10 à 15 s et continue ; son erreur éventuelle est
  * rendue avec la liste suivante (lastError), pendant 10 min.
  */
@@ -70,6 +78,10 @@ class ImgServersHandler {
     void handle(String path, JsonNode body, BiConsumer<Integer, JsonNode> reply,
                 java.util.function.Consumer<ApiClient.FileContent> bytes) {
         UUID uuid = UUID.fromString(body.path("uuid").asText(""));
+        if (path.startsWith("/img/backups")) {
+            withPlayer(uuid, reply, pid -> backupsAdmin(path.substring("/img/backups".length()), pid, body, reply));
+            return;
+        }
         String rest = path.substring("/img/servers".length());
         withPlayer(uuid, reply, pid -> route(uuid, rest, pid, body, reply, bytes));
     }
@@ -135,6 +147,8 @@ class ImgServersHandler {
         String what = parts.length > 1 ? parts[1] : "";
         if (parts.length == 2 && ACTIONS.contains(what)) {
             action(id, what, pid, reply);
+        } else if (what.equals("backups")) {
+            backups(id, parts, pid, body, reply);
         } else if (parts.length == 2 && what.equals("stats")) {
             stats(id, pid, reply);
         } else if (parts.length == 2 && what.equals("console")) {
@@ -220,6 +234,42 @@ class ImgServersHandler {
                 reply.accept(200, out);
             }
         });
+    }
+
+    private static Integer intOrNull(JsonNode n) {
+        return n == null || n.isNull() || n.isMissingNode() || n.asText("").isBlank() ? null : n.asInt();
+    }
+
+    /** Sauvegardes d'un serveur : les droits (propriétaire et admins) sont vérifiés par l'API */
+    private void backups(long id, String[] parts, long pid, JsonNode body, BiConsumer<Integer, JsonNode> reply) {
+        if (parts.length == 2) {
+            jsonResult(api.listBackups(id, pid), reply);
+        } else if (parts.length == 3 && parts[2].equals("now")) {
+            logger.info("Site IMG : sauvegarde manuelle du serveur {} par le joueur {}", id, pid);
+            finish(api.backupNow(id, pid, false), "srv:" + id, 20, reply, "Sauvegarde faite.");
+        } else if (parts.length == 3 && parts[2].equals("rule")) {
+            jsonResult(api.setBackupRule(id, pid, body.path("kind").asText(null), intOrNull(body.get("max")),
+                    intOrNull(body.get("duration")), body.path("reset").asBoolean(false), false), reply);
+        } else if (parts.length == 4 && parts[3].equals("permanent")) {
+            jsonResult(api.setBackupPermanent(id, Long.parseLong(parts[2]), pid, body.path("permanent").asBoolean(true)), reply);
+        } else if (parts.length == 4 && parts[3].equals("restore")) {
+            logger.info("Site IMG : restauration de la sauvegarde {} du serveur {} par le joueur {}", parts[2], id, pid);
+            finish(api.restoreBackup(id, pid, Long.parseLong(parts[2])), "srv:" + id, 20, reply, "Sauvegarde restaurée.");
+        } else {
+            reply.accept(404, error("Route inconnue"));
+        }
+    }
+
+    /** Vue d'ensemble et réglages du réseau (admins MCS, vérifié par l'API) */
+    private void backupsAdmin(String rest, long pid, JsonNode body, BiConsumer<Integer, JsonNode> reply) {
+        if (rest.equals("/overview")) {
+            jsonResult(api.backupOverview(pid), reply);
+        } else if (rest.equals("/network")) {
+            jsonResult(api.setBackupScopeRule(pid, "network", body.path("kind").asText(null), intOrNull(body.get("max")),
+                    intOrNull(body.get("duration")), body.path("reset").asBoolean(false)), reply);
+        } else {
+            reply.accept(404, error("Route inconnue"));
+        }
     }
 
     /** Un serveur de la team (sinon 404) avec ses mesures : CPU, RAM, disque, joueurs */

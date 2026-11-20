@@ -140,6 +140,7 @@ public class AccessService {
                 .map(s -> {
                     Map<String, Object> m = describeFor(p, s);
                     m.put("protected", Boolean.TRUE.equals(s.getIsProtected()));
+                    m.put("canBackup", isAdmin(p) || isOwner(p, s)); // lot 58 : sauvegardes = propriétaire et admins
                     m.put("lastStartedAt", s.getLastStartedAt() == null ? null : s.getLastStartedAt().toString());
                     return m;
                 })

@@ -439,6 +439,11 @@ public class ApiClient {
         return call("POST", "/api/v1/servers/" + serverId + "/restore", body, Duration.ofMinutes(21));
     }
 
+    /** Vue d'ensemble des sauvegardes de tous les serveurs (admins, lot 58) */
+    public CompletableFuture<JsonNode> backupOverview(long playerId) {
+        return call("GET", "/api/v1/backups/overview?playerId=" + playerId, null, Duration.ofSeconds(20));
+    }
+
     public CompletableFuture<JsonNode> listDeletedBackups(long playerId) {
         return call("GET", "/api/v1/backups/deleted?playerId=" + playerId, null, Duration.ofSeconds(10));
     }
