@@ -258,6 +258,13 @@ fichiers, donc au mot de passe. Titre d'un groupe : `lp group vip meta setprefix
   (son compte Minecraft lié) et avec ses droits MCS : le site n'a aucun pouvoir propre. Routes `/img/servers…`
   de l'API locale du proxy ; API : `GET /api/v1/servers/team?playerId=`. Le membre doit s'être connecté au
   moins une fois au réseau.
+- **Console et fichiers depuis le site** (lot 54, agent 0.18.0) : journal du jeu en direct (`logs/latest.log`),
+  journal du conteneur (démarrage), commandes (RCON) ; fichiers : parcourir, éditer, téléverser, télécharger,
+  créer un dossier, renommer, supprimer. Droits CONSOLE et FILES de MCS. L'agent fait tout dans le dossier du
+  serveur par `os.Root` ; les noms qui commencent par un point sont cachés et refusés. Les fichiers voyagent par
+  morceaux (1 Mo entre l'API et l'agent, 8 Mo au plus par requête) : pas de limite de taille, l'agent refuse
+  seulement quand il resterait moins de 1 Go libre sur la machine. API : `GET /api/v1/servers/{id}/files`,
+  `GET|POST …/files/content`, `POST …/files/mkdir|rename|delete`, `GET …/logs`.
 - Admin → Membres du site (lots 50-51) : **quotas du rôle IMG** (serveurs, RAM, CPU), **quotas propres** à un
   membre qui passent par-dessus, et **admin MCS**. Le site appelle l'API locale du proxy
   (`127.0.0.1:8082/img/...`, jeton `FARMDB_TOKEN`), qui écrit dans LuckPerms (méta `max-servers`,

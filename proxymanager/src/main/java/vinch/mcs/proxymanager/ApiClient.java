@@ -185,6 +185,82 @@ public class ApiClient {
         return call("GET", "/api/v1/servers/team?playerId=" + playerId, null, Duration.ofSeconds(10));
     }
 
+    // ------------------------------------------------- console et fichiers (lot 54) ----
+
+    private static String q(String s) {
+        return java.net.URLEncoder.encode(s == null ? "" : s, java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /** Journal d'un serveur : source "game" (à partir de offset, -1 = la fin) ou "docker" */
+    public CompletableFuture<JsonNode> serverLogs(long serverId, long playerId, String source, long offset) {
+        return call("GET", "/api/v1/servers/" + serverId + "/logs?playerId=" + playerId + "&source=" + q(source)
+                + "&offset=" + offset, null, Duration.ofSeconds(30));
+    }
+
+    public CompletableFuture<JsonNode> listFiles(long serverId, long playerId, String path) {
+        return call("GET", "/api/v1/servers/" + serverId + "/files?playerId=" + playerId + "&path=" + q(path),
+                null, Duration.ofSeconds(40));
+    }
+
+    /** op : mkdir {path}, rename {from, to} ou delete {path} ; playerId ajouté ici */
+    public CompletableFuture<JsonNode> fileOp(long serverId, long playerId, String op, java.util.Map<String, Object> body) {
+        java.util.Map<String, Object> b = new java.util.HashMap<>(body);
+        b.put("playerId", playerId);
+        return call("POST", "/api/v1/servers/" + serverId + "/files/" + op, b, Duration.ofMinutes(op.equals("delete") ? 6 : 2));
+    }
+
+    public record FileContent(byte[] data, long size, long mtime) {}
+
+    /** Lit jusqu'à length octets (8 Mo au plus) d'un fichier, à partir de offset */
+    public CompletableFuture<FileContent> readFile(long serverId, long playerId, String path, long offset, int length) {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(config.getApiUrl() + "/api/v1/servers/" + serverId + "/files/content?playerId=" + playerId
+                        + "&path=" + q(path) + "&offset=" + offset + "&length=" + length))
+                .header("X-API-Key", config.getApiKey())
+                .timeout(Duration.ofMinutes(3))
+                .GET()
+                .build();
+        return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray()).thenApply(response -> {
+            if (response.statusCode() != 200) {
+                throw new ApiException("API erreur (" + response.statusCode() + ") : " + errorOf(response.body()), null);
+            }
+            long size = response.headers().firstValueAsLong("X-File-Size").orElse(response.body().length);
+            long mtime = response.headers().firstValueAsLong("X-File-Mtime").orElse(0);
+            return new FileContent(response.body(), size, mtime);
+        });
+    }
+
+    /** Un morceau (8 Mo au plus) d'un téléversement ; fin : remplace la cible ; abort : abandon */
+    public CompletableFuture<JsonNode> writeFile(long serverId, long playerId, String path, long offset,
+                                                 boolean fin, boolean abort, byte[] data) {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(config.getApiUrl() + "/api/v1/servers/" + serverId + "/files/content?playerId=" + playerId
+                        + "&path=" + q(path) + "&offset=" + offset + "&final=" + fin + "&abort=" + abort))
+                .header("X-API-Key", config.getApiKey())
+                .header("Content-Type", "application/octet-stream")
+                .timeout(Duration.ofMinutes(5))
+                .POST(HttpRequest.BodyPublishers.ofByteArray(data))
+                .build();
+        return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray()).thenApply(response -> {
+            if (response.statusCode() != 200) {
+                throw new ApiException("API erreur (" + response.statusCode() + ") : " + errorOf(response.body()), null);
+            }
+            try {
+                return objectMapper.readTree(response.body());
+            } catch (Exception e) {
+                return objectMapper.createObjectNode();
+            }
+        });
+    }
+
+    private String errorOf(byte[] body) {
+        try {
+            return objectMapper.readTree(body).path("error").asText("");
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
     public CompletableFuture<JsonNode> getPlayerServers(long playerId) {
         return call("GET", "/api/v1/players/" + playerId + "/servers", null, Duration.ofSeconds(10));
     }

@@ -23,12 +23,23 @@ import java.util.regex.Pattern;
  *   POST /img/servers                     {uuid}  -> serveurs de la team, droits, joueurs connectés, quota
  *   POST /img/servers/{id}/{action}       {uuid}  -> start | stop | restart | delete
  *   POST /img/servers/create              {uuid, name, type, version, ram_mb, cpu}
+ * Console et fichiers (lot 54, droits CONSOLE et FILES) :
+ *   POST /img/servers/{id}/console        {uuid, command}         -> {output}
+ *   POST /img/servers/{id}/logs           {uuid, source, offset}  -> {text, offset, ...}
+ *   POST /img/servers/{id}/files          {uuid, path}            -> {path, entries, truncated}
+ *   POST /img/servers/{id}/files/download {uuid, path, offset, length} -> octets (X-File-Size, X-File-Mtime)
+ *   POST /img/servers/{id}/files/upload?uuid=&path=&offset=&final=&abort=  corps brut (8 Mo au plus)
+ *   POST /img/servers/{id}/files/mkdir    {uuid, path}
+ *   POST /img/servers/{id}/files/rename   {uuid, from, to}
+ *   POST /img/servers/{id}/files/delete   {uuid, path}
  * Une action longue répond « pending » après 10 à 15 s et continue ; son erreur éventuelle est
  * rendue avec la liste suivante (lastError), pendant 10 min.
  */
 class ImgServersHandler {
 
     private static final Set<String> ACTIONS = Set.of("start", "stop", "restart", "delete");
+    private static final Set<String> FILE_OPS = Set.of("mkdir", "rename", "delete");
+    static final int MAX_CHUNK = 8 << 20;
     private static final Set<String> TYPES = Set.of("PAPER", "SPIGOT", "FABRIC", "FORGE", "NEOFORGE");
     private static final Pattern NAME = Pattern.compile("^[a-z0-9-]{3,32}$");
     private static final Pattern VERSION = Pattern.compile("^[0-9][0-9A-Za-z.\\-]{0,19}$");
@@ -51,39 +62,109 @@ class ImgServersHandler {
         this.logger = logger;
     }
 
-    /** Réponse : (code HTTP, corps) — appelée une seule fois, depuis n'importe quel fil */
-    void handle(String path, JsonNode body, BiConsumer<Integer, JsonNode> reply) {
+    /**
+     * Réponse : (code HTTP, corps JSON) ou, pour un téléchargement réussi, bytes —
+     * l'une des deux, une seule fois, depuis n'importe quel fil.
+     */
+    void handle(String path, JsonNode body, BiConsumer<Integer, JsonNode> reply,
+                java.util.function.Consumer<ApiClient.FileContent> bytes) {
         UUID uuid = UUID.fromString(body.path("uuid").asText(""));
         String rest = path.substring("/img/servers".length());
-        CompletableFuture<Long> playerId = api.getPlayerByUuid(uuid)
+        withPlayer(uuid, reply, pid -> route(uuid, rest, pid, body, reply, bytes));
+    }
+
+    /** Morceau d'un téléversement : paramètres dans l'adresse, contenu brut dans le corps */
+    void upload(String path, Map<String, String> query, byte[] data, BiConsumer<Integer, JsonNode> reply) {
+        UUID uuid = UUID.fromString(query.getOrDefault("uuid", ""));
+        String[] parts = path.substring("/img/servers/".length()).split("/");
+        long serverId = Long.parseLong(parts[0]);
+        String file = query.getOrDefault("path", "");
+        long offset = Long.parseLong(query.getOrDefault("offset", "0"));
+        boolean fin = "true".equals(query.get("final"));
+        boolean abort = "true".equals(query.get("abort"));
+        withPlayer(uuid, reply, pid -> {
+            if (fin || abort) {
+                logger.info("Site IMG : fichier {} du serveur {} {} par le joueur {}", file, serverId,
+                        abort ? "abandonné" : "téléversé", pid);
+            }
+            jsonResult(api.writeFile(serverId, pid, file, offset, fin, abort, data), reply);
+        });
+    }
+
+    private void withPlayer(UUID uuid, BiConsumer<Integer, JsonNode> reply, java.util.function.Consumer<Long> then) {
+        api.getPlayerByUuid(uuid)
                 .thenApply(p -> p.get("id").asLong())
-                .exceptionally(e -> null);
-        playerId.thenAccept(pid -> {
-            try {
-                route(uuid, rest, pid, body, reply);
-            } catch (RuntimeException e) {
-                reply.accept(400, error("Requête invalide : " + e.getMessage()));
+                .exceptionally(e -> null)
+                .thenAccept(pid -> {
+                    if (pid == null) {
+                        reply.accept(404, error("Ton compte Minecraft n'est pas encore connu du réseau : connecte-toi une fois "
+                                + "en jeu (img.asearia.ca), puis reviens."));
+                        return;
+                    }
+                    try {
+                        then.accept(pid);
+                    } catch (RuntimeException e) {
+                        reply.accept(400, error("Requête invalide : " + e.getMessage()));
+                    }
+                });
+    }
+
+    private void jsonResult(CompletableFuture<JsonNode> work, BiConsumer<Integer, JsonNode> reply) {
+        work.whenComplete((r, e) -> {
+            if (e != null) {
+                reply.accept(400, error(McsCommand.errorText(e)));
+            } else {
+                reply.accept(200, r == null ? json.createObjectNode() : r);
             }
         });
     }
 
-    private void route(UUID uuid, String rest, Long pid, JsonNode body, BiConsumer<Integer, JsonNode> reply) {
-        if (pid == null) {
-            reply.accept(404, error("Ton compte Minecraft n'est pas encore connu du réseau : connecte-toi une fois "
-                    + "en jeu (img.asearia.ca), puis reviens."));
-            return;
-        }
+    private void route(UUID uuid, String rest, long pid, JsonNode body, BiConsumer<Integer, JsonNode> reply,
+                       java.util.function.Consumer<ApiClient.FileContent> bytes) {
         if (rest.isEmpty() || rest.equals("/")) {
             list(uuid, pid, reply);
-        } else if (rest.equals("/create")) {
+            return;
+        }
+        if (rest.equals("/create")) {
             create(uuid, pid, body, reply);
-        } else {
-            String[] parts = rest.substring(1).split("/");
-            if (parts.length != 2 || !ACTIONS.contains(parts[1])) {
-                reply.accept(404, error("Route inconnue"));
+            return;
+        }
+        String[] parts = rest.substring(1).split("/");
+        long id = Long.parseLong(parts[0]);
+        String what = parts.length > 1 ? parts[1] : "";
+        if (parts.length == 2 && ACTIONS.contains(what)) {
+            action(id, what, pid, reply);
+        } else if (parts.length == 2 && what.equals("console")) {
+            String command = body.path("command").asText("").trim();
+            if (command.isEmpty() || command.length() > 256) {
+                reply.accept(400, error("Commande vide ou trop longue (256 caractères au plus)."));
                 return;
             }
-            action(Long.parseLong(parts[0]), parts[1], pid, reply);
+            logger.info("Site IMG : console du serveur {} par le joueur {} : {}", id, pid, command);
+            jsonResult(api.console(id, pid, command), reply);
+        } else if (parts.length == 2 && what.equals("logs")) {
+            jsonResult(api.serverLogs(id, pid, body.path("source").asText("game"), body.path("offset").asLong(-1)), reply);
+        } else if (parts.length == 2 && what.equals("files")) {
+            jsonResult(api.listFiles(id, pid, body.path("path").asText("")), reply);
+        } else if (parts.length == 3 && what.equals("files") && parts[2].equals("download")) {
+            int length = Math.min(Math.max(body.path("length").asInt(MAX_CHUNK), 1), MAX_CHUNK);
+            api.readFile(id, pid, body.path("path").asText(""), Math.max(0, body.path("offset").asLong(0)), length)
+                    .whenComplete((c, e) -> {
+                        if (e != null) {
+                            reply.accept(400, error(McsCommand.errorText(e)));
+                        } else {
+                            bytes.accept(c);
+                        }
+                    });
+        } else if (parts.length == 3 && what.equals("files") && FILE_OPS.contains(parts[2])) {
+            String op = parts[2];
+            Map<String, Object> args = op.equals("rename")
+                    ? Map.of("from", body.path("from").asText(""), "to", body.path("to").asText(""))
+                    : Map.of("path", body.path("path").asText(""));
+            logger.info("Site IMG : fichiers du serveur {}, {} {} par le joueur {}", id, op, args, pid);
+            jsonResult(api.fileOp(id, pid, op, args), reply);
+        } else {
+            reply.accept(404, error("Route inconnue"));
         }
     }
 

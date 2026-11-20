@@ -170,7 +170,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
         pendingCommands.put(commandId, future);
 
         try {
-            session.sendMessage(new TextMessage(objectMapper.writeValueAsString(message)));
+            send(session, objectMapper.writeValueAsString(message));
             log.debug("Commande {} ({}) envoyée à node {}", commandType, commandId, nodeId);
         } catch (Exception e) {
             pendingCommands.remove(commandId);
@@ -244,7 +244,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
         ObjectNode response = objectMapper.createObjectNode();
         response.put("type", "register_ok");
         response.put("node_id", node.getId());
-        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(response)));
+        send(session, objectMapper.writeValueAsString(response));
     }
 
     private void handleHeartbeat(WebSocketSession session, JsonNode json) throws Exception {
@@ -293,7 +293,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
         ObjectNode error = objectMapper.createObjectNode();
         error.put("type", "error");
         error.put("error", errorCode);
-        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(error)));
+        send(session, objectMapper.writeValueAsString(error));
     }
 
     public void disconnectNode(Long nodeId) {
@@ -307,6 +307,17 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
+    /**
+     * Un seul envoi à la fois par machine : deux envois simultanés sur la même session
+     * WebSocket la cassent (TEXT_PARTIAL_WRITING), ce qui devient probable avec les
+     * morceaux de fichiers de 1 Mo (lot 54).
+     */
+    private static void send(WebSocketSession session, String text) throws java.io.IOException {
+        synchronized (session) {
+            session.sendMessage(new TextMessage(text));
+        }
+    }
+
     public boolean isNodeOnline(Long nodeId) {
         WebSocketSession session = activeSessions.get(nodeId);
         return session != null && session.isOpen();
@@ -315,7 +326,7 @@ public class AgentWebSocketHandler extends TextWebSocketHandler {
     public void sendToNode(Long nodeId, String message) throws Exception {
         WebSocketSession session = activeSessions.get(nodeId);
         if (session != null && session.isOpen()) {
-            session.sendMessage(new TextMessage(message));
+            send(session, message);
         } else {
             throw new RuntimeException("Node " + nodeId + " non connecté");
         }

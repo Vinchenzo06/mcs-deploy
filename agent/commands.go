@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -11,7 +12,10 @@ import (
 
 // handleCommand dispatch les commandes reçues vers le bon handler
 func handleCommand(conn *websocket.Conn, config *Config, msgType, commandId string, msg map[string]interface{}) {
-	log.Printf("Commande reçue : type=%s command_id=%s", msgType, commandId)
+	// Les appels fréquents (journal suivi en direct, morceaux de fichiers) ne remplissent pas le journal
+	if msgType != "server_logs" && msgType != "files_read" && msgType != "files_write" && msgType != "files_list" {
+		log.Printf("Commande reçue : type=%s command_id=%s", msgType, commandId)
+	}
 
 	switch msgType {
 	case "ping":
@@ -38,6 +42,10 @@ func handleCommand(conn *websocket.Conn, config *Config, msgType, commandId stri
 		handleBackupServer(conn, config, commandId, msg)
 	case "restore_server":
 		handleRestoreServer(conn, config, commandId, msg)
+	case "server_logs":
+		handleServerLogs(conn, config, commandId, msg)
+	case "files_list", "files_read", "files_write", "files_mkdir", "files_rename", "files_delete":
+		handleFiles(conn, config, commandId, strings.TrimPrefix(msgType, "files_"), msg)
 	default:
 		log.Printf("Type de commande non géré : %s", msgType)
 		sendCommandError(conn, commandId, "unknown_command", "Commande inconnue : "+msgType)

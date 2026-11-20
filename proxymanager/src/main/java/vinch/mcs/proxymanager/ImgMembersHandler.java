@@ -72,12 +72,24 @@ public class ImgMembersHandler implements HttpHandler {
                 send(exchange, 405, error("POST seulement"));
                 return;
             }
+            String path = exchange.getRequestURI().getPath().replaceAll("/+$", "");
+            // Lot 54 : morceau d'un téléversement (corps brut, paramètres dans l'adresse)
+            if (UPLOAD.matcher(path).matches()) {
+                byte[] data = exchange.getRequestBody().readNBytes(ImgServersHandler.MAX_CHUNK + 1);
+                if (data.length > ImgServersHandler.MAX_CHUNK) {
+                    send(exchange, 413, error("Morceau trop gros (8 Mo au plus)"));
+                    return;
+                }
+                servers.upload(path, query(exchange.getRequestURI().getRawQuery()), data,
+                        (code, out) -> sendQuietly(exchange, code, out));
+                return;
+            }
             byte[] raw = exchange.getRequestBody().readNBytes(64 * 1024);
             JsonNode body = raw.length == 0 ? json.createObjectNode() : json.readTree(raw);
-            String path = exchange.getRequestURI().getPath().replaceAll("/+$", "");
-            // Lot 53 : serveurs de la team (page Serveur du site)
+            // Lots 53-54 : serveurs de la team (page Serveur du site), console et fichiers
             if (path.equals("/img/servers") || path.startsWith("/img/servers/")) {
-                servers.handle(path, body, (code, out) -> sendQuietly(exchange, code, out));
+                servers.handle(path, body, (code, out) -> sendQuietly(exchange, code, out),
+                        content -> sendBytesQuietly(exchange, content));
                 return;
             }
             RankSource lp = playerSync.source();
@@ -255,6 +267,36 @@ public class ImgMembersHandler implements HttpHandler {
 
     private ObjectNode error(String message) {
         return json.createObjectNode().put("error", message);
+    }
+
+    private static final java.util.regex.Pattern UPLOAD = java.util.regex.Pattern.compile("^/img/servers/\\d+/files/upload$");
+
+    private static Map<String, String> query(String raw) {
+        Map<String, String> out = new java.util.HashMap<>();
+        if (raw == null || raw.isEmpty()) {
+            return out;
+        }
+        for (String pair : raw.split("&")) {
+            int i = pair.indexOf('=');
+            String k = java.net.URLDecoder.decode(i < 0 ? pair : pair.substring(0, i), StandardCharsets.UTF_8);
+            String v = i < 0 ? "" : java.net.URLDecoder.decode(pair.substring(i + 1), StandardCharsets.UTF_8);
+            out.put(k, v);
+        }
+        return out;
+    }
+
+    private void sendBytesQuietly(HttpExchange exchange, ApiClient.FileContent content) {
+        try {
+            exchange.getResponseHeaders().set("Content-Type", "application/octet-stream");
+            exchange.getResponseHeaders().set("X-File-Size", Long.toString(content.size()));
+            exchange.getResponseHeaders().set("X-File-Mtime", Long.toString(content.mtime()));
+            exchange.sendResponseHeaders(200, content.data().length == 0 ? -1 : content.data().length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(content.data());
+            }
+        } catch (IOException e) {
+            logger.warn("/img/servers : fichier non envoyé ({})", e.getMessage());
+        }
     }
 
     private void sendQuietly(HttpExchange exchange, int code, JsonNode body) {
