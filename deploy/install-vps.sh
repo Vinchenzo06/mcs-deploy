@@ -889,6 +889,56 @@ fi
 SHEOF
   chmod 755 /usr/local/bin/mcs-protect
 
+  # mcs-team : serveur de la team IMG (lot 46) : reçoit les plugins de la team
+  cat > /usr/local/bin/mcs-team <<'SHEOF'
+#!/usr/bin/env bash
+# sudo mcs-team                         liste des serveurs de la team et des plugins de la team
+# sudo mcs-team <pseudo/nom> [on|off]   ajoute (on, défaut) ou retire un serveur de la team
+#   Un serveur de la team (Paper ou Spigot) reçoit à chaque démarrage les plugins de
+#   /var/lib/mcs/jars/team/ (ex. img-farm), mis à jour s'ils ont changé ; retiré de la
+#   team, ils sont enlevés au démarrage suivant. Ajouté = aussi protégé (mcs-protect).
+set -uo pipefail
+[[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
+psql=(runuser -u postgres -- psql -qtA -d mcs_db -v ON_ERROR_STOP=1)
+team_dir=${MCS_TEAM_PLUGINS_DIR:-/var/lib/mcs/jars/team}
+if [[ $# -eq 0 ]]; then
+  echo "Serveurs de la team :"
+  "${psql[@]}" -c "SELECT '  ' || p.minecraft_username || '/' || s.name || ' (n°' || s.id || ', ' || s.server_type || ')'
+                   FROM servers s JOIN players p ON p.id = s.owner_id WHERE s.is_team ORDER BY 1"
+  echo "Plugins de la team ($team_dir) :"
+  shopt -s nullglob
+  jars=("$team_dir"/*.jar)
+  (( ${#jars[@]} )) || echo "  (aucun : sudo mcs-deploy velocity les compile)"
+  for j in "${jars[@]}"; do echo "  ${j##*/}"; done
+  exit 0
+fi
+ref=$1
+[[ "$ref" == ?*/?* ]] || { echo "Usage : sudo mcs-team <pseudo/nom> [on|off]"; exit 1; }
+case "${2:-on}" in
+  on) val=true ;;
+  off) val=false ;;
+  *) echo "Usage : sudo mcs-team <pseudo/nom> [on|off]"; exit 1 ;;
+esac
+row=$("${psql[@]}" -F ' ' -v owner="${ref%%/*}" -v name="${ref#*/}" -v val="$val" <<'SQL'
+UPDATE servers s SET is_team = :val, is_protected = (s.is_protected OR :val) FROM players p
+WHERE p.id = s.owner_id AND lower(p.minecraft_username) = lower(:'owner') AND s.name = :'name'
+RETURNING s.id, s.server_type;
+SQL
+) || exit 1
+[[ -n "$row" ]] || { echo "Serveur $ref introuvable"; exit 1; }
+id=${row%% *}; type=${row#* }
+if [[ "$val" == true ]]; then
+  echo "✔ $ref (n°$id) fait partie de la team (et il est protégé)"
+  [[ "$type" == PAPER || "$type" == SPIGOT ]] \
+    || echo "  ! Serveur $type : les plugins de la team ne s'installent que sur Paper ou Spigot"
+  echo "  Redémarre-le pour installer les plugins de la team."
+else
+  echo "✔ $ref (n°$id) ne fait plus partie de la team : ses plugins de la team partent au prochain démarrage"
+  echo "  (toujours protégé : sudo mcs-protect $ref off pour l'enlever)"
+fi
+SHEOF
+  chmod 755 /usr/local/bin/mcs-team
+
   cat > /usr/local/bin/mcs-disk-quota <<'SHEOF'
 #!/usr/bin/env bash
 # sudo mcs-disk-quota                  liste les serveurs et leur quota
@@ -1652,7 +1702,7 @@ EOF
   if [[ -n "$IMG_HOST" && -n "$IMG_LOBBY" ]]; then
     # Les commandes du kit sont posées par system/rathole/egress : on s'assure que
     # mcs-protect existe même quand seule l'étape velocity est lancée
-    [[ -x /usr/local/bin/mcs-protect ]] || install_helpers
+    [[ -x /usr/local/bin/mcs-protect && -x /usr/local/bin/mcs-team ]] || install_helpers
     if mcs-protect "$IMG_LOBBY" on >/dev/null 2>&1; then
       ok "Entrée IMG : $IMG_HOST -> $IMG_LOBBY (protégé contre la suppression)"
     else
@@ -1663,8 +1713,12 @@ EOF
   # Compilé ici pour être copié dans plugins/ des serveurs de la team ; un échec ne bloque pas le proxy.
   if [[ -n "$FARMDB_URL" ]]; then
     if ( build_jar "$SRC_IMGFARM" "$JARS_DIR/img-farm/img-farm.jar" ); then
-      chmod 644 "$JARS_DIR/img-farm/img-farm.jar"
-      ok "Plugin img-farm : $JARS_DIR/img-farm/img-farm.jar (à copier dans plugins/ des serveurs de la team)"
+      # Lot 46 : les plugins de la team sont envoyés par l'API aux serveurs de la team
+      # (sudo mcs-team) à chaque démarrage
+      install -d -m 755 "$JARS_DIR/team"
+      install -m 644 "$JARS_DIR/img-farm/img-farm.jar" "$JARS_DIR/team/img-farm.jar"
+      ok "Plugin img-farm prêt : installé au démarrage des serveurs de la team (sudo mcs-team)"
+      [[ -x /usr/local/bin/mcs-team ]] || install_helpers
     else
       warn "Plugin img-farm non compilé (voir ci-dessus) : le proxy fonctionne quand même"
     fi

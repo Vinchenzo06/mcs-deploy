@@ -96,6 +96,8 @@ sudo mcs-admin TonPseudo
 | `sudo mcs-admin <pseudo>` | Groupe admin LuckPerms (vérifié) |
 | `sudo mcs-lp-export` | État LuckPerms en JSON (groupes, joueurs) |
 | `sudo mcs-rcon "<commande>"` | Commande dans la console du lobby |
+| `sudo mcs-protect [<pseudo/nom> [on\|off]]` | Serveur protégé contre toute suppression |
+| `sudo mcs-team [<pseudo/nom> [on\|off]]` | Serveur de la team IMG (reçoit les plugins de la team) |
 
 ## Capacité des machines et quotas disque
 
@@ -244,13 +246,14 @@ complète (Farming → Mes sessions).
 - Le serveur de jeu n'a **aucun jeton** et ne joint pas le site : le plugin envoie un message au proxy
   (canal `img:farm`), qui ajoute l'UUID réel du joueur et le nom du serveur, puis appelle le site sur
   le VPS. Un message venant d'un client est ignoré ; 20 requêtes par minute et par joueur au maximum.
-- `sudo mcs-deploy velocity` compile le plugin dans `/var/lib/mcs/jars/img-farm/img-farm.jar`
-  (Java 21, API Paper 1.21.4 : serveurs Paper 1.21 ou plus récents).
-- Installation, pour un serveur Paper de la team :
-  1. sur le VPS, `sudo mcs-protect pseudo/nom on` (il ne sera jamais supprimé) : la commande affiche
-     son numéro ;
-  2. copie le jar dans `/opt/mcs-data/servers/<numéro>/plugins/` sur la machine qui l'héberge ;
-  3. redémarre le serveur.
+- `sudo mcs-deploy velocity` compile le plugin (Java 21, API Paper 1.21.4 : serveurs Paper 1.21 ou plus
+  récents) et le pose dans `/var/lib/mcs/jars/team/`, le dossier des **plugins de la team**.
+- **Serveurs de la team** (lot 46) : `sudo mcs-team pseudo/nom` (sans argument : la liste). À chaque
+  démarrage d'un serveur Paper ou Spigot de la team, l'API envoie les plugins de la team à l'agent, qui
+  les pose dans `plugins/`, les remplace s'ils ont changé et retire ceux qu'il avait posés et qui ne
+  sont plus dans le dossier. `sudo mcs-team pseudo/nom off` : retirés au démarrage suivant. Un serveur
+  ajouté à la team est aussi protégé (`mcs-protect`). Plus de copie à la main : une nouvelle version
+  arrive au prochain redémarrage.
 - En jeu (compte lié avec `/link`) : `/farm start <item> [30m | 640]`, `/farm auto <item> …` en
   regardant le coffre de collecte, `/farm construction [base | module]`, `/farm pause | reprendre |
   stop | annuler`. À la fin : choix du type, puis **Envoyer au site** ou **Jeter**.

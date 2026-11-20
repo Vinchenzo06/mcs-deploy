@@ -121,6 +121,7 @@ func handleStartServer(conn *websocket.Conn, config *Config, commandId string, m
 		raw, _ := json.Marshal(data)
 		var req CreateServerRequest
 		if err := json.Unmarshal(raw, &req); err == nil && req.ServerID == serverID {
+			syncTeamPlugins(serverDataPath(config.Docker.DataPath, serverID), serverID, req.TeamPlugins)
 			if needsForwardingMods(req) && containerForwarding(serverID) != req.Forwarding {
 				// Conteneur créé sans les mods de forwarding : recréé avec (fichiers intacts)
 				log.Printf("Serveur %d : conteneur recréé pour le forwarding %s", serverID, req.Forwarding)
@@ -283,6 +284,7 @@ func handleRecreateServer(conn *websocket.Conn, config *Config, commandId string
 		sendCommandError(conn, commandId, "busy", "sauvegarde ou restauration en cours : réessaie dans un instant")
 		return
 	}
+	syncTeamPlugins(serverDataPath(config.Docker.DataPath, req.ServerID), req.ServerID, req.TeamPlugins)
 	if err := RecreateServer(config.Docker.DataPath, req, start); err != nil {
 		sendCommandFailure(conn, commandId, "recreate_failed", err)
 		return

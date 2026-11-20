@@ -29,6 +29,8 @@ type CreateServerRequest struct {
 	ForwardingSecret string `json:"forwarding_secret"`
 	// Serveur recréé à partir d'une sauvegarde (serveur supprimé, lot 31)
 	Restore *restoreRequest `json:"restore,omitempty"`
+	// Plugins de la team IMG (lot 46) : nil = ne rien changer
+	TeamPlugins *[]teamPlugin `json:"team_plugins,omitempty"`
 }
 
 // ContainerName retourne le nom standardisé du conteneur pour un serveur donné

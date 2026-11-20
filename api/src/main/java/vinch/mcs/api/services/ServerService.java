@@ -83,6 +83,7 @@ public class ServerService {
         int java = JavaVersions.effective(server);
         data.put("java", java);
         ProxyForwarding.apply(data, server);
+        TeamPlugins.apply(data, server);
         if (restore != null) {
             data.put("restore", restore);
         }
@@ -585,6 +586,7 @@ public class ServerService {
         data.put("owner_name", server.getOwner().getMinecraftUsername());
         data.put("java", JavaVersions.effective(server));
         ProxyForwarding.apply(data, server);
+        TeamPlugins.apply(data, server);
         if (restore != null) {
             data.put("restore", restore);
         }
