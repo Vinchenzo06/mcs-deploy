@@ -35,7 +35,7 @@ import java.util.regex.Pattern;
 /**
  * img-farm : sessions de farm mesurées en jeu, pour le site IMG Farm DB.
  *
- * /farm start <item> [30m|640]   farm à la main (items ramassés + sortis des coffres, fours…)
+ * /farm start <item> [30m|640]   farm à la main (items ramassés, sauf jetés, + sortis des fours et villageois)
  * /farm auto <item> [30m|640]    ferme auto : en regardant le coffre de collecte
  * /farm coffre                   ajoute un autre coffre de collecte
  * /farm construction [base|module]  chrono de construction (le temps seulement)
@@ -137,7 +137,7 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
     private void help(Player p) {
         p.sendMessage(info("Sessions de farm, envoyées sur le site de la team (Farming → Mes sessions) :"));
         p.sendMessage(Component.text("  /farm start <item> [30m | 640]", NamedTextColor.YELLOW)
-                .append(Component.text(" farm à la main : items ramassés et sortis des coffres", NamedTextColor.GRAY)));
+                .append(Component.text(" farm à la main : items ramassés, sortis des fours et des villageois", NamedTextColor.GRAY)));
         p.sendMessage(Component.text("  /farm auto <item> [30m | 640]", NamedTextColor.YELLOW)
                 .append(Component.text(" ferme auto : regarde le coffre de collecte", NamedTextColor.GRAY)));
         p.sendMessage(Component.text("  /farm coffre", NamedTextColor.YELLOW)
@@ -365,7 +365,8 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
             p.sendMessage(ok("Session lancée : " + name + target + (auto ? " (ferme auto, 1 coffre de collecte)" : "") + "."));
             p.sendMessage(info(auto
                     ? "Compté : ce qui entre dans le coffre de collecte et ce que tu ramasses. Autre coffre : /farm coffre."
-                    : "Compté : ce que tu ramasses et ce que tu sors des coffres, fours ou trémies (ce que tu y remets est retiré)."));
+                    : "Compté : ce que tu ramasses (sauf ce qui a été jeté) et ce qui sort des fours et des villageois. "
+                    + "Ranger dans un coffre ou un shulker ne change rien au total."));
             if (c == 0 && sec == 0) p.sendMessage(info("Pas d'objectif : /farm stop quand tu as fini."));
         });
     }

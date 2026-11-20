@@ -254,6 +254,10 @@ complète (Farming → Mes sessions).
 - En jeu (compte lié avec `/link`) : `/farm start <item> [30m | 640]`, `/farm auto <item> …` en
   regardant le coffre de collecte, `/farm construction [base | module]`, `/farm pause | reprendre |
   stop | annuler`. À la fin : choix du type, puis **Envoyer au site** ou **Jeter**.
+- Ce qui compte (lot 45) : à la main, les items ramassés au sol, sauf ceux qu'un joueur a jetés, et
+  ce qui sort des fours, de l'alambic et des villageois ; ranger dans un coffre ou un shulker (ou en
+  ressortir) ne change rien. Ferme auto : ce qui entre dans les coffres de collecte, plus ce que le
+  joueur ramasse.
 
 ## Sauvegardes
 

@@ -35,9 +35,10 @@ final class FarmSession {
     boolean finished;
     long endedAt;
 
-    // À la main : inventaire d'un coffre ouvert (sorties - dépôts)
+    // À la main : inventaire du joueur à l'ouverture d'un four ou d'un villageois
     int countAtOpen = -1;
     long pickupsSinceOpen;
+    long dropsSinceOpen;
     long fullWarnedAt;
 
     FarmSession(UUID player, Kind kind, boolean auto, String part, Material item, String itemKey, String itemName,

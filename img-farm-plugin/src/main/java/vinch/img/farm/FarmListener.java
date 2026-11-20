@@ -1,6 +1,7 @@
 package vinch.img.farm;
 
 import org.bukkit.Material;
+import org.bukkit.entity.Item;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -11,29 +12,37 @@ import org.bukkit.event.inventory.InventoryMoveItemEvent;
 import org.bukkit.event.inventory.InventoryOpenEvent;
 import org.bukkit.event.inventory.InventoryPickupItemEvent;
 import org.bukkit.event.inventory.InventoryType;
+import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.ItemStack;
 
 import java.util.EnumSet;
+import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Comptage des items d'une session.
- *  - À la main : items ramassés + (sortis − remis) des coffres, fours, trémies et villageois,
- *    mesuré sur l'inventaire du joueur entre l'ouverture et la fermeture de l'interface.
+ * Comptage des items d'une session : seulement ce qui est nouvellement produit.
+ *  - À la main : items ramassés au sol, sauf ceux qu'un joueur a jetés (jeter puis reprendre
+ *    ne compte pas deux fois) + ce qui sort des fours, de l'alambic et des villageois
+ *    (mesuré sur l'inventaire du joueur entre l'ouverture et la fermeture de l'interface).
+ *    Les coffres, barils, shulkers… ne comptent pas : y ranger ou en sortir ne change rien.
  *  - Ferme auto : ce qui entre dans les coffres de collecte (trémies, droppers, ramassage
- *    d'une trémie au sol) + ce que le joueur ramasse.
+ *    d'une trémie au sol, sauf items jetés) + ce que le joueur ramasse.
  * Pause automatique quand le joueur quitte le serveur.
  */
 final class FarmListener implements Listener {
 
-    /** Interfaces dont la sortie compte (pas l'établi : fabriquer n'est pas farmer) */
-    private static final Set<InventoryType> COUNTED = EnumSet.of(
-            InventoryType.CHEST, InventoryType.BARREL, InventoryType.SHULKER_BOX, InventoryType.ENDER_CHEST,
-            InventoryType.HOPPER, InventoryType.DISPENSER, InventoryType.DROPPER,
+    /** Interfaces qui produisent (cuisson, alambic, échanges) : ce qui en sort compte.
+     *  Pas le rangement (coffres, shulkers…) ni l'établi (fabriquer n'est pas farmer). */
+    private static final Set<InventoryType> PRODUCERS = EnumSet.of(
             InventoryType.FURNACE, InventoryType.BLAST_FURNACE, InventoryType.SMOKER,
             InventoryType.BREWING, InventoryType.MERCHANT);
+
+    /** Items jetés par un joueur (si le jeu ne garde pas qui les a jetés) : id -> heure */
+    private final Map<UUID, Long> thrown = new ConcurrentHashMap<>();
 
     private final ImgFarmPlugin plugin;
 
@@ -66,8 +75,27 @@ final class FarmListener implements Listener {
         return n;
     }
 
+    /** Jeté par un joueur (Q, glissé hors de l'inventaire…) : déjà compté ou pas farmé */
+    private boolean thrownByPlayer(Item item) {
+        return item.getThrower() != null || thrown.containsKey(item.getUniqueId());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onDrop(PlayerDropItemEvent event) {
+        if (plugin.sessions.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        if (thrown.size() > 5000) thrown.values().removeIf(t -> now - t > 10 * 60_000);
+        thrown.put(event.getItemDrop().getUniqueId(), now);
+        FarmSession s = running(event.getPlayer());
+        if (s != null && s.countAtOpen >= 0 && event.getItemDrop().getItemStack().getType() == s.item) {
+            s.dropsSinceOpen += event.getItemDrop().getItemStack().getAmount();
+        }
+    }
+
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onPickup(EntityPickupItemEvent event) {
+        boolean wasThrown = thrownByPlayer(event.getItem());
+        if (wasThrown) thrown.remove(event.getItem().getUniqueId());
         if (!(event.getEntity() instanceof Player p)) return;
         FarmSession s = running(p);
         if (s == null) return;
@@ -76,16 +104,17 @@ final class FarmListener implements Listener {
         int amount = stack.getAmount() - event.getRemaining();
         if (amount <= 0) return;
         if (s.countAtOpen >= 0) s.pickupsSinceOpen += amount;
-        add(p, s, amount);
+        if (!wasThrown) add(p, s, amount);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onOpen(InventoryOpenEvent event) {
         if (!(event.getPlayer() instanceof Player p)) return;
         FarmSession s = running(p);
-        if (s == null || s.auto || !COUNTED.contains(event.getInventory().getType())) return;
+        if (s == null || s.auto || !PRODUCERS.contains(event.getInventory().getType())) return;
         s.countAtOpen = countIn(p, s.item);
         s.pickupsSinceOpen = 0;
+        s.dropsSinceOpen = 0;
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -99,7 +128,7 @@ final class FarmListener implements Listener {
             int before = s.countAtOpen;
             s.countAtOpen = -1;
             if (!p.isOnline() || !s.running()) return;
-            long moved = countIn(p, s.item) - before - s.pickupsSinceOpen;
+            long moved = countIn(p, s.item) - before - s.pickupsSinceOpen + s.dropsSinceOpen;
             add(p, s, moved);
         });
     }
@@ -123,7 +152,7 @@ final class FarmListener implements Listener {
     /** Ferme auto : une trémie de collecte qui ramasse au sol */
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onHopperPickup(InventoryPickupItemEvent event) {
-        if (plugin.sessions.isEmpty()) return;
+        if (plugin.sessions.isEmpty() || thrownByPlayer(event.getItem())) return;
         ItemStack it = event.getItem().getItemStack();
         String key = null;
         for (FarmSession s : plugin.sessions.values()) {
