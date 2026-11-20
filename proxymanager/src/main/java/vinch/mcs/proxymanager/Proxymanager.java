@@ -30,6 +30,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 @Plugin(
         id = "proxymanager",
@@ -58,6 +59,7 @@ public class Proxymanager {
     private PlayerSync playerSync;
     private ImgGate imgGate;
     private FarmdbMembers farmdbMembers;
+    private ImgRole imgRole;
 
     // Faux tant que le masquage des IP (s'il est demandé) n'est pas en place :
     // aucun serveur joueur n'est alors enregistré (fail-closed)
@@ -254,8 +256,11 @@ public class Proxymanager {
 
                     logger.debug("Joueur enregistré dans l'API : {} (id={})",
                             player.getUsername(), response.get("id").asLong());
-                    // Quotas, rôle admin et rang réseau (LuckPerms du proxy)
-                    playerSync.sync(player);
+                    // Quotas, rôle admin et rang réseau (LuckPerms du proxy) ; lot 51 : le rôle
+                    // IMG suit d'abord le site (membre lié et non bloqué)
+                    (imgRole == null ? CompletableFuture.completedFuture((Void) null)
+                            : imgRole.sync(player.getUniqueId(), player.getUsername()))
+                            .thenCompose(v -> playerSync.sync(player));
                     // Messages MCS reçus pendant son absence (serveur déplacé...)
                     apiClient.getNotifications(response.get("id").asLong()).thenAccept(r -> {
                         JsonNode list = r.path("notifications");
@@ -303,11 +308,17 @@ public class Proxymanager {
                 imgGate.setMembers(farmdbMembers);
                 logger.info("Lobby IMG ouvert aux membres liés du site IMG Farm DB");
             }
+            // Lot 51 : rôle IMG (groupe LuckPerms) pour les membres du site
+            if (playerSync.source() != null) {
+                imgRole = new ImgRole(playerSync.source(), farmdbMembers, logger);
+                imgRole.ensureGroup();
+                logger.info("Rôle IMG (groupe LuckPerms {}) donné aux membres liés du site", ImgRole.GROUP);
+            }
             // Lot 50 : réglages MCS des membres (serveurs max, admin) depuis le site
             if (apiServer != null) {
-                apiServer.addContext("/img/members",
+                apiServer.addContext("/img/",
                         new ImgMembersHandler(server, apiClient, playerSync, logger, config.getFarmdbToken()));
-                logger.info("Réglages des membres ouverts au site IMG Farm DB (127.0.0.1:{}/img/members)", config.getLocalApiPort());
+                logger.info("Réglages des membres et du rôle IMG ouverts au site IMG Farm DB (127.0.0.1:{}/img/)", config.getLocalApiPort());
             }
         } else if (!config.getFarmdbUrl().isBlank()) {
             logger.warn("/link désactivé : farmdb-token absent ou trop court");

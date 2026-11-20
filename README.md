@@ -243,10 +243,16 @@ fichiers, donc au mot de passe. Titre d'un groupe : `lp group vip meta setprefix
 - Y entrent : les invités du lobby (`/mcs invite`) **et** les membres du site IMG Farm DB qui ont lié leur
   compte Minecraft (`/link`) et ne sont pas bloqués sur le site (lot 48 ; réponse du site gardée 60 s).
   Bloquer un membre sur le site lui ferme le lobby IMG (sauf s'il y est aussi invité).
-- Admin → Membres du site (lot 50) : **serveurs max** et **admin MCS** de chaque membre lié. Le site appelle
-  l'API locale du proxy (`127.0.0.1:8082/img/members`, jeton `FARMDB_TOKEN`), qui écrit dans LuckPerms
-  (méta `max-servers` du joueur, groupe `admin`) comme `/mcs` et `mcs-admin`. « Par défaut » = la valeur
-  du groupe LuckPerms. Le site ne reçoit jamais la clé de l'API MCS.
+- Pas encore lié ? L'écran de refus de `img.asearia.ca` affiche un **code** (15 min) à entrer sur le site
+  (Mon profil) : le compte est lié, il suffit de se reconnecter (lot 51). `/link` marche toujours.
+- **Rôle IMG** (lot 51) : groupe LuckPerms `img` (poids 40 : au-dessus de default/vip/premium, sous host et
+  admin), donné à chaque connexion aux membres liés et non bloqués du site, retiré aux autres (site
+  injoignable = rien ne change). Il devient leur rang réseau (politique de sauvegarde `rank:img`).
+- Admin → Membres du site (lots 50-51) : **quotas du rôle IMG** (serveurs, RAM, CPU), **quotas propres** à un
+  membre qui passent par-dessus, et **admin MCS**. Le site appelle l'API locale du proxy
+  (`127.0.0.1:8082/img/...`, jeton `FARMDB_TOKEN`), qui écrit dans LuckPerms (méta `max-servers`,
+  `total-ram`, `total-cpu` ; groupe `admin`) comme `/mcs` et `mcs-admin`. Le site ne reçoit jamais la clé de
+  l'API MCS.
 
 ## Sessions de farm IMG (plugin img-farm)
 

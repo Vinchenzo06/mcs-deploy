@@ -9,6 +9,9 @@ import net.luckperms.api.cacheddata.CachedMetaData;
 import net.luckperms.api.node.NodeType;
 import net.luckperms.api.node.types.InheritanceNode;
 import net.luckperms.api.node.types.MetaNode;
+import net.luckperms.api.node.types.WeightNode;
+import net.luckperms.api.model.data.NodeMap;
+import net.luckperms.api.model.group.GroupManager;
 
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -55,35 +58,81 @@ public class LuckPermsBridge implements RankSource {
         });
     }
 
+    private static final java.util.List<String> QUOTA_KEYS = java.util.List.of(MAX_SERVERS, TOTAL_RAM, TOTAL_CPU);
+
+    private static Quotas quotasOf(java.util.Collection<MetaNode> nodes) {
+        Integer[] v = new Integer[3];
+        for (MetaNode n : nodes) {
+            int i = QUOTA_KEYS.indexOf(n.getMetaKey());
+            if (i >= 0) {
+                v[i] = parseOrNull(n.getMetaValue());
+            }
+        }
+        return new Quotas(v[0], v[1], v[2]);
+    }
+
+    /** Remplace les méta de quotas données (valeur null = retirée) */
+    private static void applyQuotas(NodeMap data, java.util.Map<String, Integer> set) {
+        for (java.util.Map.Entry<String, Integer> e : set.entrySet()) {
+            String key = e.getKey();
+            if (!QUOTA_KEYS.contains(key)) {
+                continue;
+            }
+            data.clear(NodeType.META.predicate(n -> key.equals(n.getMetaKey())));
+            if (e.getValue() != null) {
+                data.add(MetaNode.builder(key, String.valueOf(e.getValue())).build());
+            }
+        }
+    }
+
+    private static boolean ownGroup(net.luckperms.api.model.user.User user, String group) {
+        for (InheritanceNode n : user.getNodes(NodeType.INHERITANCE)) {
+            if (group.equalsIgnoreCase(n.getGroupName())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     public CompletableFuture<Settings> settings(UUID uuid) {
         return luckPerms.getUserManager().loadUser(uuid).thenApply(user -> {
-            Integer own = null;
-            for (MetaNode n : user.getNodes(NodeType.META)) {
-                if ("max-servers".equals(n.getMetaKey())) {
-                    own = parseOrNull(n.getMetaValue());
-                }
-            }
-            boolean adminGroup = false;
-            for (InheritanceNode n : user.getNodes(NodeType.INHERITANCE)) {
-                if ("admin".equalsIgnoreCase(n.getGroupName())) {
-                    adminGroup = true;
-                }
-            }
             CachedMetaData meta = user.getCachedData().getMetaData();
             boolean admin = user.getCachedData().getPermissionData().checkPermission("mcs.admin").asBoolean();
-            return new Settings(own, parse(meta.getMetaValue("max-servers"), 1), admin, adminGroup);
+            return new Settings(quotasOf(user.getNodes(NodeType.META)),
+                    parse(meta.getMetaValue(MAX_SERVERS), 1), parse(meta.getMetaValue(TOTAL_RAM), 1024),
+                    parse(meta.getMetaValue(TOTAL_CPU), 1), admin, ownGroup(user, "admin"), ownGroup(user, "img"));
         });
     }
 
     @Override
-    public CompletableFuture<Void> setMaxServers(UUID uuid, Integer maxServers) {
-        return luckPerms.getUserManager().modifyUser(uuid, user -> {
-            user.data().clear(NodeType.META.predicate(n -> "max-servers".equals(n.getMetaKey())));
-            if (maxServers != null) {
-                user.data().add(MetaNode.builder("max-servers", String.valueOf(maxServers)).build());
-            }
-        });
+    public CompletableFuture<Void> setUserQuotas(UUID uuid, java.util.Map<String, Integer> set) {
+        return luckPerms.getUserManager().modifyUser(uuid, user -> applyQuotas(user.data(), set));
+    }
+
+    @Override
+    public CompletableFuture<Void> ensureGroup(String group, int weight) {
+        GroupManager groups = luckPerms.getGroupManager();
+        return groups.loadGroup(group).thenCompose(existing -> existing.isPresent()
+                ? CompletableFuture.completedFuture((Void) null)
+                : groups.createAndLoadGroup(group).thenCompose(g ->
+                        groups.modifyGroup(group, gg -> gg.data().add(WeightNode.builder(weight).build()))));
+    }
+
+    @Override
+    public CompletableFuture<Quotas> groupQuotas(String group) {
+        return luckPerms.getGroupManager().loadGroup(group).thenApply(g ->
+                g.map(x -> quotasOf(x.getNodes(NodeType.META))).orElse(new Quotas(null, null, null)));
+    }
+
+    @Override
+    public CompletableFuture<Void> setGroupQuotas(String group, java.util.Map<String, Integer> set) {
+        return luckPerms.getGroupManager().modifyGroup(group, g -> applyQuotas(g.data(), set));
+    }
+
+    @Override
+    public CompletableFuture<Boolean> inGroup(UUID uuid, String group) {
+        return luckPerms.getUserManager().loadUser(uuid).thenApply(user -> ownGroup(user, group));
     }
 
     /** "&c[Admin] " (codes & ou §) -> composant texte JSON, "" si pas de préfixe */

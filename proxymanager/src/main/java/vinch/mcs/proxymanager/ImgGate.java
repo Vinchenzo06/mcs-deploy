@@ -177,6 +177,28 @@ public class ImgGate {
         }
     }
 
+    /**
+     * Écran de refus (lot 51) : un code à entrer sur le site pour lier son compte, sans
+     * passer par un autre serveur. Compte lié mais bloqué : on le dit.
+     */
+    private Component refusal(Player player) {
+        JsonNode jc = members == null ? null : members.joinCode(player.getUniqueId(), player.getUsername());
+        if (jc != null && jc.path("linked").asBoolean(false) && !jc.path("member").asBoolean(true)) {
+            return msg("IMG » Ton compte du site de la team est bloqué.\nParles-en à un admin de la team.");
+        }
+        String code = jc == null ? "" : jc.path("code").asText("");
+        if (code.isEmpty()) {
+            return msg("IMG » Cette adresse est réservée aux membres de la team IMG.\n"
+                    + "Demande une invitation, puis reconnecte-toi.");
+        }
+        return Component.text("IMG » Réservé aux membres de la team IMG.\n\n").color(NamedTextColor.GOLD)
+                .append(Component.text("Membre ? Va sur ").color(NamedTextColor.GRAY))
+                .append(Component.text(host).color(NamedTextColor.WHITE))
+                .append(Component.text(" (Mon profil) et entre ce code :\n\n").color(NamedTextColor.GRAY))
+                .append(Component.text(code).color(NamedTextColor.GREEN))
+                .append(Component.text("\n\nValable 15 minutes. Ensuite, reconnecte-toi.").color(NamedTextColor.GRAY));
+    }
+
     private static Component msg(String text) {
         return Component.text(text).color(NamedTextColor.GOLD);
     }
@@ -230,8 +252,7 @@ public class ImgGate {
         }
         if (!allowed) {
             logger.info("{} refusé à l'entrée IMG (ni invité sur {}, ni membre lié du site)", player.getUsername(), lobby.velocityName());
-            player.disconnect(msg("IMG » Cette adresse est réservée aux membres de la team IMG.\n"
-                    + "Membre ? Va sur play.asearia.ca et tape /link avec le code de ton profil sur le site, puis reviens."));
+            player.disconnect(refusal(player));
             return;
         }
 

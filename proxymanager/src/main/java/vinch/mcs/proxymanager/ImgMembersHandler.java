@@ -21,12 +21,15 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Réglages MCS des membres, depuis le site IMG Farm DB (lot 50), sur l'API locale du proxy
+ * Réglages MCS des membres, depuis le site IMG Farm DB (lots 50-51), sur l'API locale du proxy
  * (127.0.0.1:8082, jeton farmdb-token en « Authorization: Bearer ») :
- *   POST /img/members         {"uuids": [...]}                    -> réglages de chaque joueur
- *   POST /img/members/{uuid}  {"max_servers": n|null, "admin": b}  -> change puis renvoie les réglages
- * max_servers et admin sont des données LuckPerms (méta « max-servers » du joueur, groupe « admin »),
- * la même source que /mcs et le lobby ; l'API MCS est resynchronisée si le joueur est connecté.
+ *   POST /img/members         {"uuids": [...]}  -> réglages de chaque joueur
+ *   POST /img/members/{uuid}  {"max_servers", "total_ram", "total_cpu": n|null, "admin": b}
+ *                             -> quotas propres au joueur (null = ceux de son rôle), admin
+ *   POST /img/role            {} pour lire, ou {"max_servers", "total_ram", "total_cpu": n|null}
+ *                             -> quotas du rôle IMG (groupe LuckPerms « img »)
+ * Tout est dans LuckPerms (méta max-servers, total-ram en Mo, total-cpu ; groupe « admin »),
+ * la même source que /mcs et le lobby ; l'API MCS est resynchronisée pour les joueurs connectés.
  * Le site ne reçoit jamais la clé de l'API MCS.
  */
 public class ImgMembersHandler implements HttpHandler {
@@ -75,7 +78,9 @@ public class ImgMembersHandler implements HttpHandler {
             byte[] raw = exchange.getRequestBody().readNBytes(64 * 1024);
             JsonNode body = raw.length == 0 ? json.createObjectNode() : json.readTree(raw);
             String path = exchange.getRequestURI().getPath().replaceAll("/+$", "");
-            if (path.equals("/img/members")) {
+            if (path.equals("/img/role")) {
+                role(exchange, lp, body);
+            } else if (path.equals("/img/members")) {
                 list(exchange, lp, body);
             } else if (path.startsWith("/img/members/")) {
                 update(exchange, lp, UUID.fromString(path.substring("/img/members/".length())), body);
@@ -99,20 +104,88 @@ public class ImgMembersHandler implements HttpHandler {
         return lp.settings(uuid).thenCombine(count, (s, n) -> {
             ObjectNode o = json.createObjectNode();
             o.put("max_servers", s.maxServers());
-            if (s.ownMaxServers() == null) {
-                o.putNull("own_max_servers");
-            } else {
-                o.put("own_max_servers", s.ownMaxServers());
-            }
+            o.put("total_ram", s.ramMb());
+            o.put("total_cpu", s.cpu());
+            ObjectNode own = o.putObject("own");
+            putNullable(own, "max_servers", s.own().maxServers());
+            putNullable(own, "total_ram", s.own().ramMb());
+            putNullable(own, "total_cpu", s.own().cpu());
             o.put("admin", s.admin());
             o.put("admin_group", s.adminGroup());
-            if (n == null) {
-                o.putNull("servers");
-            } else {
-                o.put("servers", n);
-            }
+            o.put("img", s.imgGroup());
+            putNullable(o, "servers", n);
             return o;
         });
+    }
+
+    private static void putNullable(ObjectNode o, String key, Integer value) {
+        if (value == null) {
+            o.putNull(key);
+        } else {
+            o.put(key, value);
+        }
+    }
+
+    /** max_servers 0-100, total_ram 512 Mo à 1 To, total_cpu 0-256 ; null = retiré */
+    private static java.util.Map<String, Integer> quotaChanges(JsonNode body) {
+        java.util.Map<String, Integer> set = new java.util.HashMap<>();
+        Object[][] fields = {
+                {"max_servers", RankSource.MAX_SERVERS, 0, 100},
+                {"total_ram", RankSource.TOTAL_RAM, 512, 1048576},
+                {"total_cpu", RankSource.TOTAL_CPU, 0, 256},
+        };
+        for (Object[] f : fields) {
+            String name = (String) f[0];
+            if (!body.has(name)) {
+                continue;
+            }
+            JsonNode v = body.get(name);
+            if (v.isNull()) {
+                set.put((String) f[1], null);
+                continue;
+            }
+            int min = (int) f[2];
+            int max = (int) f[3];
+            if (!v.canConvertToInt() || v.asInt() < min || v.asInt() > max) {
+                throw new IllegalArgumentException(name + " : entier de " + min + " à " + max + ", ou null");
+            }
+            set.put((String) f[1], v.asInt());
+        }
+        return set;
+    }
+
+    private ObjectNode quotasJson(RankSource.Quotas q) {
+        ObjectNode o = json.createObjectNode();
+        putNullable(o, "max_servers", q.maxServers());
+        putNullable(o, "total_ram", q.ramMb());
+        putNullable(o, "total_cpu", q.cpu());
+        return o;
+    }
+
+    /** Quotas du rôle IMG : lecture, ou changement puis resynchronisation des joueurs connectés */
+    private void role(HttpExchange exchange, RankSource lp, JsonNode body) {
+        java.util.Map<String, Integer> set = quotaChanges(body);
+        CompletableFuture<Void> done = lp.ensureGroup(ImgRole.GROUP, ImgRole.WEIGHT);
+        if (!set.isEmpty()) {
+            done = done.thenCompose(v -> lp.setGroupQuotas(ImgRole.GROUP, set))
+                    .thenRun(() -> {
+                        logger.info("Site IMG : quotas du rôle IMG changés ({})", body);
+                        proxy.getAllPlayers().forEach(playerSync::sync);
+                    });
+        }
+        done.thenCompose(v -> lp.groupQuotas(ImgRole.GROUP))
+                .orTimeout(15, TimeUnit.SECONDS)
+                .whenComplete((q, e) -> {
+                    if (e != null) {
+                        logger.warn("/img/role : {}", e.getMessage());
+                        sendQuietly(exchange, 500, error("Rôle IMG indisponible : " + e.getMessage()));
+                        return;
+                    }
+                    ObjectNode out = json.createObjectNode();
+                    out.put("group", ImgRole.GROUP);
+                    out.set("quotas", quotasJson(q));
+                    sendQuietly(exchange, 200, out);
+                });
     }
 
     private void list(HttpExchange exchange, RankSource lp, JsonNode body) throws Exception {
@@ -147,17 +220,9 @@ public class ImgMembersHandler implements HttpHandler {
 
     private void update(HttpExchange exchange, RankSource lp, UUID uuid, JsonNode body) {
         CompletableFuture<Void> done = CompletableFuture.completedFuture(null);
-        if (body.has("max_servers")) {
-            JsonNode v = body.get("max_servers");
-            Integer max = null;
-            if (!v.isNull()) {
-                if (!v.canConvertToInt() || v.asInt() < 0 || v.asInt() > 100) {
-                    throw new IllegalArgumentException("max_servers : entier de 0 à 100, ou null");
-                }
-                max = v.asInt();
-            }
-            Integer m = max;
-            done = done.thenCompose(x -> lp.setMaxServers(uuid, m));
+        java.util.Map<String, Integer> set = quotaChanges(body);
+        if (!set.isEmpty()) {
+            done = done.thenCompose(x -> lp.setUserQuotas(uuid, set));
         }
         if (body.has("admin")) {
             boolean admin = body.get("admin").asBoolean(false);
