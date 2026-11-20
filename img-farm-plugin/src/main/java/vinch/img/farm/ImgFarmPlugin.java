@@ -59,7 +59,7 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
     }
 
     private static final List<String> SUBCOMMANDS = List.of("start", "auto", "coffre", "construction", "pause",
-            "reprendre", "stop", "annuler", "envoyer", "jeter", "type");
+            "reprendre", "stop", "annuler", "envoyer", "jeter", "type", "aide");
     private static final Pattern DURATION = Pattern.compile("^(?:(\\d+)h)?(?:(\\d+)(?:min|m))?(?:(\\d+)s)?$");
 
     final Map<UUID, FarmSession> sessions = new ConcurrentHashMap<>();
@@ -135,6 +135,8 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
     }
 
     private void help(Player p) {
+        p.sendMessage(Component.text("  /farm <item>", NamedTextColor.YELLOW)
+                .append(Component.text(" les meilleures méthodes du site pour cet item (ex. /farm fer)", NamedTextColor.GRAY)));
         p.sendMessage(info("Sessions de farm, envoyées sur le site de la team (Farming → Mes sessions) :"));
         p.sendMessage(Component.text("  /farm start <item> [30m | 640]", NamedTextColor.YELLOW)
                 .append(Component.text(" farm à la main : items ramassés, sortis des fours et des villageois", NamedTextColor.GRAY)));
@@ -281,7 +283,8 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
             case "type" -> setType(p, args);
             case "envoyer" -> sendToSite(p);
             case "jeter" -> discard(p);
-            default -> help(p);
+            case "aide", "help" -> help(p);
+            default -> best(p, String.join(" ", args));
         }
         return true;
     }
@@ -583,13 +586,93 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
         });
     }
 
+    // ---------- /farm <item> : les meilleures méthodes du site ----------
+
+    private void best(Player p, String query) {
+        if (busy.contains(p.getUniqueId())) return;
+        JsonObject data = new JsonObject();
+        data.addProperty("query", query.length() > 60 ? query.substring(0, 60) : query);
+        busy.add(p.getUniqueId());
+        bridge.send(p, "best", data, reply -> {
+            busy.remove(p.getUniqueId());
+            if (!p.isOnline()) return;
+            if (!reply.ok()) {
+                p.sendMessage(error(reply.error()));
+                if (reply.status() == 404) p.sendMessage(info("Les commandes : /farm aide"));
+                return;
+            }
+            JsonObject body = reply.body();
+            JsonObject item = body.getAsJsonObject("item");
+            String name = item.get("name").getAsString();
+            String id = item.get("id").getAsString();
+            int count = body.has("count") ? body.get("count").getAsInt() : 0;
+            Component head = info("").append(Component.text(name, NamedTextColor.WHITE))
+                    .append(Component.text(" (" + id + ")", NamedTextColor.DARK_GRAY))
+                    .append(Component.text(count == 0 ? " : aucune méthode sur le site." : " : " + count
+                            + (count > 1 ? " méthodes" : " méthode") + " sur le site", NamedTextColor.GRAY));
+            p.sendMessage(head);
+            int rank = 1;
+            for (var el : body.getAsJsonArray("methods")) {
+                JsonObject m = el.getAsJsonObject();
+                String url = m.has("url") ? m.get("url").getAsString() : "";
+                StringBuilder detail = new StringBuilder(m.get("type").getAsString());
+                if (m.has("version") && !m.get("version").isJsonNull()) detail.append(" · ").append(m.get("version").getAsString());
+                if (m.has("event") && !m.get("event").isJsonNull()) detail.append(" · event ").append(m.get("event").getAsString());
+                Component line = Component.text(" " + rank++ + ". ", NamedTextColor.DARK_GRAY)
+                        .append(Component.text(num(m.get("rate").getAsDouble()) + "/h ", NamedTextColor.GREEN))
+                        .append(Component.text(m.get("title").getAsString(), NamedTextColor.WHITE))
+                        .append(Component.text("  " + detail, NamedTextColor.DARK_GRAY));
+                if (m.has("dupe") && m.get("dupe").getAsBoolean()) {
+                    line = line.append(Component.text(" [dupe]", NamedTextColor.GOLD));
+                }
+                if (url.startsWith("https://") || url.startsWith("http://")) {
+                    line = line.clickEvent(ClickEvent.openUrl(url))
+                            .hoverEvent(HoverEvent.showText(Component.text("Ouvrir la méthode sur le site")));
+                }
+                p.sendMessage(line);
+            }
+            Component foot = Component.text(" ");
+            String itemUrl = item.has("url") ? item.get("url").getAsString() : "";
+            if (count > 0 && (itemUrl.startsWith("https://") || itemUrl.startsWith("http://"))) {
+                foot = foot.append(Component.text("[Tout voir sur le site]", NamedTextColor.AQUA)
+                        .clickEvent(ClickEvent.openUrl(itemUrl))
+                        .hoverEvent(HoverEvent.showText(Component.text(itemUrl)))).append(Component.text(" "));
+            }
+            foot = foot.append(button("Mesurer", "/farm start " + id, "Lancer une session de farm pour " + name, NamedTextColor.YELLOW));
+            p.sendMessage(foot);
+            if (body.has("others") && body.getAsJsonArray("others").size() > 0) {
+                Component others = Component.text(" Autres items : ", NamedTextColor.DARK_GRAY);
+                boolean first = true;
+                for (var el : body.getAsJsonArray("others")) {
+                    JsonObject o = el.getAsJsonObject();
+                    if (!first) others = others.append(Component.text(", ", NamedTextColor.DARK_GRAY));
+                    first = false;
+                    others = others.append(Component.text(o.get("name").getAsString(), NamedTextColor.GRAY)
+                            .clickEvent(ClickEvent.runCommand("/farm " + o.get("id").getAsString()))
+                            .hoverEvent(HoverEvent.showText(Component.text("/farm " + o.get("id").getAsString()))));
+                }
+                p.sendMessage(others);
+            }
+        });
+    }
+
     // ---------- Complétion ----------
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
         List<String> out = new ArrayList<>();
         if (args.length == 1) {
-            for (String s : SUBCOMMANDS) if (s.startsWith(args[0].toLowerCase(Locale.ROOT))) out.add(s);
+            String q = args[0].toLowerCase(Locale.ROOT).replace("minecraft:", "");
+            for (String s : SUBCOMMANDS) if (s.startsWith(q)) out.add(s);
+            // /farm <item> : les identifiants d'items (à partir de 2 lettres)
+            if (q.length() >= 2) {
+                for (Material m : Material.values()) {
+                    if (out.size() >= 60) break;
+                    if (m.isLegacy() || !m.isItem() || m.isAir()) continue;
+                    String k = m.getKey().getKey();
+                    if (k.startsWith(q) || (q.length() >= 3 && k.contains(q))) out.add(k);
+                }
+            }
             return out;
         }
         String sub = args[0].toLowerCase(Locale.ROOT);

@@ -6,5 +6,5 @@ authors: [IMG]
 description: Sessions de farm mesurées en jeu, envoyées au site IMG Farm DB par le proxy
 commands:
   farm:
-    description: Mesurer une session de farm ou de construction pour le site de la team
+    description: Meilleures méthodes du site pour un item, ou mesurer une session de farm pour le site de la team
     usage: /farm

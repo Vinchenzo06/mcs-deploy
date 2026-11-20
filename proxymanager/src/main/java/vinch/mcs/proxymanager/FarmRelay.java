@@ -30,14 +30,15 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * Sécurité : l'UUID et le nom du serveur sont ceux que le proxy connaît (jamais ceux du
  * message) ; un message venant d'un client est ignoré et n'est jamais transmis ; seules
- * les opérations check et session passent ; 20 requêtes par minute et par joueur.
+ * les opérations check, session et best (/farm <item>, lecture seule) passent ; 20 requêtes
+ * par minute et par joueur.
  * Le site n'enregistre qu'une session « à compléter » : rien n'est publié sans le membre.
  */
 public class FarmRelay {
 
     public static final MinecraftChannelIdentifier CHANNEL = MinecraftChannelIdentifier.create("img", "farm");
 
-    private static final Set<String> OPS = Set.of("check", "session");
+    private static final Set<String> OPS = Set.of("check", "session", "best");
     private static final int MAX_BYTES = 2048;
     private static final int MAX_PER_MINUTE = 20;
 
