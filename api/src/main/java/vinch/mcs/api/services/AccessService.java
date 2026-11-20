@@ -71,8 +71,12 @@ public class AccessService {
     private static final Set<Right> ACCESS_RIGHTS = EnumSet.of(Right.INVITE, Right.REMOVE, Right.VISIBILITY);
     private static final Set<Right> TEAM_RIGHTS = EnumSet.of(Right.JOIN, Right.POWER, Right.CONSOLE, Right.FILES);
 
+    /**
+     * Serveur de la team ouvert aux membres IMG. Un serveur protégé (le lobby IMG) n'en est
+     * jamais un : les membres n'y ont aucun droit de gestion, même s'il est marqué « team ».
+     */
     public static boolean isTeamServer(Server s) {
-        return Boolean.TRUE.equals(s.getIsTeam());
+        return Boolean.TRUE.equals(s.getIsTeam()) && !Boolean.TRUE.equals(s.getIsProtected());
     }
 
     public static boolean isImgMember(Player p) {
@@ -119,7 +123,7 @@ public class AccessService {
         }
         if (isImgMember(p)) {
             for (Server s : serverRepository.findByIsTeamTrue()) {
-                if (!isOwner(p, s)) {
+                if (!isOwner(p, s) && isTeamServer(s)) {
                     out.putIfAbsent(s.getId(), s);
                 }
             }
@@ -130,10 +134,12 @@ public class AccessService {
     /** Tous les serveurs de la team, décrits pour ce joueur (droits compris), par nom */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> teamServersFor(Player p) {
-        return serverRepository.findByIsTeamTrue().stream()
+        // + les serveurs protégés (le lobby IMG) : affichés sur le site, gérés par les admins seulement
+        return serverRepository.findByIsTeamTrueOrIsProtectedTrue().stream()
                 .sorted(java.util.Comparator.comparing(Server::getName))
                 .map(s -> {
                     Map<String, Object> m = describeFor(p, s);
+                    m.put("protected", Boolean.TRUE.equals(s.getIsProtected()));
                     m.put("lastStartedAt", s.getLastStartedAt() == null ? null : s.getLastStartedAt().toString());
                     return m;
                 })

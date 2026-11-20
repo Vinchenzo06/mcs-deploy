@@ -28,6 +28,9 @@ public interface ServerRepository extends JpaRepository<Server, Long> {
     /** Serveurs de la team IMG (lot 52) */
     List<Server> findByIsTeamTrue();
 
+    /** Page Serveur du site : serveurs de la team + serveurs protégés (lobby IMG), lot 56 */
+    List<Server> findByIsTeamTrueOrIsProtectedTrue();
+
     @Query("SELECT COUNT(s) FROM Server s WHERE s.owner.id = :playerId")
     long countByOwnerId(Long playerId);
 
