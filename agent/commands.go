@@ -162,7 +162,12 @@ func handleStopServer(conn *websocket.Conn, commandId string, msg map[string]int
 		return
 	}
 
-	if err := StopServer(serverID); err != nil {
+	data, _ := msg["data"].(map[string]interface{})
+	stop := StopServer
+	if kill, _ := data["kill"].(bool); kill {
+		stop = KillServer
+	}
+	if err := stop(serverID); err != nil {
 		sendCommandError(conn, commandId, "stop_failed", err.Error())
 		return
 	}

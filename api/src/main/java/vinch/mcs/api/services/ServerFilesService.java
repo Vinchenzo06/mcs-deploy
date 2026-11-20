@@ -1,6 +1,8 @@
 package vinch.mcs.api.services;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -34,6 +36,13 @@ import java.util.concurrent.TimeoutException;
 public class ServerFilesService {
 
     public static final int AGENT_CHUNK = 1 << 20;
+    // Spring Boot 4 répond avec Jackson 3, qui ne sait pas écrire le JsonNode (Jackson 2) de
+    // l'agent : il en ferait un objet {"array":false,"object":true,...}. On rend des Map.
+    private static final ObjectMapper JSON = new ObjectMapper();
+
+    private static Map<String, Object> plain(JsonNode n) {
+        return n == null || !n.isObject() ? Map.of() : JSON.convertValue(n, new TypeReference<Map<String, Object>>() {});
+    }
     public static final int MAX_REQUEST = 8 << 20;
 
     private final ServerRepository serverRepository;
@@ -107,9 +116,9 @@ public class ServerFilesService {
         return m;
     }
 
-    public JsonNode list(Long serverId, Long playerId, String path) throws Exception {
+    public Map<String, Object> list(Long serverId, Long playerId, String path) throws Exception {
         Target t = target(serverId, playerId, AccessService.Right.FILES, false);
-        return call(t, "files_list", data("path", path == null ? "" : path), 30);
+        return plain(call(t, "files_list", data("path", path == null ? "" : path), 30));
     }
 
     /** Lit jusqu'à length octets (8 Mo au plus) à partir de offset */
@@ -170,30 +179,30 @@ public class ServerFilesService {
         return size;
     }
 
-    public JsonNode mkdir(Long serverId, Long playerId, String path) throws Exception {
+    public Map<String, Object> mkdir(Long serverId, Long playerId, String path) throws Exception {
         Target t = target(serverId, playerId, AccessService.Right.FILES, true);
         JsonNode r = call(t, "files_mkdir", data("path", path), 30);
         log.info("Fichiers {} : dossier {} créé par {}", t.server(), path, t.player());
-        return r;
+        return plain(r);
     }
 
-    public JsonNode rename(Long serverId, Long playerId, String from, String to) throws Exception {
+    public Map<String, Object> rename(Long serverId, Long playerId, String from, String to) throws Exception {
         Target t = target(serverId, playerId, AccessService.Right.FILES, true);
         JsonNode r = call(t, "files_rename", data("from", from, "to", to), 60);
         log.info("Fichiers {} : {} renommé en {} par {}", t.server(), from, to, t.player());
-        return r;
+        return plain(r);
     }
 
-    public JsonNode delete(Long serverId, Long playerId, String path) throws Exception {
+    public Map<String, Object> delete(Long serverId, Long playerId, String path) throws Exception {
         Target t = target(serverId, playerId, AccessService.Right.FILES, true);
         JsonNode r = call(t, "files_delete", data("path", path), 300);
         log.info("Fichiers {} : {} supprimé par {}", t.server(), path, t.player());
-        return r;
+        return plain(r);
     }
 
     /** source "game" (logs/latest.log, à partir de offset ; -1 = la fin) ou "docker" (fin du journal du conteneur) */
-    public JsonNode logs(Long serverId, Long playerId, String source, long offset) throws Exception {
+    public Map<String, Object> logs(Long serverId, Long playerId, String source, long offset) throws Exception {
         Target t = target(serverId, playerId, AccessService.Right.CONSOLE, false);
-        return call(t, "server_logs", data("source", "docker".equals(source) ? "docker" : "game", "offset", offset), 20);
+        return plain(call(t, "server_logs", data("source", "docker".equals(source) ? "docker" : "game", "offset", offset), 20));
     }
 }

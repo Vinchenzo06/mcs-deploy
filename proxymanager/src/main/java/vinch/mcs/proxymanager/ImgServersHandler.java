@@ -21,7 +21,8 @@ import java.util.regex.Pattern;
  * (son UUID Minecraft lié, envoyé par le site). Les droits sont ceux de MCS pour ce joueur
  * (AccessService) : le site n'a aucun pouvoir propre.
  *   POST /img/servers                     {uuid}  -> serveurs de la team, droits, joueurs connectés, quota
- *   POST /img/servers/{id}/{action}       {uuid}  -> start | stop | restart | delete
+ *   POST /img/servers/{id}/{action}       {uuid}  -> start | stop | restart | kill | delete
+ *   POST /img/servers/{id}/stats          {uuid}  -> le serveur (droits) + CPU, RAM, disque, joueurs (page du serveur)
  *   POST /img/servers/create              {uuid, name, type, version, ram_mb, cpu}
  * Console et fichiers (lot 54, droits CONSOLE et FILES) :
  *   POST /img/servers/{id}/console        {uuid, command}         -> {output}
@@ -37,7 +38,7 @@ import java.util.regex.Pattern;
  */
 class ImgServersHandler {
 
-    private static final Set<String> ACTIONS = Set.of("start", "stop", "restart", "delete");
+    private static final Set<String> ACTIONS = Set.of("start", "stop", "restart", "kill", "delete");
     private static final Set<String> FILE_OPS = Set.of("mkdir", "rename", "delete");
     static final int MAX_CHUNK = 8 << 20;
     private static final Set<String> TYPES = Set.of("PAPER", "SPIGOT", "FABRIC", "FORGE", "NEOFORGE");
@@ -134,6 +135,8 @@ class ImgServersHandler {
         String what = parts.length > 1 ? parts[1] : "";
         if (parts.length == 2 && ACTIONS.contains(what)) {
             action(id, what, pid, reply);
+        } else if (parts.length == 2 && what.equals("stats")) {
+            stats(id, pid, reply);
         } else if (parts.length == 2 && what.equals("console")) {
             String command = body.path("command").asText("").trim();
             if (command.isEmpty() || command.length() > 256) {
@@ -219,6 +222,47 @@ class ImgServersHandler {
         });
     }
 
+    /** Un serveur de la team (sinon 404) avec ses mesures : CPU, RAM, disque, joueurs */
+    private void stats(long id, long pid, BiConsumer<Integer, JsonNode> reply) {
+        api.teamServers(pid).thenCompose(list -> {
+            JsonNode found = null;
+            for (JsonNode s : list.path("servers")) {
+                if (s.path("id").asLong() == id) {
+                    found = s;
+                }
+            }
+            if (found == null) {
+                return CompletableFuture.completedFuture((JsonNode) null);
+            }
+            ObjectNode out = ((ObjectNode) found).deepCopy();
+            return api.getServerStats(id).handle((st, e) -> {
+                if (st != null) {
+                    for (String k : new String[]{"health", "cpuPercent", "memUsedMb", "memLimitMb", "diskUsedMb",
+                            "allocatedStorageMb", "players", "lastStartedAt", "metricsAgeSeconds", "java", "lastBackupAt"}) {
+                        if (st.has(k)) {
+                            out.set(k, st.get(k));
+                        }
+                    }
+                }
+                out.put("online", proxy.getServer(out.path("velocityName").asText(""))
+                        .map(r -> r.getPlayersConnected().size()).orElse(0));
+                String err = lastError("srv:" + id);
+                if (err != null) {
+                    out.put("lastError", err);
+                }
+                return (JsonNode) out;
+            });
+        }).whenComplete((out, e) -> {
+            if (e != null) {
+                reply.accept(502, error(McsCommand.errorText(e)));
+            } else if (out == null) {
+                reply.accept(404, error("Serveur introuvable"));
+            } else {
+                reply.accept(200, out);
+            }
+        });
+    }
+
     /** Attend au plus « wait » secondes ; ensuite « pending » et l'erreur éventuelle est gardée */
     private void finish(CompletableFuture<JsonNode> work, String errorKey, int wait, BiConsumer<Integer, JsonNode> reply,
                         String done) {
@@ -256,6 +300,7 @@ class ImgServersHandler {
             case "start" -> "Serveur démarré.";
             case "stop" -> "Serveur arrêté.";
             case "restart" -> "Serveur redémarré.";
+            case "kill" -> "Serveur arrêté de force.";
             default -> "Serveur supprimé.";
         };
         finish(api.serverAction(serverId, action, pid), "srv:" + serverId, 10, reply, done);

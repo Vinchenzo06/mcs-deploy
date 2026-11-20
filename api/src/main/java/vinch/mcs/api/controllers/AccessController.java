@@ -107,6 +107,15 @@ public class AccessController {
         });
     }
 
+    /** Arrêt forcé (lot 54) */
+    @PostMapping("/servers/{id}/kill")
+    public ResponseEntity<?> kill(@PathVariable Long id, @RequestParam Long playerId) {
+        return handle(() -> {
+            serverService.stopServer(id, playerId, true);
+            return null;
+        });
+    }
+
     @PostMapping("/servers/{id}/restart")
     public ResponseEntity<?> restart(@PathVariable Long id, @RequestParam Long playerId) {
         return handle(() -> {

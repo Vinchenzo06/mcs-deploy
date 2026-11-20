@@ -858,6 +858,15 @@ public class ServerService {
     }
 
     public void stopServer(Long serverId, Long requestedByPlayerId) throws Exception {
+        stopServer(serverId, requestedByPlayerId, false);
+    }
+
+    /**
+     * kill (lot 54) : arrêt forcé (docker kill), sans attendre que le jeu sauvegarde ; utile
+     * quand un serveur est bloqué, même pendant un démarrage ou un arrêt qui ne finit pas.
+     * Un agent plus ancien ignore « kill » et fait un arrêt normal.
+     */
+    public void stopServer(Long serverId, Long requestedByPlayerId, boolean kill) throws Exception {
         Server server = serverRepository.findById(serverId)
                 .orElseThrow(() -> new RuntimeException("Serveur non trouvé : " + serverId));
 
@@ -866,11 +875,18 @@ public class ServerService {
         if (server.getStatus() == ServerStatus.STOPPED) {
             throw new RuntimeException("Le serveur est déjà arrêté");
         }
+        if (kill && (server.getStatus() == ServerStatus.CREATING || server.getStatus() == ServerStatus.MIGRATING
+                || server.getStatus() == ServerStatus.DELETED || server.getNode() == null)) {
+            throw new RuntimeException("Impossible de forcer l'arrêt pendant une création ou un déplacement");
+        }
 
-        log.info("Arrêt du serveur {} (name={})", serverId, server.getName());
+        log.info("{} du serveur {} (name={})", kill ? "Arrêt forcé" : "Arrêt", serverId, server.getName());
 
         Map<String, Object> data = new HashMap<>();
         data.put("server_id", server.getId());
+        if (kill) {
+            data.put("kill", true);
+        }
 
         server.setStatus(ServerStatus.STOPPING);
         serverRepository.save(server);

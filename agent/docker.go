@@ -438,6 +438,17 @@ func StopServer(serverID int64) error {
 	return nil
 }
 
+// KillServer arrête un serveur de force (lot 54) : sans laisser le jeu sauvegarder.
+// Un conteneur déjà arrêté n'est pas une erreur.
+func KillServer(serverID int64) error {
+	log.Printf("Arrêt forcé du serveur id=%d", serverID)
+	out, err := exec.Command("docker", "kill", containerName(serverID)).CombinedOutput()
+	if err != nil && !strings.Contains(string(out), "is not running") {
+		return fmt.Errorf("docker kill a échoué : %s : %w", string(out), err)
+	}
+	return nil
+}
+
 // DeleteServer supprime un conteneur et optionnellement ses données
 func DeleteServer(dataPath string, serverID int64, deleteData bool) error {
 	log.Printf("Suppression du serveur id=%d (deleteData=%v)", serverID, deleteData)

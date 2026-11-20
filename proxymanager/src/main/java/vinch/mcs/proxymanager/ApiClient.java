@@ -312,6 +312,7 @@ public class ApiClient {
             // Démarrage sur une autre machine depuis le rangement : quelques minutes
             case "start" -> Duration.ofMinutes(21);
             case "restart" -> Duration.ofMinutes(5);
+            case "stop", "kill" -> Duration.ofMinutes(3);
             default -> Duration.ofMinutes(1);
         };
         return call("POST", "/api/v1/servers/" + serverId + "/" + action + "?playerId=" + playerId, null, timeout);
