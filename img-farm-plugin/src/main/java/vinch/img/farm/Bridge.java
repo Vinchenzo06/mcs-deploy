@@ -42,6 +42,17 @@ final class Bridge implements PluginMessageListener {
     private final AtomicLong next = new AtomicLong(1);
     private final Map<Long, CompletableFuture<Reply>> pending = new ConcurrentHashMap<>();
 
+    /** Demande du proxy (lot 60) : ouvrir un menu (/mcs seul) ; (joueur, menu, numéro de la demande) */
+    interface PushHandler {
+        void open(Player player, String menu, long push);
+    }
+
+    private PushHandler pushHandler;
+
+    void setPushHandler(PushHandler handler) {
+        this.pushHandler = handler;
+    }
+
     Bridge(JavaPlugin plugin) {
         this.plugin = plugin;
     }
@@ -82,6 +93,12 @@ final class Bridge implements PluginMessageListener {
         if (!CHANNEL.equals(channel)) return;
         try {
             JsonObject msg = JsonParser.parseString(new String(message, StandardCharsets.UTF_8)).getAsJsonObject();
+            if (msg.has("push")) {
+                long push = msg.get("push").getAsLong();
+                String menu = msg.has("open") ? msg.get("open").getAsString() : "main";
+                if (pushHandler != null) plugin.getServer().getScheduler().runTask(plugin, () -> pushHandler.open(player, menu, push));
+                return;
+            }
             CompletableFuture<Reply> future = pending.get(msg.get("rid").getAsLong());
             if (future == null) return;
             JsonObject body = msg.has("body") && msg.get("body").isJsonObject() ? msg.getAsJsonObject("body") : new JsonObject();

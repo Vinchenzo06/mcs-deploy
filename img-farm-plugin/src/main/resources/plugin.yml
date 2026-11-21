@@ -8,3 +8,6 @@ commands:
   farm:
     description: Meilleures méthodes du site pour un item, ou mesurer une session de farm pour le site de la team
     usage: /farm
+  menu:
+    description: Menu IMG — tes serveurs, créer un serveur, la farm
+    usage: /menu

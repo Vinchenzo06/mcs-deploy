@@ -65,12 +65,24 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
     final Map<UUID, FarmSession> sessions = new ConcurrentHashMap<>();
     private final Set<UUID> busy = ConcurrentHashMap.newKeySet();
     private Bridge bridge;
+    Menu menu;
     private int tick;
 
     @Override
     public void onEnable() {
         bridge = new Bridge(this);
         bridge.register();
+        menu = new Menu(this, bridge);
+        bridge.setPushHandler(menu::openFromProxy);
+        getServer().getPluginManager().registerEvents(menu, this);
+        PluginCommand menuCmd = getCommand("menu");
+        if (menuCmd != null) {
+            menuCmd.setExecutor((sender, command, label, args) -> {
+                if (sender instanceof Player pl) menu.main(pl);
+                else sender.sendMessage("Commande réservée aux joueurs.");
+                return true;
+            });
+        }
         PluginCommand cmd = getCommand("farm");
         if (cmd != null) {
             cmd.setExecutor(this);
@@ -134,7 +146,9 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
         return s + " s";
     }
 
-    private void help(Player p) {
+    void help(Player p) {
+        p.sendMessage(Component.text("  /menu", NamedTextColor.YELLOW)
+                .append(Component.text(" le menu IMG : tes serveurs, créer un serveur, la farm (aussi /farm et /mcs seuls)", NamedTextColor.GRAY)));
         p.sendMessage(Component.text("  /farm <item>", NamedTextColor.YELLOW)
                 .append(Component.text(" les meilleures méthodes du site pour cet item (ex. /farm fer)", NamedTextColor.GRAY)));
         p.sendMessage(info("Sessions de farm, envoyées sur le site de la team (Farming → Mes sessions) :"));
@@ -266,9 +280,7 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
             return true;
         }
         if (args.length == 0) {
-            FarmSession s = sessions.get(p.getUniqueId());
-            if (s != null && s.finished) summary(p, s);
-            else help(p);
+            menu.farm(p); // lot 60 : /farm seul ouvre le menu de la farm (l'aide : /farm aide)
             return true;
         }
         String sub = args[0].toLowerCase(Locale.ROOT);
@@ -301,7 +313,7 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
         return true;
     }
 
-    private void start(Player p, boolean auto, String[] args) {
+    void start(Player p, boolean auto, String[] args) {
         if (blockIfSession(p) || busy.contains(p.getUniqueId())) return;
         if (args.length < 2) {
             p.sendMessage(error("Indique l'item : /farm " + args[0] + " <item> [30m | 640]"));
@@ -389,7 +401,7 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
         return total > 48 * 3600 ? 0 : total;
     }
 
-    private void startConstruction(Player p, String[] args) {
+    void startConstruction(Player p, String[] args) {
         if (blockIfSession(p) || busy.contains(p.getUniqueId())) return;
         String part = args.length >= 2 ? args[1].toLowerCase(Locale.ROOT) : "base";
         if (!part.equals("base") && !part.equals("module")) {
@@ -440,7 +452,7 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
         return s;
     }
 
-    private void pause(Player p) {
+    void pause(Player p) {
         FarmSession s = active(p);
         if (s == null) return;
         if (s.paused()) {
@@ -464,13 +476,13 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
         p.sendMessage(ok("Session reprise."));
     }
 
-    private void stop(Player p) {
+    void stop(Player p) {
         FarmSession s = active(p);
         if (s == null) return;
         end(p, s, "Session terminée.");
     }
 
-    private void cancel(Player p) {
+    void cancel(Player p) {
         FarmSession s = sessions.remove(p.getUniqueId());
         if (s == null) {
             p.sendMessage(error("Aucune session à annuler."));
@@ -529,7 +541,7 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
         return s;
     }
 
-    private void setType(Player p, String[] args) {
+    void setType(Player p, String[] args) {
         FarmSession s = finishedSession(p);
         if (s == null || s.kind != FarmSession.Kind.FARM) return;
         if (args.length < 2 || !TYPES.containsKey(args[1].toLowerCase(Locale.ROOT))) {
@@ -540,14 +552,14 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
         summary(p, s);
     }
 
-    private void discard(Player p) {
+    void discard(Player p) {
         FarmSession s = finishedSession(p);
         if (s == null) return;
         sessions.remove(p.getUniqueId());
         p.sendMessage(info("Session jetée."));
     }
 
-    private void sendToSite(Player p) {
+    void sendToSite(Player p) {
         FarmSession s = finishedSession(p);
         if (s == null || busy.contains(p.getUniqueId())) return;
         JsonObject data = new JsonObject();
@@ -588,7 +600,7 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
 
     // ---------- /farm <item> : les meilleures méthodes du site ----------
 
-    private void best(Player p, String query) {
+    void best(Player p, String query) {
         if (busy.contains(p.getUniqueId())) return;
         JsonObject data = new JsonObject();
         data.addProperty("query", query.length() > 60 ? query.substring(0, 60) : query);
