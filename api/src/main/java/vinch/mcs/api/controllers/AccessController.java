@@ -81,6 +81,13 @@ public class AccessController {
     }
 
     /** Serveurs de la team IMG vus par ce joueur (lot 53 : page Serveur du site IMG Farm DB) */
+    /** Menu en jeu (lot 60) : serveurs du joueur et ceux qui lui sont ouverts */
+    @GetMapping("/servers/mine")
+    public ResponseEntity<?> mine(@RequestParam Long playerId) {
+        return handle(() -> Map.of("servers", accessService.menuServersFor(accessService.player(playerId)),
+                "admin", AccessService.isAdmin(accessService.player(playerId))));
+    }
+
     @GetMapping("/servers/team")
     public ResponseEntity<?> team(@RequestParam Long playerId) {
         return handle(() -> Map.of("servers", accessService.teamServersFor(accessService.player(playerId))));

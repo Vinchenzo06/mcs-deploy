@@ -268,6 +268,14 @@ fichiers, donc au mot de passe. Titre d'un groupe : `lp group vip meta setprefix
   Lot 55 (agent 0.18.1) : correctif (réponses de l'agent rendues en Map : Spring Boot 4 répond en Jackson 3, qui
   ne sait pas écrire un JsonNode de Jackson 2), arrêt forcé `POST /api/v1/servers/{id}/kill` (`docker kill`) et
   page d'un serveur sur le site (`/img/servers/<id>/stats` : le serveur + CPU, RAM, disque, joueurs).
+- **Menu en jeu** (lot 60, plugin img-farm) : `/menu`, `/farm` et `/mcs` sans argument, et une boussole « Menu IMG »
+  dans la hotbar du lobby IMG. Mes serveurs (team + les siens : rejoindre, démarrer, redémarrer, arrêter, console,
+  sauvegarder, historique, membres, supprimer), Créer un serveur (type, version, RAM et CPU dans le quota, nom),
+  Farm (lancer, pause, terminer, annuler, envoyer, meilleures méthodes). Les textes se tapent dans une enclume.
+  Données et actions par le proxy (`MenuRelay`, canal img:farm) ; le proxy n'exécute lui-même que les actions
+  sans risque (join, start, info, list, quota, backups, members) : le reste se confirme par un bouton dans le chat,
+  envoyé par le client du joueur (un plugin installé par un membre ne peut donc rien faire au nom d'un admin).
+  Le lobby IMG (serveur protégé) reçoit aussi les plugins de la team. API : `GET /api/v1/servers/mine?playerId=`.
 - **Archives zip** (lot 59, agent 0.19.0) : compresser une sélection de fichiers et dossiers en `nom.zip` dans le
   même dossier, extraire un `.zip` sur place (`POST /api/v1/servers/{id}/files/archive|extract`). Mêmes règles que
   les autres fichiers (`os.Root`, noms en « . » ignorés, 1 Go gardé libre) ; une archive piégée (`../`, liens)

@@ -131,6 +131,31 @@ public class AccessService {
         return List.copyOf(out.values());
     }
 
+    /**
+     * Menu en jeu (lot 60) : les serveurs du joueur puis ceux qui lui sont ouverts (team,
+     * invitations), décrits pour lui (droits compris). Les serveurs supprimés sont exclus.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> menuServersFor(Player p) {
+        java.util.LinkedHashMap<Long, Server> all = new java.util.LinkedHashMap<>();
+        serverRepository.findByOwnerId(p.getId()).stream()
+                .sorted(java.util.Comparator.comparing(Server::getName))
+                .forEach(s -> all.put(s.getId(), s));
+        sharedWith(p).stream()
+                .sorted(java.util.Comparator.comparing(Server::getName))
+                .forEach(s -> all.putIfAbsent(s.getId(), s));
+        return all.values().stream()
+                .filter(s -> s.getStatus() != vinch.mcs.api.entities.ServerStatus.DELETED)
+                .map(s -> {
+                    Map<String, Object> m = describeFor(p, s);
+                    m.put("protected", Boolean.TRUE.equals(s.getIsProtected()));
+                    m.put("team", isTeamServer(s));
+                    m.put("canBackup", isAdmin(p) || isOwner(p, s));
+                    return m;
+                })
+                .toList();
+    }
+
     /** Tous les serveurs de la team, décrits pour ce joueur (droits compris), par nom */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> teamServersFor(Player p) {

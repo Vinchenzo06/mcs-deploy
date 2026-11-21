@@ -46,6 +46,14 @@ public class McsCommand implements SimpleCommand {
     /** Lot 49 : un serveur créé par un joueur entré par l'adresse IMG est un serveur de la team */
     private java.util.function.Predicate<Player> teamCreator = p -> false;
 
+    /** Lot 60 : /mcs seul ouvre le menu en jeu si le serveur a le plugin img-farm (sinon l'aide) */
+    private java.util.function.Function<Player, java.util.concurrent.CompletableFuture<Boolean>> menuOpener =
+            p -> java.util.concurrent.CompletableFuture.completedFuture(false);
+
+    public void setMenuOpener(java.util.function.Function<Player, java.util.concurrent.CompletableFuture<Boolean>> opener) {
+        this.menuOpener = opener;
+    }
+
     public void setTeamCreator(java.util.function.Predicate<Player> teamCreator) {
         this.teamCreator = teamCreator;
     }
@@ -104,6 +112,14 @@ public class McsCommand implements SimpleCommand {
 
     private void dispatch(Player player, String[] args) {
         if (args.length == 0) {
+            menuOpener.apply(player).thenAccept(opened -> {
+                if (!opened) {
+                    sendUsage(player);
+                }
+            });
+            return;
+        }
+        if (args[0].equalsIgnoreCase("aide") || args[0].equalsIgnoreCase("help")) {
             sendUsage(player);
             return;
         }

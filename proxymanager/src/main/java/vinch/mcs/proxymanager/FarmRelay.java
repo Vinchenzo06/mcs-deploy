@@ -48,6 +48,13 @@ public class FarmRelay {
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
     private final ObjectMapper json = new ObjectMapper();
     private final Map<UUID, Deque<Long>> recent = new ConcurrentHashMap<>();
+    private final Map<UUID, Deque<Long>> recentMenu = new ConcurrentHashMap<>();
+    /** Menu en jeu (lot 60) : opérations traitées par le proxy lui-même, sans le site */
+    private MenuRelay menu;
+
+    void setMenu(MenuRelay menu) {
+        this.menu = menu;
+    }
 
     public FarmRelay(Logger logger, String farmdbUrl, String token) {
         this.logger = logger;
@@ -56,13 +63,17 @@ public class FarmRelay {
     }
 
     private boolean tooMany(UUID uuid) {
+        return tooMany(recent, uuid, MAX_PER_MINUTE);
+    }
+
+    private static boolean tooMany(Map<UUID, Deque<Long>> recent, UUID uuid, int max) {
         long now = System.currentTimeMillis();
         Deque<Long> times = recent.computeIfAbsent(uuid, k -> new ArrayDeque<>());
         synchronized (times) {
             while (!times.isEmpty() && now - times.peekFirst() > 60_000) {
                 times.pollFirst();
             }
-            if (times.size() >= MAX_PER_MINUTE) {
+            if (times.size() >= max) {
                 return true;
             }
             times.addLast(now);
@@ -96,6 +107,14 @@ public class FarmRelay {
         }
         long rid = msg.path("rid").asLong(0);
         String op = msg.path("op").asText("");
+        if (menu != null && MenuRelay.OPS.contains(op) && msg.path("data").isObject()) {
+            if (tooMany(recentMenu, player.getUniqueId(), 120)) {
+                reply(connection, rid, 429, error("Trop de clics, attends un peu."));
+                return;
+            }
+            menu.handle(connection, player, op, msg.path("data"), (status, body) -> reply(connection, rid, status, body));
+            return;
+        }
         if (!OPS.contains(op) || !msg.path("data").isObject()) {
             reply(connection, rid, 400, error("Requête inconnue"));
             return;

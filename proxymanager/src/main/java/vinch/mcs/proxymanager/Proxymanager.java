@@ -58,6 +58,7 @@ public class Proxymanager {
     private ApiServer apiServer;
     private PlayerSync playerSync;
     private ImgGate imgGate;
+    private MenuRelay menuRelay;
     private FarmdbMembers farmdbMembers;
     private ImgRole imgRole;
 
@@ -300,8 +301,13 @@ public class Proxymanager {
             logger.info("/link actif vers {}", config.getFarmdbUrl());
             // Sessions de farm du plugin img-farm (lot 44) : canal img:farm -> site
             server.getChannelRegistrar().register(FarmRelay.CHANNEL);
-            server.getEventManager().register(this, new FarmRelay(logger, config.getFarmdbUrl(), config.getFarmdbToken()));
-            logger.info("Relais img:farm actif (sessions de farm)");
+            FarmRelay farmRelay = new FarmRelay(logger, config.getFarmdbUrl(), config.getFarmdbToken());
+            // Lot 60 : menu en jeu du plugin img-farm (données et actions sans risque par le proxy)
+            String imgHost = config.getImgHost() == null ? "" : config.getImgHost().trim();
+            menuRelay = new MenuRelay(server, apiClient, imgGate, imgHost.isEmpty() ? null : "https://" + imgHost, logger);
+            farmRelay.setMenu(menuRelay);
+            server.getEventManager().register(this, farmRelay);
+            logger.info("Relais img:farm actif (sessions de farm, menu en jeu)");
             // Lot 48 : les membres liés du site entrent dans le lobby IMG sans invitation
             farmdbMembers = new FarmdbMembers(logger, config.getFarmdbUrl(), config.getFarmdbToken());
             if (imgGate != null && imgGate.enabled()) {
@@ -450,6 +456,9 @@ public class Proxymanager {
     /** /mcs ; lot 49 : créé par un joueur entré par l'adresse IMG = serveur de la team */
     private McsCommand mcsCommand() {
         McsCommand cmd = new McsCommand(server, apiClient, playerSync, logger);
+        if (menuRelay != null) {
+            cmd.setMenuOpener(p -> menuRelay.open(p, "servers"));
+        }
         if (imgGate != null && imgGate.enabled()) {
             cmd.setTeamCreator(imgGate::isImgPlayer);
         }

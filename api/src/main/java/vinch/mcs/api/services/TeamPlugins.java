@@ -43,7 +43,9 @@ public final class TeamPlugins {
 
     public static void apply(Map<String, Object> data, Server server) {
         boolean plugins = server.getServerType() == ServerType.PAPER || server.getServerType() == ServerType.SPIGOT;
-        if (!Boolean.TRUE.equals(server.getIsTeam()) || !plugins) {
+        // Serveurs de la team, et le lobby IMG (protégé) pour le menu en jeu (lot 60)
+        boolean imgServer = Boolean.TRUE.equals(server.getIsTeam()) || Boolean.TRUE.equals(server.getIsProtected());
+        if (!imgServer || !plugins) {
             data.put("team_plugins", List.of());
             return;
         }

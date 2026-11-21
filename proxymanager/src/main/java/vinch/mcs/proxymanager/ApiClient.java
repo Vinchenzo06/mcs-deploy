@@ -181,6 +181,11 @@ public class ApiClient {
     }
 
     /** Serveurs de la team vus par ce joueur (lot 53) */
+    /** Menu en jeu (lot 60) : serveurs du joueur et ceux qui lui sont ouverts, avec ses droits */
+    public CompletableFuture<JsonNode> menuServers(long playerId) {
+        return call("GET", "/api/v1/servers/mine?playerId=" + playerId, null, Duration.ofSeconds(10));
+    }
+
     public CompletableFuture<JsonNode> teamServers(long playerId) {
         return call("GET", "/api/v1/servers/team?playerId=" + playerId, null, Duration.ofSeconds(10));
     }
