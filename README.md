@@ -268,6 +268,10 @@ fichiers, donc au mot de passe. Titre d'un groupe : `lp group vip meta setprefix
   Lot 55 (agent 0.18.1) : correctif (réponses de l'agent rendues en Map : Spring Boot 4 répond en Jackson 3, qui
   ne sait pas écrire un JsonNode de Jackson 2), arrêt forcé `POST /api/v1/servers/{id}/kill` (`docker kill`) et
   page d'un serveur sur le site (`/img/servers/<id>/stats` : le serveur + CPU, RAM, disque, joueurs).
+- **Jars compilés sur GitHub** (lot 62) : l'action « Jars » compile l'API, le proxy, img-farm et le plugin du lobby
+  à chaque push et les publie dans la release `jars-latest` (avec `TREES` : empreinte git du dossier de chaque
+  module). `mcs-deploy` les télécharge s'ils viennent exactement du même code (sinon il attend l'action en cours,
+  6 min au plus, puis compile sur le VPS comme avant). `sudo mcs-deploy --local-build …` force la compilation ici.
 - **Menu en jeu** (lot 60, plugin img-farm) : `/menu`, `/farm` et `/mcs` sans argument, et une boussole « Menu IMG »
   dans la hotbar du lobby IMG. Mes serveurs (team + les siens : rejoindre, démarrer, redémarrer, arrêter, console,
   sauvegarder, historique, membres, supprimer), Créer un serveur (type, version, RAM et CPU dans le quota, nom),

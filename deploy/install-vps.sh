@@ -230,11 +230,56 @@ need_maven() {
   rm -rf "$tmp"
 }
 
+# Lot 62 : jar compilé par GitHub (action « Jars », release jars-latest), utilisé seulement s'il
+# vient exactement du même code que celui du VPS (empreinte git du dossier du module, fichier TREES).
+# Si l'action GitHub compile encore ce commit, on l'attend (6 min au plus) ; sinon : 1 = compiler ici.
+prebuilt_jar() {
+  local mod=$1 dest=$2 file want repo base tmp i status head
+  [[ "${MCS_LOCAL_BUILD:-0}" == "1" ]] && return 1
+  repo=$(sed -n 's/^MCS_REPO=//p' /etc/mcs/deploy.env 2>/dev/null | tr -d '"')
+  [[ -n "$repo" || -n "${MCS_JARS_URL:-}" ]] || return 1
+  want=$(git -C "$SRC_DIR" rev-parse "HEAD:$mod" 2>/dev/null) || return 1
+  head=$(git -C "$SRC_DIR" rev-parse HEAD 2>/dev/null) || return 1
+  file=$(basename "$dest")
+  base="${MCS_JARS_URL:-https://github.com/$repo/releases/download/jars-latest}"
+  tmp=$(mktemp -d)
+  for i in $(seq 1 24); do
+    if curl -fsSL --retry 2 -A "$USER_AGENT" -o "$tmp/TREES" "$base/TREES" 2>/dev/null && grep -qx "$file $want" "$tmp/TREES"; then
+      if curl -fsSL --retry 3 -A "$USER_AGENT" -o "$tmp/$file" "$base/$file" \
+         && curl -fsSL --retry 2 -A "$USER_AGENT" -o "$tmp/SHA256SUMS" "$base/SHA256SUMS" \
+         && (cd "$tmp" && grep " $file\$" SHA256SUMS | sha256sum -c --status); then
+        mkdir -p "$(dirname "$dest")"
+        mv -f "$tmp/$file" "$dest"
+        rm -rf "$tmp"
+        ok "$mod : jar compilé par GitHub, téléchargé ($(du -h "$dest" | cut -f1))"
+        return 0
+      fi
+      warn "$mod : jar de GitHub illisible ou empreinte fausse : compilation ici"
+      break
+    fi
+    # Pas (encore) la bonne version : l'action GitHub compile-t-elle ce commit en ce moment ?
+    [[ -n "$repo" ]] || break
+    status=$(curl -fsS -A "$USER_AGENT" "https://api.github.com/repos/$repo/actions/workflows/jars.yml/runs?head_sha=$head&per_page=1" 2>/dev/null \
+             | grep -o '"status": *"[a-z_]*"' | head -1 | sed 's/.*"\([a-z_]*\)"$/\1/' || true)
+    case "$status" in
+      queued|in_progress|waiting|pending|requested) ;;
+      *) break ;;
+    esac
+    (( i == 1 )) && echo "    $mod : GitHub compile encore ce code, on attend (6 min au plus)…"
+    sleep 15
+  done
+  rm -rf "$tmp"
+  return 1
+}
+
 # build_jar <dossier du projet dans le dépôt> <jar de destination>
 build_jar() {
   local name=$1 dest=$2 src="$SRC_DIR/$1" jar
   if [[ "${MCS_SKIP_BUILD:-0}" == "1" && -f "$dest" ]]; then
     ok "Compilation ignorée, réutilisation de $(basename "$dest")"
+    return
+  fi
+  if prebuilt_jar "$name" "$dest"; then
     return
   fi
   [[ -f "$src/pom.xml" ]] || die "Code introuvable : $src/pom.xml (le dossier '$name' est-il sur GitHub ?)"

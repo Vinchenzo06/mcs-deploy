@@ -410,7 +410,10 @@ func StartServer(serverID int64) error {
 
 	out, err := exec.Command("docker", "start", containerName(serverID)).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("docker start a échoué : %s : %w", string(out), err)
+		if strings.Contains(string(out), "No such container") {
+			return fmt.Errorf("le conteneur de ce serveur n'existe plus sur cette machine (une API à jour le recrée toute seule au démarrage)")
+		}
+		return fmt.Errorf("docker start a échoué : %s : %w", strings.TrimSpace(string(out)), err)
 	}
 
 	if err := waitForMinecraftReady(containerName(serverID), 120); err != nil {

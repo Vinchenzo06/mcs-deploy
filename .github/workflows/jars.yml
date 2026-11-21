@@ -1,0 +1,66 @@
+# Lot 62 : compile l'API, le proxy (proxymanager), le plugin img-farm et le plugin du lobby
+# à chaque modification, et les publie dans la release GitHub "jars-latest". mcs-deploy les
+# télécharge au lieu de compiler sur le VPS (plus rapide, et rien de lourd sur le VPS) ; il
+# compare l'empreinte git du dossier de chaque module (fichier TREES) avec son propre code et
+# compile lui-même si GitHub n'a pas (encore) la bonne version.
+name: Jars
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "api/**"
+      - "proxymanager/**"
+      - "img-farm-plugin/**"
+      - "lobby-plugin/**"
+      - ".github/workflows/jars.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jars-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Compilation
+        run: |
+          mkdir -p dist
+          build() {
+            local mod=$1 out=$2 jar
+            echo "::group::$mod"
+            mvn -q -B -f "$mod/pom.xml" -DskipTests clean package
+            jar=$(find "$mod/target" -maxdepth 1 -name '*.jar' ! -name 'original-*' ! -name '*-sources.jar' \
+                  ! -name '*-javadoc.jar' -printf '%T@ %p\n' | sort -rn | awk 'NR == 1 { print $2 }')
+            cp "$jar" "dist/$out"
+            echo "$out $(git rev-parse "HEAD:$mod")" >> dist/TREES
+            echo "::endgroup::"
+          }
+          build api mcs-api.jar
+          build proxymanager proxymanager.jar
+          build img-farm-plugin img-farm.jar
+          build lobby-plugin mcs-lobby-plugin.jar
+          cd dist && sha256sum *.jar > SHA256SUMS && cat TREES SHA256SUMS
+
+      - name: Publication (release "jars-latest")
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete jars-latest --yes --cleanup-tag || true
+          gh release create jars-latest dist/* \
+            --title "Jars MCS (dernière version)" \
+            --notes "API, proxy, plugins img-farm et lobby, compilés automatiquement depuis ${GITHUB_SHA::7}." \
+            --target "$GITHUB_SHA" \
+            --latest=false

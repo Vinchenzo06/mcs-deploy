@@ -8,6 +8,7 @@
 #    sudo mcs-deploy velocity lobby  plusieurs étapes
 #    sudo mcs-deploy --no-pull api   sans récupérer GitHub (code déjà présent)
 #    sudo mcs-deploy --no-build lobby  sans recompiler (réutilise le dernier jar)
+#    sudo mcs-deploy --local-build api compiler sur le VPS au lieu de prendre le jar de GitHub
 #
 #  Étapes : system java postgres rathole api velocity lobby firewall bootstrap summary
 # =============================================================================
@@ -27,7 +28,8 @@ while (( $# )); do
   case "$1" in
     --no-pull)  PULL=false; shift ;;
     --no-build) export MCS_SKIP_BUILD=1; shift ;;
-    -h|--help)  sed -n '3,13p' "$0"; exit 0 ;;
+    --local-build) export MCS_LOCAL_BUILD=1; shift ;;
+    -h|--help)  sed -n '3,14p' "$0"; exit 0 ;;
     *) steps+=("$1"); shift ;;
   esac
 done

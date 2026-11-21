@@ -130,6 +130,22 @@ func handleStartServer(conn *websocket.Conn, config *Config, commandId string, m
 		var req CreateServerRequest
 		if err := json.Unmarshal(raw, &req); err == nil && req.ServerID == serverID {
 			syncTeamPlugins(serverDataPath(config.Docker.DataPath, serverID), serverID, req.TeamPlugins)
+			// Lot 63 : conteneur disparu (docker nettoyé, machine réinstallée…) mais fichiers
+			// toujours là : on le recrée avec ses fichiers au lieu d'échouer sur « No such container »
+			if exists, err := containerExists(containerName(serverID)); err == nil && !exists {
+				if !fileExists(serverDataPath(config.Docker.DataPath, serverID)) {
+					sendCommandError(conn, commandId, "start_failed", "les fichiers de ce serveur ne sont pas sur cette machine : "+
+						"impossible de le démarrer ici (un admin peut le restaurer depuis une sauvegarde)")
+					return
+				}
+				log.Printf("Serveur %d : conteneur introuvable, recréé à partir de ses fichiers", serverID)
+				if err := RecreateServer(config.Docker.DataPath, req, true); err != nil {
+					sendCommandFailure(conn, commandId, "start_failed", err)
+					return
+				}
+				sendCommandResult(conn, commandId, map[string]interface{}{"server_id": serverID, "status": "started"})
+				return
+			}
 			if needsForwardingMods(req) && containerForwarding(serverID) != req.Forwarding {
 				// Conteneur créé sans les mods de forwarding : recréé avec (fichiers intacts)
 				log.Printf("Serveur %d : conteneur recréé pour le forwarding %s", serverID, req.Forwarding)
