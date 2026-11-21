@@ -21,6 +21,8 @@ public class ServerFilesController {
 
     public record RenameBody(Long playerId, String from, String to) {}
 
+    public record ArchiveBody(Long playerId, String dir, java.util.List<String> paths, String name) {}
+
     @FunctionalInterface
     private interface Action {
         Object run() throws Exception;
@@ -84,6 +86,16 @@ public class ServerFilesController {
     @PostMapping("/files/delete")
     public ResponseEntity<?> delete(@PathVariable Long id, @RequestBody PathBody body) {
         return handle(() -> files.delete(id, body.playerId(), body.path()));
+    }
+
+    @PostMapping("/files/archive")
+    public ResponseEntity<?> archive(@PathVariable Long id, @RequestBody ArchiveBody body) {
+        return handle(() -> files.archive(id, body.playerId(), body.dir(), body.paths(), body.name()));
+    }
+
+    @PostMapping("/files/extract")
+    public ResponseEntity<?> extract(@PathVariable Long id, @RequestBody PathBody body) {
+        return handle(() -> files.extract(id, body.playerId(), body.path()));
     }
 
     @GetMapping("/logs")

@@ -200,6 +200,25 @@ public class ServerFilesService {
         return plain(r);
     }
 
+    /** Zip des éléments choisis (paths, relatifs à dir) dans dir/name.zip (lot 59) ; peut être long */
+    public Map<String, Object> archive(Long serverId, Long playerId, String dir, java.util.List<String> paths, String name)
+            throws Exception {
+        if (paths == null || paths.isEmpty() || paths.size() > 500) {
+            throw new RuntimeException("Choisis de 1 à 500 éléments à compresser.");
+        }
+        Target t = target(serverId, playerId, AccessService.Right.FILES, true);
+        log.info("Fichiers {} : compression de {} élément(s) de {} en {} par {}", t.server(), paths.size(),
+                dir == null || dir.isEmpty() ? "/" : dir, name, t.player());
+        return plain(call(t, "files_archive", data("dir", dir == null ? "" : dir, "paths", paths, "name", name), 1800));
+    }
+
+    /** Décompresse une archive zip dans son dossier (lot 59) ; peut être long */
+    public Map<String, Object> extract(Long serverId, Long playerId, String path) throws Exception {
+        Target t = target(serverId, playerId, AccessService.Right.FILES, true);
+        log.info("Fichiers {} : extraction de {} par {}", t.server(), path, t.player());
+        return plain(call(t, "files_extract", data("path", path), 1800));
+    }
+
     /** source "game" (logs/latest.log, à partir de offset ; -1 = la fin) ou "docker" (fin du journal du conteneur) */
     public Map<String, Object> logs(Long serverId, Long playerId, String source, long offset) throws Exception {
         Target t = target(serverId, playerId, AccessService.Right.CONSOLE, false);

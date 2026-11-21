@@ -33,6 +33,8 @@ import java.util.regex.Pattern;
  *   POST /img/servers/{id}/files/mkdir    {uuid, path}
  *   POST /img/servers/{id}/files/rename   {uuid, from, to}
  *   POST /img/servers/{id}/files/delete   {uuid, path}
+ *   POST /img/servers/{id}/files/archive  {uuid, dir, paths, name}  (lot 59 ; long : « pending » après 20 s)
+ *   POST /img/servers/{id}/files/extract  {uuid, path}
  * Sauvegardes (lot 58, propriétaire et admins seulement, vérifié par l'API) :
  *   POST /img/servers/{id}/backups                     {uuid}  -> liste, réglages, limites
  *   POST /img/servers/{id}/backups/now                 {uuid}  -> sauvegarde manuelle
@@ -47,7 +49,7 @@ import java.util.regex.Pattern;
 class ImgServersHandler {
 
     private static final Set<String> ACTIONS = Set.of("start", "stop", "restart", "kill", "delete");
-    private static final Set<String> FILE_OPS = Set.of("mkdir", "rename", "delete");
+    private static final Set<String> FILE_OPS = Set.of("mkdir", "rename", "delete", "archive", "extract");
     static final int MAX_CHUNK = 8 << 20;
     private static final Set<String> TYPES = Set.of("PAPER", "SPIGOT", "FABRIC", "FORGE", "NEOFORGE");
     private static final Pattern NAME = Pattern.compile("^[a-z0-9-]{3,32}$");
@@ -175,11 +177,23 @@ class ImgServersHandler {
                     });
         } else if (parts.length == 3 && what.equals("files") && FILE_OPS.contains(parts[2])) {
             String op = parts[2];
-            Map<String, Object> args = op.equals("rename")
-                    ? Map.of("from", body.path("from").asText(""), "to", body.path("to").asText(""))
-                    : Map.of("path", body.path("path").asText(""));
+            Map<String, Object> args;
+            if (op.equals("rename")) {
+                args = Map.of("from", body.path("from").asText(""), "to", body.path("to").asText(""));
+            } else if (op.equals("archive")) {
+                java.util.List<String> paths = new java.util.ArrayList<>();
+                body.path("paths").forEach(p -> paths.add(p.asText("")));
+                args = Map.of("dir", body.path("dir").asText(""), "paths", paths, "name", body.path("name").asText(""));
+            } else {
+                args = Map.of("path", body.path("path").asText(""));
+            }
             logger.info("Site IMG : fichiers du serveur {}, {} {} par le joueur {}", id, op, args, pid);
-            jsonResult(api.fileOp(id, pid, op, args), reply);
+            if (op.equals("archive") || op.equals("extract")) {
+                finish(api.fileOp(id, pid, op, args), "srv:" + id, 20, reply,
+                        op.equals("archive") ? "Archive créée." : "Archive extraite.");
+            } else {
+                jsonResult(api.fileOp(id, pid, op, args), reply);
+            }
         } else {
             reply.accept(404, error("Route inconnue"));
         }

@@ -44,7 +44,7 @@ func handleCommand(conn *websocket.Conn, config *Config, msgType, commandId stri
 		handleRestoreServer(conn, config, commandId, msg)
 	case "server_logs":
 		handleServerLogs(conn, config, commandId, msg)
-	case "files_list", "files_read", "files_write", "files_mkdir", "files_rename", "files_delete":
+	case "files_list", "files_read", "files_write", "files_mkdir", "files_rename", "files_delete", "files_archive", "files_extract":
 		handleFiles(conn, config, commandId, strings.TrimPrefix(msgType, "files_"), msg)
 	default:
 		log.Printf("Type de commande non géré : %s", msgType)

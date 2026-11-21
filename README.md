@@ -268,6 +268,10 @@ fichiers, donc au mot de passe. Titre d'un groupe : `lp group vip meta setprefix
   Lot 55 (agent 0.18.1) : correctif (réponses de l'agent rendues en Map : Spring Boot 4 répond en Jackson 3, qui
   ne sait pas écrire un JsonNode de Jackson 2), arrêt forcé `POST /api/v1/servers/{id}/kill` (`docker kill`) et
   page d'un serveur sur le site (`/img/servers/<id>/stats` : le serveur + CPU, RAM, disque, joueurs).
+- **Archives zip** (lot 59, agent 0.19.0) : compresser une sélection de fichiers et dossiers en `nom.zip` dans le
+  même dossier, extraire un `.zip` sur place (`POST /api/v1/servers/{id}/files/archive|extract`). Mêmes règles que
+  les autres fichiers (`os.Root`, noms en « . » ignorés, 1 Go gardé libre) ; une archive piégée (`../`, liens)
+  n'écrit rien hors du dossier.
 - **Sauvegardes depuis le site** (lot 58) : voir, sauvegarder maintenant, garder pour toujours, restaurer et régler
   le rythme d'un serveur ; **propriétaire et admins seulement** (aussi en jeu : `/mcs backup` n'est plus ouvert à
   tous ceux qui peuvent démarrer le serveur). Le propriétaire règle son serveur dans les limites de son rôle.

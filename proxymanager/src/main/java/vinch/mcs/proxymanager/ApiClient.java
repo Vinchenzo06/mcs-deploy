@@ -206,7 +206,12 @@ public class ApiClient {
     public CompletableFuture<JsonNode> fileOp(long serverId, long playerId, String op, java.util.Map<String, Object> body) {
         java.util.Map<String, Object> b = new java.util.HashMap<>(body);
         b.put("playerId", playerId);
-        return call("POST", "/api/v1/servers/" + serverId + "/files/" + op, b, Duration.ofMinutes(op.equals("delete") ? 6 : 2));
+        Duration timeout = switch (op) {
+            case "archive", "extract" -> Duration.ofMinutes(31);
+            case "delete" -> Duration.ofMinutes(6);
+            default -> Duration.ofMinutes(2);
+        };
+        return call("POST", "/api/v1/servers/" + serverId + "/files/" + op, b, timeout);
     }
 
     public record FileContent(byte[] data, long size, long mtime) {}

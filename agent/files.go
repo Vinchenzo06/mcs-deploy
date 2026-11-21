@@ -12,6 +12,7 @@ package main
 // Un téléversement s'écrit dans un fichier caché « .<nom>.mcs-part », renommé à la fin.
 
 import (
+	"archive/zip"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -189,6 +190,10 @@ func filesOp(root *os.Root, dir, op string, data map[string]interface{}) (map[st
 			return nil, err
 		}
 		return map[string]interface{}{"path": to}, nil
+	case "archive":
+		return filesArchive(root, dir, data)
+	case "extract":
+		return filesExtract(root, dir, data)
 	case "delete":
 		p, err := cleanRel(dataString(data, "path"), false)
 		if err != nil {
@@ -485,4 +490,272 @@ func dockerLogs(serverID int64) (string, error) {
 		}
 	}
 	return text, nil
+}
+
+// ---------- Archives zip (lot 59) : compresser une sélection, extraire une archive ----------
+
+// mkdirAllInRoot crée les dossiers d'un chemin (propriétaire : le conteneur), sans sortir du dossier
+func mkdirAllInRoot(root *os.Root, p string) error {
+	if p == "" || p == "." {
+		return nil
+	}
+	cur := ""
+	for _, part := range strings.Split(p, "/") {
+		cur = path.Join(cur, part)
+		if err := root.Mkdir(cur, 0755); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		st, err := root.Lstat(cur)
+		if err != nil {
+			return err
+		}
+		if !st.IsDir() {
+			return fmt.Errorf("%s existe déjà et n'est pas un dossier", cur)
+		}
+		if d, err := root.Open(cur); err == nil {
+			_ = d.Chown(containerUID, containerGID)
+			d.Close()
+		}
+	}
+	return nil
+}
+
+// sizeInRoot : taille totale d'un fichier ou d'un dossier (liens symboliques et noms en « . » ignorés)
+func sizeInRoot(root *os.Root, rel string) (int64, error) {
+	st, err := root.Lstat(rel)
+	if err != nil {
+		return 0, err
+	}
+	if st.Mode().IsRegular() {
+		return st.Size(), nil
+	}
+	if !st.IsDir() {
+		return 0, nil
+	}
+	d, err := root.Open(rel)
+	if err != nil {
+		return 0, err
+	}
+	entries, err := d.ReadDir(-1)
+	d.Close()
+	if err != nil {
+		return 0, err
+	}
+	var total int64
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		n, err := sizeInRoot(root, path.Join(rel, e.Name()))
+		if err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	return total, nil
+}
+
+func addToZip(zw *zip.Writer, root *os.Root, rel, base string) error {
+	st, err := root.Lstat(rel)
+	if err != nil {
+		return err
+	}
+	name := strings.TrimPrefix(rel, base+"/")
+	if base == "." {
+		name = rel
+	}
+	if st.IsDir() {
+		if _, err := zw.CreateHeader(&zip.FileHeader{Name: name + "/", Modified: st.ModTime()}); err != nil {
+			return err
+		}
+		d, err := root.Open(rel)
+		if err != nil {
+			return err
+		}
+		entries, err := d.ReadDir(-1)
+		d.Close()
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			if err := addToZip(zw, root, path.Join(rel, e.Name()), base); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if !st.Mode().IsRegular() {
+		return nil // lien symbolique ou autre : ignoré
+	}
+	h, err := zip.FileInfoHeader(st)
+	if err != nil {
+		return err
+	}
+	h.Name = name
+	h.Method = zip.Deflate
+	w, err := zw.CreateHeader(h)
+	if err != nil {
+		return err
+	}
+	f, err := root.Open(rel)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(w, f)
+	return err
+}
+
+// filesArchive : zip des éléments choisis d'un dossier, écrit dans ce dossier (nom.zip)
+func filesArchive(root *os.Root, dir string, data map[string]interface{}) (map[string]interface{}, error) {
+	base, err := cleanRel(dataString(data, "dir"), true)
+	if err != nil {
+		return nil, err
+	}
+	name := strings.TrimSpace(dataString(data, "name"))
+	if !strings.HasSuffix(strings.ToLower(name), ".zip") {
+		name += ".zip"
+	}
+	if strings.Contains(name, "/") {
+		return nil, errors.New("nom d'archive invalide")
+	}
+	target, err := cleanRel(path.Join(base, name), false)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := root.Lstat(target); err == nil {
+		return nil, fs.ErrExist
+	}
+	raw, _ := data["paths"].([]interface{})
+	if len(raw) == 0 {
+		return nil, errors.New("rien à compresser")
+	}
+	var items []string
+	var total int64
+	for _, v := range raw {
+		s, _ := v.(string)
+		p, err := cleanRel(path.Join(base, s), false)
+		if err != nil {
+			return nil, err
+		}
+		if base != "." && !strings.HasPrefix(p, base+"/") {
+			return nil, errors.New("chemin invalide")
+		}
+		n, err := sizeInRoot(root, p)
+		if err != nil {
+			return nil, err
+		}
+		total += n
+		items = append(items, p)
+	}
+	if _, free := diskInfo(dir); free > 0 && free-(total>>20) < filesDiskReserve {
+		return nil, errors.New("le disque de la machine est presque plein : archive refusée")
+	}
+	part := partName(target)
+	f, err := root.OpenFile(part, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return nil, err
+	}
+	zw := zip.NewWriter(f)
+	for _, p := range items {
+		if err = addToZip(zw, root, p, base); err != nil {
+			break
+		}
+	}
+	if cerr := zw.Close(); err == nil {
+		err = cerr
+	}
+	_ = f.Chown(containerUID, containerGID)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		_ = root.Remove(part)
+		return nil, err
+	}
+	if err := renameInRoot(root, part, target); err != nil {
+		_ = root.Remove(part)
+		return nil, err
+	}
+	st, _ := root.Stat(target)
+	size := int64(0)
+	if st != nil {
+		size = st.Size()
+	}
+	return map[string]interface{}{"path": target, "size": size, "source": total}, nil
+}
+
+// filesExtract : décompresse une archive zip dans son dossier. Les fichiers existants sont
+// remplacés ; les chemins qui sortiraient du dossier, cachés (« . ») ou liens sont ignorés ;
+// on s'arrête si le disque n'a plus de place (1 Go gardé libre).
+func filesExtract(root *os.Root, dir string, data map[string]interface{}) (map[string]interface{}, error) {
+	p, err := cleanRel(dataString(data, "path"), false)
+	if err != nil {
+		return nil, err
+	}
+	dest := path.Dir(p)
+	f, err := root.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	zr, err := zip.NewReader(f, st.Size())
+	if err != nil {
+		return nil, errors.New("ce fichier n'est pas une archive zip lisible")
+	}
+	_, free := diskInfo(dir)
+	budget := (free - filesDiskReserve) << 20
+	if free <= 0 {
+		budget = 1 << 62
+	}
+	files, skipped := 0, 0
+	for _, e := range zr.File {
+		target, err := cleanRel(path.Join(dest, e.Name), false)
+		if err != nil || (dest != "." && !strings.HasPrefix(target, dest+"/")) || e.Mode()&fs.ModeSymlink != 0 {
+			skipped++
+			continue
+		}
+		if e.FileInfo().IsDir() {
+			if err := mkdirAllInRoot(root, target); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := mkdirAllInRoot(root, path.Dir(target)); err != nil {
+			return nil, err
+		}
+		if lst, err := root.Lstat(target); err == nil && lst.IsDir() {
+			return nil, fmt.Errorf("%s est un dossier : impossible de le remplacer par un fichier", target)
+		}
+		rc, err := e.Open()
+		if err != nil {
+			return nil, err
+		}
+		out, err := root.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+		if err != nil {
+			rc.Close()
+			return nil, err
+		}
+		n, err := io.Copy(out, io.LimitReader(rc, budget+1))
+		rc.Close()
+		_ = out.Chown(containerUID, containerGID)
+		out.Close()
+		if err != nil {
+			return nil, err
+		}
+		budget -= n
+		if budget < 0 {
+			_ = root.Remove(target)
+			return nil, fmt.Errorf("le disque de la machine est presque plein : extraction arrêtée après %d fichier(s)", files)
+		}
+		files++
+	}
+	return map[string]interface{}{"path": dest, "files": files, "skipped": skipped}, nil
 }
