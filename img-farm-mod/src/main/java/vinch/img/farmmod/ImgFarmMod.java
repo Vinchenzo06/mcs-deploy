@@ -244,7 +244,7 @@ public final class ImgFarmMod implements ClientModInitializer {
 
     private void observe(Minecraft mc, LocalPlayer p, FarmSession s) {
         AbstractContainerMenu menu = p.containerMenu;
-        boolean screen = mc.screen instanceof AbstractContainerScreen<?>;
+        boolean screen = mc.gui.screen() instanceof AbstractContainerScreen<?>; // 26.x : l'écran ouvert est dans mc.gui
         ScreenRef ref = new ScreenRef(p, menu, screen);
         if (p.isCreative() || p.isSpectator()) {
             tracker.observe(Tracker.Ctx.IGNORE, ref, 0, null, -1);
