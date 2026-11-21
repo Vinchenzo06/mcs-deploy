@@ -541,41 +541,55 @@ final class Menu implements Listener {
                 return;
             }
             d.version = v;
-            createRam(p, d);
+            createResources(p, d);
         });
     }
 
-    private void createRam(Player p, Draft d) {
-        Gui g = new Gui(3, "Créer : la RAM");
-        long left = d.quota == null ? Long.MAX_VALUE : lng(d.quota, "ramRemainingMb");
-        int slot = 10;
-        for (int gbs : new int[]{1, 2, 3, 4, 6, 8, 12}) {
-            boolean ok = (long) gbs * 1024 <= left;
-            g.set(slot++, item(ok ? Material.LIME_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE, gbs + " Go",
-                    ok ? NamedTextColor.GREEN : NamedTextColor.DARK_GRAY,
-                    ok ? "» Clic : choisir" : "Plus que ton quota (" + gb(Math.max(0, left)) + " libres)"), ok ? c -> {
-                d.ramGb = gbs;
-                createCpu(p, d);
-            } : null);
+    /**
+     * RAM et CPU sur le même écran : boutons − et +, ou clic sur la valeur (gauche +1, droite −1,
+     * Maj = 4 d'un coup). Plafond : ce qui reste dans le quota du joueur.
+     */
+    private void createResources(Player p, Draft d) {
+        long ramLeft = d.quota == null ? 64 : Math.max(0, lng(d.quota, "ramRemainingMb") / 1024);
+        long cpuLeft = d.quota == null ? 32 : Math.max(0, lng(d.quota, "cpuRemainingCores"));
+        if (ramLeft < 1 || cpuLeft < 1) {
+            p.closeInventory();
+            p.sendMessage(ImgFarmPlugin.error("Ton quota est plein : " + (ramLeft < 1 ? "plus de RAM" : "plus de CPU")
+                    + " disponible. Supprime ou réduis un serveur, ou demande à un admin."));
+            return;
         }
+        if (d.ramGb < 1 || d.ramGb > ramLeft) d.ramGb = (int) Math.min(4, ramLeft);
+        if (d.cpu < 1 || d.cpu > cpuLeft) d.cpu = (int) Math.min(2, cpuLeft);
+        Gui g = new Gui(3, "Créer : RAM et CPU");
+        Runnable[] draw = new Runnable[1];
+        java.util.function.IntConsumer ram = delta -> {
+            d.ramGb = (int) Math.max(1, Math.min(ramLeft, d.ramGb + delta));
+            draw[0].run();
+        };
+        java.util.function.IntConsumer cpu = delta -> {
+            d.cpu = (int) Math.max(1, Math.min(cpuLeft, d.cpu + delta));
+            draw[0].run();
+        };
+        draw[0] = () -> {
+            g.set(10, item(d.ramGb > 1 ? Material.RED_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE, "− 1 Go",
+                    NamedTextColor.RED, "Maj + clic : − 4 Go"), c -> ram.accept(c.isShiftClick() ? -4 : -1));
+            g.set(11, item(Material.REDSTONE, "RAM : " + d.ramGb + " Go", NamedTextColor.WHITE,
+                    "Ton quota : " + ramLeft + " Go libres", "", "» Clic gauche : +1 · clic droit : −1"),
+                    c -> ram.accept((c.isRightClick() ? -1 : 1) * (c.isShiftClick() ? 4 : 1)));
+            g.set(12, item(d.ramGb < ramLeft ? Material.LIME_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE, "+ 1 Go",
+                    NamedTextColor.GREEN, "Maj + clic : + 4 Go"), c -> ram.accept(c.isShiftClick() ? 4 : 1));
+            g.set(14, item(d.cpu > 1 ? Material.RED_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE, "− 1 CPU",
+                    NamedTextColor.RED), c -> cpu.accept(-1));
+            g.set(15, item(Material.COMPARATOR, "CPU : " + d.cpu, NamedTextColor.WHITE,
+                    "Ton quota : " + cpuLeft + " CPU libre" + (cpuLeft > 1 ? "s" : ""), "", "» Clic gauche : +1 · clic droit : −1"),
+                    c -> cpu.accept(c.isRightClick() ? -1 : 1));
+            g.set(16, item(d.cpu < cpuLeft ? Material.LIME_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE, "+ 1 CPU",
+                    NamedTextColor.GREEN), c -> cpu.accept(1));
+            g.set(22, item(Material.LIME_CONCRETE, "Continuer : " + d.ramGb + " Go, " + d.cpu + " CPU", NamedTextColor.GREEN,
+                    "", "» Clic : choisir le nom"), c -> createName(p, d));
+        };
+        draw[0].run();
         g.set(18, back(), c -> createType(p));
-        open(p, g);
-    }
-
-    private void createCpu(Player p, Draft d) {
-        Gui g = new Gui(3, "Créer : les CPU");
-        long left = d.quota == null ? Long.MAX_VALUE : lng(d.quota, "cpuRemainingCores");
-        int slot = 11;
-        for (int n : new int[]{1, 2, 3, 4, 6}) {
-            boolean ok = n <= left;
-            g.set(slot++, item(ok ? Material.LIME_STAINED_GLASS_PANE : Material.GRAY_STAINED_GLASS_PANE, n + " CPU",
-                    ok ? NamedTextColor.GREEN : NamedTextColor.DARK_GRAY,
-                    ok ? "» Clic : choisir" : "Plus que ton quota (" + Math.max(0, left) + " libres)"), ok ? c -> {
-                d.cpu = n;
-                createName(p, d);
-            } : null);
-        }
-        g.set(18, back(), c -> createRam(p, d));
         open(p, g);
     }
 
