@@ -1,0 +1,39 @@
+// Mod client Fabric « IMG Farm » (lot 64). Minecraft 26.x n'est plus obfusqué : Loom sans remappage
+// (plugin net.fabricmc.fabric-loom), dépendances en « implementation » comme le mod d'exemple de Fabric.
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+}
+
+version = "${project.mod_version}+mc${project.minecraft_version}"
+group = 'vinch.img'
+base {
+	archivesName = 'img-farm-mod'
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+}
+
+processResources {
+	def props = [
+		version      : project.version,
+		minecraft_min: project.minecraft_version,
+		loader_min   : project.loader_min,
+	]
+	inputs.properties props
+	filesMatching('fabric.mod.json') {
+		expand props
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+	it.options.encoding = 'UTF-8'
+}
+
+java {
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}

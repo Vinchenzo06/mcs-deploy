@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "img-farm",
+  "version": "${version}",
+  "name": "IMG Farm",
+  "description": "Sessions de farm de la team IMG (/imgfarm), envoyées sur le site img.asearia.ca. Client seulement : rien à installer sur le serveur.",
+  "authors": ["Vinchenzo06"],
+  "contact": {
+    "homepage": "https://img.asearia.ca",
+    "sources": "https://github.com/Vinchenzo06/mcs-deploy/tree/main/img-farm-mod"
+  },
+  "environment": "client",
+  "entrypoints": {
+    "client": ["vinch.img.farmmod.ImgFarmMod"]
+  },
+  "depends": {
+    "fabricloader": ">=${loader_min}",
+    "minecraft": ">=${minecraft_min}",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}

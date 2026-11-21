@@ -322,6 +322,28 @@ complète (Farming → Mes sessions).
   ressortir) ne change rien. Ferme auto : ce qui entre dans les coffres de collecte, plus ce que le
   joueur ramasse.
 
+### Mod client Fabric (lot 64, dossier `img-farm-mod`)
+
+Les mêmes sessions sur **n'importe quel serveur**, même en solo, sans rien installer sur le serveur :
+Fabric seulement (pas Forge), Minecraft 26.2 et plus, avec Fabric API. Détails : `img-farm-mod/README.md`.
+
+- L'action GitHub « Mod » compile le mod une fois par version de `img-farm-mod/versions.json` et publie
+  les fichiers dans la release `mod-latest` (lien dans Mon profil → Mod Fabric sur le site).
+- Liaison : Mon profil → Mod Fabric → **Lier le mod** donne un code ; en jeu `/imgfarm lier CODE`. Le mod
+  garde ensuite une clé secrète et parle directement au site (`/mod/...` en HTTPS), pas au proxy.
+- Rien à déployer sur le VPS pour le mod lui-même.
+
+### Nouvelle version de Minecraft
+
+- **Site** (items, noms, icônes) : tout seul, vérifié chaque jour (Admin → Items pour le faire tout de suite).
+- **Serveurs MCS** : `LATEST` prend la nouvelle version ; Java choisi tout seul (26.x et plus : la plus
+  récente). `/mcs create` propose les 4 dernières versions de Mojang (lues toutes les 12 h par le proxy).
+- **Plugin img-farm** : rien à faire (API Paper 1.21.4, marche sur les versions suivantes ; les nouveaux
+  items sont reconnus dès que le serveur tourne en nouvelle version).
+- **Mod** : ajouter une ligne à `img-farm-mod/versions.json` (version de Fabric API sur
+  https://fabricmc.net/develop) et pousser. En attendant, le fichier de la version précédente se
+  charge sur la nouvelle et marche en général (il ne lit les items que par leur identifiant).
+
 ## Sauvegardes
 
 Un **serveur de sauvegarde** (chez toi) garde des sauvegardes chiffrées (restic) de tous

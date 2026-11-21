@@ -1,0 +1,109 @@
+# Lot 64 : compile le mod client Fabric « IMG Farm » (img-farm-mod) une fois par version de
+# Minecraft listée dans img-farm-mod/versions.json, et publie les fichiers dans la release
+# GitHub "mod-latest" (le site y envoie les membres : Mon profil → Mod Fabric).
+#
+# Nouvelle version de Minecraft : ajouter une ligne à versions.json (version de Fabric API sur
+# https://fabricmc.net/develop) et pousser. Si la compilation échoue pour la nouvelle version,
+# les autres fichiers sont quand même publiés : le mod d'une version plus ancienne se charge
+# aussi sur les plus récentes (dépendance minecraft >= sa version) tant que le jeu n'a pas changé
+# ce qu'il utilise.
+name: Mod
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "img-farm-mod/**"
+      - ".github/workflows/mod.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mod-release
+  cancel-in-progress: false
+
+jobs:
+  versions:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.read.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: read
+        run: echo "matrix=$(jq -c . img-farm-mod/versions.json)" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: versions
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.versions.outputs.matrix) }}
+    name: Minecraft ${{ matrix.minecraft }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.8.2"
+
+      - name: Compilation
+        working-directory: img-farm-mod
+        run: |
+          gradle build --no-daemon --stacktrace \
+            -Pminecraft_version="${{ matrix.minecraft }}" \
+            -Pfabric_api_version="${{ matrix.fabric_api }}"
+          mkdir -p ../dist
+          cp build/libs/img-farm-mod-*+mc${{ matrix.minecraft }}.jar ../dist/
+          ls -l ../dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mod-${{ matrix.minecraft }}
+          path: dist/*.jar
+
+  release:
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publication (release "mod-latest")
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          jars=(dist/*.jar)
+          if [ ${#jars[@]} -eq 0 ]; then echo "Aucun fichier compilé : rien à publier"; exit 1; fi
+          (cd dist && sha256sum *.jar > SHA256SUMS && cat SHA256SUMS)
+          {
+            echo "Mod client Fabric **IMG Farm** : sessions de farm (/imgfarm) envoyées sur le site de la team."
+            echo
+            echo "1. Installe [Fabric](https://fabricmc.net/use/) et [Fabric API](https://modrinth.com/mod/fabric-api) pour ta version de Minecraft."
+            echo "2. Prends le fichier qui finit par ta version (ex. \`+mc26.3\`) et mets-le dans le dossier \`mods\`."
+            echo "   Pas de fichier pour ta version ? Prends le plus récent : il marche en général sur les versions suivantes."
+            echo "3. Sur le site : Mon profil → Mod Fabric → Lier le mod, puis en jeu \`/imgfarm lier CODE\`."
+            echo
+            echo "Fichiers :"
+            for j in "${jars[@]}"; do echo "- \`$(basename "$j")\`"; done
+            echo
+            echo "Compilé automatiquement depuis ${GITHUB_SHA::7}."
+          } > notes.md
+          gh release delete mod-latest --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          gh release create mod-latest dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Mod IMG Farm (Fabric)" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA" \
+            --latest=false

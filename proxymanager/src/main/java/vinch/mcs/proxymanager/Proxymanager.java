@@ -155,6 +155,9 @@ public class Proxymanager {
         } else if (!config.getImgHost().isBlank() || !config.getImgLobby().isBlank()) {
             logger.warn("Entrée IMG désactivée : img-host et img-lobby (pseudo/nom) sont tous deux requis");
         }
+        // Lot 64 : versions proposées par /mcs create, suivies chez Mojang (toutes les 12 h)
+        server.getScheduler().buildTask(this, () -> MinecraftVersions.refresh(logger))
+                .repeat(java.time.Duration.ofHours(12)).schedule();
         registerCommands();
 
         logger.info("ProxyManager démarré avec succès");

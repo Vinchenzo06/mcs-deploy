@@ -18,10 +18,6 @@ public class McsTabCompleter {
 
     private static final List<String> TYPES = List.of("PAPER", "SPIGOT", "FABRIC", "FORGE", "NEOFORGE");
 
-    private static final List<String> COMMON_VERSIONS = List.of(
-            "LATEST", "26.1.2", "1.21.11", "1.21.4", "1.21.1", "1.20.1", "1.19.2", "1.18.2"
-    );
-
     private static final List<String> LEVELS = List.of("membre", "gerant", "technicien");
 
     private static final List<String> BACKUP_SUBS = List.of("keep", "unkeep", "settings", "set", "defaults", "role");
@@ -88,7 +84,7 @@ public class McsTabCompleter {
         if (args.length == 3) {
             switch (sub) {
                 case "create" -> {
-                    return done(filter(COMMON_VERSIONS, args[2]));
+                    return done(filter(MinecraftVersions.suggestions(), args[2])); // lot 64 : suit Mojang
                 }
                 case "invite", "remove" -> {
                     return done(filter(playerNames(), args[2]));

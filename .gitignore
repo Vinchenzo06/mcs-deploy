@@ -12,6 +12,11 @@ agent/mcs-agent
 agent/*.exe
 agent/config.yaml
 
+# Gradle (mod Fabric img-farm-mod)
+build/
+.gradle/
+run/
+
 # Maven shade (fichier généré)
 dependency-reduced-pom.xml
 
