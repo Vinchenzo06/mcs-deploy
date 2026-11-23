@@ -1,7 +1,9 @@
 package vinch.mcs.proxymanager;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.velocitypowered.api.event.ResultedEvent;
 import com.velocitypowered.api.event.Subscribe;
+import com.velocitypowered.api.event.connection.LoginEvent;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.player.KickedFromServerEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
@@ -141,6 +143,29 @@ public class ImgGate {
                 .map(ImgGate::normalize)
                 .filter(host::equals)
                 .isPresent();
+    }
+
+    /**
+     * Lot 65 : réseau fermé. Seule l'adresse IMG fait entrer ; un joueur qui tape une autre
+     * adresse (play.asearia.ca…) est refusé avant même d'être connecté (aucun profil créé).
+     */
+    private volatile boolean imgOnly;
+
+    public void setImgOnly(boolean imgOnly) {
+        this.imgOnly = imgOnly;
+    }
+
+    public boolean imgOnly() {
+        return imgOnly && enabled();
+    }
+
+    @Subscribe
+    public void onLogin(LoginEvent event) {
+        if (!imgOnly() || !event.getResult().isAllowed() || cameThroughImg(event.getPlayer())) {
+            return;
+        }
+        logger.info("{} refusé : entré par une autre adresse que {} (réseau fermé)", event.getPlayer().getUsername(), host);
+        event.setResult(ResultedEvent.ComponentResult.denied(msg("Cette adresse est fermée.\nLa team se connecte par " + host)));
     }
 
     /** Membres du site (lot 48) : null = seules les invitations comptent */
@@ -325,6 +350,14 @@ public class ImgGate {
                 .filter(host::equals)
                 .isPresent();
         if (!img) {
+            if (imgOnly()) {
+                // Réseau fermé : l'ancienne adresse ne montre plus rien du réseau
+                event.setPing(event.getPing().asBuilder()
+                        .onlinePlayers(0)
+                        .clearSamplePlayers()
+                        .description(msg("Adresse fermée : " + host))
+                        .build());
+            }
             return;
         }
         ServerPing.Builder b = event.getPing().asBuilder()

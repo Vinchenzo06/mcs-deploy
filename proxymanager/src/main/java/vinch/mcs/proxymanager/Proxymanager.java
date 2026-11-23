@@ -145,9 +145,10 @@ public class Proxymanager {
         // Entrée IMG (lot 40) : adresse dédiée -> lobby IMG
         imgGate = new ImgGate(server, apiClient, logger, config.getImgHost(), config.getImgLobby(),
                 config.getImgIcon(), config.getImgMotd(), dataDirectory);
+        imgGate.setImgOnly(config.isImgOnly());
         if (imgGate.enabled()) {
             server.getEventManager().register(this, imgGate);
-            logger.info("Entrée IMG active : {}", imgGate.describe());
+            logger.info("Entrée IMG active : {}{}", imgGate.describe(), imgGate.imgOnly() ? " (seule adresse ouverte)" : "");
             // Icône de la liste des serveurs : tout de suite, puis toutes les 10 min
             // (suit le logo du site farmdb s'il change)
             server.getScheduler().buildTask(this, imgGate::reloadIcon)

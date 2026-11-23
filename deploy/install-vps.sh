@@ -13,6 +13,7 @@
 #  Config (optionnelle) : /etc/mcs/mcs.env    Secrets : /etc/mcs/secrets.env
 #
 #  Étapes : system java postgres rathole egress api https velocity lobby firewall bootstrap summary
+#  Sur demande seulement : plateforme (Velocity et LuckPerms à jour, lot 65)
 #
 #  Machines volontaires : chacune a sa plage de ports (attribuée par l'API) et
 #  son propre jeton rathole, décrits dans /etc/mcs/nodes/<id>.env.
@@ -301,7 +302,7 @@ download() {
   curl -fSL --retry 3 -A "$USER_AGENT" -o "$2.part" "$1" && mv -f "$2.part" "$2"
 }
 
-# URL du jar le plus récent d'un projet PaperMC (build STABLE en priorité)
+# URL du jar le plus récent d'un projet PaperMC (build RECOMMENDED ou STABLE en priorité)
 papermc_url() {
   local project=$1 version=$2
   if [[ "$version" == "latest" ]]; then
@@ -309,7 +310,7 @@ papermc_url() {
   fi
   echo "    $project $version" >&2
   curl -fsSL -A "$USER_AGENT" "$FILL_API/$project/versions/$version/builds" \
-    | jq -r '(map(select(.channel == "STABLE")) + .) | .[0].downloads["server:default"].url // empty'
+    | jq -r '(map(select(.channel == "RECOMMENDED" or .channel == "STABLE")) + .) | .[0].downloads["server:default"].url // empty'
 }
 
 # ============================================================== config =======
@@ -332,6 +333,8 @@ load_config() {
   : "${IMG_HOST:=}" "${IMG_LOBBY:=}" "${IMG_ICON=http://127.0.0.1:3100/logo}"
   : "${IMG_MOTD=&6&lInfiniteMoneyGlitch\\n&7Lobby de la team}"
   : "${FARMDB_URL:=}"
+  # Lot 65 : seule l'adresse IMG fait entrer (play.asearia.ca et les autres sont refusées)
+  : "${IMG_ONLY:=true}"
   : "${SRC_API:=api}" "${SRC_PROXY:=proxymanager}" "${SRC_LOBBY:=lobby-plugin}"
   : "${SRC_IMGFARM:=img-farm-plugin}"
   : "${QUOTA_DEFAULT:=1 6144 2}" "${QUOTA_VIP:=2 12288 4}"
@@ -459,6 +462,18 @@ for s in postgresql rathole-server wg-quick@wg-mcs mcs-api caddy minecraft-veloc
   [[ "$st" == "active" ]] && mark=" " || mark="⚠"
   printf "%s %-20s %s\n" "$mark" "$s" "$st"
 done
+v=/opt/minecraft/velocity/velocity.jar.url
+if [[ -f "$v" ]]; then
+  cur=$(basename "$(cat "$v")")
+  latest=$(curl -fsS --max-time 5 -A "mcs-deploy (+https://github.com/Vinchenzo06/mcs-deploy)" https://fill.papermc.io/v3/projects/velocity 2>/dev/null | jq -r '.versions | to_entries[0].value[0] // empty' 2>/dev/null)
+  if [[ -n "$latest" && "$cur" != *"$latest"* ]]; then
+    printf "⚠ velocity.jar         %s  (plus récent : %s ; sudo mcs-deploy plateforme)\n" "$cur" "$latest"
+  else
+    printf "  velocity.jar         %s\n" "$cur"
+  fi
+else
+  echo "  velocity.jar         version inconnue : sudo mcs-deploy plateforme"
+fi
 echo
 echo "=== Sauvegardes ==="
 if [[ ! -f /etc/mcs/backup/enabled ]]; then
@@ -1252,7 +1267,7 @@ rm -f "$tmp"
 SHEOF
   chmod 700 /usr/local/bin/mcs-backup-export
 
-  # mcs-backup-vps : sauvegarde du VPS lui-même (bases, secrets, lobby, proxy)
+  # mcs-backup-vps : sauvegarde du VPS lui-même (bases, secrets, lobby, proxy, site IMG)
   cat > /usr/local/bin/mcs-backup-vps <<'SHEOF'
 #!/usr/bin/env bash
 # sudo mcs-backup-vps : sauvegarde du VPS (automatique chaque nuit)
@@ -1277,7 +1292,15 @@ paths=(/etc/mcs "$dumps")
 for p in /opt/minecraft/lobby /opt/minecraft/velocity /etc/caddy /etc/ssh/sshd_config.d; do
   [[ -e "$p" ]] && paths+=("$p")
 done
+# Lot 65 : le site IMG Farm DB (même VPS). Une copie fraîche de sa base d'abord (VACUUM INTO,
+# cohérente), puis ses copies, ses images téléversées et son .env ; pas la base vivante ni les icônes.
+if [[ -d /opt/farmdb/data ]]; then
+  systemctl start farmdb-backup.service 2>/dev/null || echo "! copie fraîche du site impossible : la dernière copie de la nuit est envoyée"
+  paths+=(/opt/farmdb/data)
+  [[ -f /opt/farmdb/.env ]] && paths+=(/opt/farmdb/.env)
+fi
 restic backup --tag vps --host vps \
+  --exclude '/opt/farmdb/data/farmdb.sqlite*' --exclude '/opt/farmdb/data/icons' \
   --exclude '/opt/minecraft/*/logs' --exclude '/opt/minecraft/*/cache' \
   --exclude '/opt/minecraft/lobby/libraries' --exclude '/opt/minecraft/lobby/versions' \
   --exclude '/opt/minecraft/*/*.jar' \
@@ -1370,6 +1393,20 @@ step_system() {
 
   install_helpers
   ok "Paquets, utilisateurs ($MC_USER, $API_USER), outils mcs-status / mcs-rcon / mcs-admin / mcs-add-node / mcs-remove-node"
+
+  # Lot 65 : 2 Go d'échange. Sans swap, un pic de mémoire (trois Java sur 3,8 Go) tue un
+  # service au lieu de le ralentir. swappiness 10 : utilisé seulement en dernier recours.
+  if [[ -z "$(swapon --show --noheadings 2>/dev/null)" ]]; then
+    if [[ ! -f /swapfile ]]; then
+      fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+      chmod 600 /swapfile
+      mkswap /swapfile >/dev/null
+    fi
+    swapon /swapfile && ok "Fichier d'échange de 2 Go actif" || warn "Fichier d'échange non activé"
+  fi
+  grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  echo 'vm.swappiness=10' > /etc/sysctl.d/90-mcs-swap.conf
+  sysctl -q -w vm.swappiness=10 || true
 }
 
 step_java() {
@@ -1700,6 +1737,7 @@ img-host: "$IMG_HOST"
 img-lobby: "$IMG_LOBBY"
 img-icon: "$IMG_ICON"
 img-motd: "${IMG_MOTD//\"/\\\"}"
+img-only: $IMG_ONLY
 farmdb-url: "$FARMDB_URL"
 farmdb-token: $FARMDB_TOKEN
 EOF
@@ -1767,6 +1805,64 @@ EOF
     else
       warn "Plugin img-farm non compilé (voir ci-dessus) : le proxy fonctionne quand même"
     fi
+  fi
+}
+
+# Lot 65 : Velocity le plus récent de sa version majeure (build STABLE en priorité).
+# Une version majeure nouvelle (API des plugins changée) ne se prend jamais toute seule.
+latest_velocity_url() {
+  local major=${VELOCITY_VERSION%%.*} version
+  if [[ "$VELOCITY_VERSION" == "latest" ]]; then
+    version=$(curl -fsSL -A "$USER_AGENT" "$FILL_API/velocity" | jq -r '.versions | to_entries[0].value[0]')
+  else
+    version=$(curl -fsSL -A "$USER_AGENT" "$FILL_API/velocity" \
+      | jq -r --arg m "$major." '[.versions | to_entries[] | .value[] | select(startswith($m))][0] // empty')
+  fi
+  [[ -n "$version" ]] || return 1
+  papermc_url velocity "$version"
+}
+
+# sudo mcs-deploy plateforme : Velocity et LuckPerms à jour. À lancer à la sortie d'une nouvelle
+# version de Minecraft : sans un Velocity qui la connaît, ses joueurs ne peuvent pas se connecter.
+# Les anciens jars sont gardés en .old (retour : les remettre et redémarrer).
+step_plateforme() {
+  step "Plateforme : Velocity et LuckPerms"
+  need_java
+  local url changed=false lp cur
+  url=${VELOCITY_URL:-}
+  [[ -n "$url" ]] || url=$(latest_velocity_url) || true
+  [[ -n "$url" ]] || die "Dernier Velocity introuvable (API PaperMC injoignable ?)"
+  if [[ -f "$VELOCITY_DIR/velocity.jar.url" && "$(cat "$VELOCITY_DIR/velocity.jar.url")" == "$url" ]]; then
+    ok "Velocity déjà à jour ($(basename "$url"))"
+  else
+    [[ -f "$VELOCITY_DIR/velocity.jar" ]] && cp -f "$VELOCITY_DIR/velocity.jar" "$VELOCITY_DIR/velocity.jar.old"
+    download "$url" "$VELOCITY_DIR/velocity.jar" || die "Téléchargement de Velocity échoué (ancien jar gardé)"
+    echo "$url" > "$VELOCITY_DIR/velocity.jar.url"
+    ok "Velocity : $(basename "$url")"
+    changed=true
+  fi
+  lp=$(curl -fsSL https://metadata.luckperms.net/data/all 2>/dev/null | jq -r '.downloads.velocity // empty' || true)
+  if [[ -n "$lp" ]]; then
+    cur=$(compgen -G "$VELOCITY_DIR/plugins/LuckPerms-*.jar" | head -1 || true)
+    if [[ -n "$cur" && "$(basename "$cur")" == "$(basename "$lp")" ]]; then
+      ok "LuckPerms déjà à jour ($(basename "$lp"))"
+    elif download "$lp" "$VELOCITY_DIR/plugins/$(basename "$lp").new"; then
+      [[ -n "$cur" ]] && mv -f "$cur" "$cur.old"
+      mv -f "$VELOCITY_DIR/plugins/$(basename "$lp").new" "$VELOCITY_DIR/plugins/$(basename "$lp")"
+      ok "LuckPerms : $(basename "$lp")"
+      changed=true
+    else
+      warn "LuckPerms : téléchargement échoué, version actuelle gardée"
+    fi
+  else
+    warn "LuckPerms : dernière version introuvable, gardée telle quelle"
+  fi
+  chown -R "$MC_USER:$MC_USER" "$VELOCITY_DIR"
+  if [[ "$changed" == "true" ]]; then
+    warn "Redémarrage du proxy : les joueurs connectés sont déconnectés une minute"
+    restart_service minecraft-velocity
+    wait_port 25565 120 || die "Velocity ne redémarre pas : journalctl -u minecraft-velocity -n 80 (ancien jar : velocity.jar.old)"
+    ok "Proxy relancé"
   fi
 }
 

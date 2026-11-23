@@ -27,7 +27,8 @@ server:
 logging:
   level:
     root: INFO
-    vinch.mcs.api: DEBUG
+    # Lot 65 : INFO en production (DEBUG remplissait le journal) ; MCS_LOG_LEVEL=DEBUG pour enquêter
+    vinch.mcs.api: ${MCS_LOG_LEVEL:INFO}
 
 mcs:
   api:

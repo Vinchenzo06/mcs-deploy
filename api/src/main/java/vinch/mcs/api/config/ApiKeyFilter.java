@@ -35,7 +35,11 @@ public class ApiKeyFilter extends OncePerRequestFilter {
 
         String apiKey = request.getHeader(API_KEY_HEADER);
 
-        if (apiKey == null || !apiKey.equals(apiKeyProperties.getLobbyKey())) {
+        // Comparaison à temps constant (lot 65)
+        String expected = apiKeyProperties.getLobbyKey();
+        if (apiKey == null || expected == null || expected.isBlank() || !java.security.MessageDigest.isEqual(
+                apiKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                expected.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
             log.warn("Tentative d'accès non autorisée à {} depuis {}", path, request.getRemoteAddr());
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             response.setContentType("application/json");

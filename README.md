@@ -71,22 +71,30 @@ sudo mcs-admin TonPseudo
 
 ## Au quotidien
 
-1. Tu modifies le code dans IntelliJ.
-2. **Git > Commit** (coche "Push" ou fais **Git > Push** ensuite).
+1. Claude dépose un patch `NN-nom.patch` dans ton dossier `mcs-deploy`.
+2. Dans le terminal d'IntelliJ : `git am NN-nom.patch` (applique **et** crée le commit avec son
+   message), puis `git push`. Les actions GitHub compilent les jars, l'agent et le mod.
 3. Sur le VPS :
 
-| Tu as modifié | Commande sur le VPS |
+| Le lot a modifié | Commande sur le VPS |
 |---|---|
 | l'API (`api/`) | `sudo mcs-deploy api` |
+| le plugin Velocity (`proxymanager/`) ou le plugin img-farm | `sudo mcs-deploy velocity` |
 | le plugin lobby (`lobby-plugin/`) | `sudo mcs-deploy lobby` |
-| le plugin Velocity (`proxymanager/`) | `sudo mcs-deploy velocity` |
 | les scripts (`deploy/`) ou plusieurs choses | `sudo mcs-deploy` |
+| l'agent (`agent/`) | sur chaque machine : `sudo bash node-setup.sh --update-agent` |
+| le mod (`img-farm-mod/`) | rien : l'action « Mod » publie la release `mod-latest` |
+
+Nouvelle version de Minecraft : `sudo mcs-deploy plateforme` le jour de la sortie (sinon les
+joueurs qui ont mis leur jeu à jour ne passent pas le proxy), et une ligne dans
+`img-farm-mod/versions.json` pour le mod. Le site importe les nouveaux items tout seul.
 
 ## Commandes du VPS
 
 | Commande | Rôle |
 |---|---|
 | `sudo mcs-deploy [étapes]` | Récupère GitHub, compile, installe |
+| `sudo mcs-deploy plateforme` | Velocity et LuckPerms à leur dernière version (ancien jar gardé en `.old`) |
 | `sudo mcs-status` | État des services, ports et machines volontaires |
 | `sudo mcs-add-node [--ssh] [--owner <pseudo>] [nom]` | Code de jumelage pour une nouvelle machine |
 | `sudo mcs-node-owner [<id> <pseudo>\|--none]` | Joueur propriétaire (hébergeur) d'une machine |
@@ -481,7 +489,10 @@ Mise en place, une fois :
 
 ## Limites connues
 
-- Sans serveur de sauvegarde (`mcs-add-backup`), la base et `/etc/mcs/secrets.env` ne sont que sur le VPS.
-- L'API est en HTTP clair sur le port 8081 (protégée par clé). À terme : TLS.
-- Le code de jumelage contient des secrets et reste valable : à terme, un code
-  à usage unique qui expire.
+- Sans serveur de sauvegarde (`mcs-add-backup`), la base, `/etc/mcs/secrets.env` et le site IMG
+  ne sont que sur le VPS.
+- Le code de jumelage d'une machine reste valable tant qu'il n'est pas renouvelé
+  (`mcs-add-node --renew`).
+- Mettre l'agent à jour demande d'aller sur chaque machine.
+- Réseau fermé (`IMG_ONLY=true`, lot 65) : seule l'adresse IMG fait entrer ; `IMG_ONLY=false`
+  dans `/etc/mcs/mcs.env` puis `sudo mcs-deploy velocity` pour rouvrir les autres adresses.
