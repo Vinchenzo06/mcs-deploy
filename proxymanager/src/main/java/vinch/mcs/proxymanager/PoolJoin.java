@@ -172,8 +172,13 @@ final class PoolJoin implements SimpleCommand {
                 return retry(player, pool, pid, tries);
             }
             case "create" -> {
-                player.sendMessage(info("Tous les serveurs " + label + " sont pris : j'en prépare un nouveau "
-                        + "(1 à 3 minutes, il sera supprimé après un jour sans personne)…"));
+                if (r.path("extra").asBoolean(false)) {
+                    int h = r.path("idleDeleteHours").asInt(24);
+                    player.sendMessage(info("Tous les serveurs " + label + " sont pris : j'en prépare un en plus "
+                            + "(1 à 3 minutes ; il sera supprimé après " + (h == 24 ? "un jour" : h + " h") + " sans personne)…"));
+                } else {
+                    player.sendMessage(info("Préparation du serveur " + label + " (1 à 3 minutes, la première fois seulement)…"));
+                }
                 logger.info("{} demande un nouveau serveur {}", player.getUsername(), pool);
                 return api.poolCreate(pool, pid).handle((c, e) -> {
                     if (e != null) {

@@ -133,6 +133,9 @@ public class PoolService {
             out.put("action", "wait-create");
         } else if (list.size() < p.keep() + p.maxExtra()) {
             out.put("action", "create");
+            // Serveur gardé (manquant) ou en plus (supprimé après idleDeleteHours sans personne)
+            out.put("extra", list.size() >= p.keep());
+            out.put("idleDeleteHours", p.idleDeleteHours());
         } else {
             out.put("action", "full");
         }

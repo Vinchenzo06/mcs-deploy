@@ -105,6 +105,12 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
             cmd.setTabCompleter(this);
         }
         getServer().getPluginManager().registerEvents(new FarmListener(this), this);
+        // Lot 76b : permissions des joueurs sur les serveurs à la demande (fichier du modèle)
+        JoinPermissions perms = JoinPermissions.load(this);
+        if (perms != null) {
+            getServer().getPluginManager().registerEvents(perms, this);
+            perms.applyOnline();
+        }
         getServer().getScheduler().runTaskTimer(this, this::everySecond, 20L, 20L);
         getLogger().info("img-farm prêt : /farm (sessions envoyées au site par le proxy, canal " + Bridge.CHANNEL + ")");
     }

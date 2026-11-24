@@ -1,0 +1,9 @@
+# Lot 76b — permissions données par img-farm à chaque joueur qui entre sur ce serveur
+# (seuls les membres de la team y entrent). Rien d'autre n'est donné.
+permissions:
+  - worldreset.reset
+  - worldreset.start
+  - worldreset.death
+  - worldreset.timer.*
+  - worldreset.seed.use
+  - worldreset.filter.*

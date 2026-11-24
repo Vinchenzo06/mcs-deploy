@@ -401,8 +401,13 @@ Des serveurs prêts à jouer, créés et supprimés tout seuls, décrits dans
 
 | Jeu | Commande | Plugin | Réglages |
 |---|---|---|---|
-| Speedrun | `/jouer speedrun` | WorldReset (Modrinth) | chrono individuel, but : l'Ender Dragon, une mort = monde neuf |
-| Monde neuf | `/jouer monde-neuf` | WorldReset (Modrinth) | pas de chrono ni de limite de morts, `/reset` = nouveau monde pour farmer un item |
+| Speedrun | `/jouer speedrun` | WorldReset (Modrinth) | chrono individuel, but : l'Ender Dragon, pas de reset à la mort ni d'autoreset |
+| Monde neuf | `/jouer monde-neuf` | WorldReset (Modrinth) | pas de chrono ni de limite de morts, `/wr reset` = nouveau monde pour farmer un item |
+
+**En jeu, chaque joueur peut** (permissions données par img-farm, `plugins/ImgFarm/permissions-joueurs.yml` du
+modèle) : `/wr reset` (nouveau monde), `/wr timer goal ITEM diamond` (changer le but : ENTITY, ITEM, BLOCK,
+ADVANCEMENT, PORTAL, NONE), `/wr timer start|pause|reset`, `/wr death 1` ou `/wr death off`, `/wr filter …`.
+Le but est celui du serveur (pas de chaque joueur) : chacun a d'habitude son serveur.
 
 - **Toujours un de chaque** (`keep`) : créé tout seul par l'API s'il manque (une machine doit être en ligne).
 - **`/jouer <jeu>`** (ou `/jouer` pour la liste cliquable) : un serveur du jeu où personne n'est ;
