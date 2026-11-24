@@ -105,20 +105,39 @@ public final class ImgFarmMod implements ClientModInitializer {
         if (session != null && !session.finished) session.pause();
         bindTracker();
 
-        ClientCommandRegistrationCallback.EVENT.register(Commands::register);
-        ClientTickEvents.END_CLIENT_TICK.register(this::onTick);
-        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> client.execute(this::onJoin));
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> onLeave());
-        UseBlockCallback.EVENT.register((player, level, hand, hit) -> {
-            if (level.isClientSide()) {
-                lastUseDim = dimension(level);
-                lastUsePos = hit.getBlockPos();
-                lastUseTick = tick;
-            }
-            return InteractionResult.PASS;
+        // Lot 72 : chaque branchement est séparé ; si une nouvelle version de Minecraft ou de Fabric API
+        // a changé l'un d'eux, seule cette fonction manque (Guard) au lieu d'empêcher le jeu de démarrer
+        hook("commandes", () -> ClientCommandRegistrationCallback.EVENT.register(Commands::register));
+        hook("comptage", () -> ClientTickEvents.END_CLIENT_TICK.register(mc -> {
+            Guard.flush();
+            Guard.run("comptage", () -> onTick(mc));
+        }));
+        hook("connexion", () -> {
+            ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
+                    client.execute(() -> Guard.run("connexion", this::onJoin)));
+            ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> Guard.run("connexion", this::onLeave));
         });
-        HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT, Identifier.fromNamespaceAndPath(ID, "session"), Hud::extract);
+        hook("coffres", () -> UseBlockCallback.EVENT.register((player, level, hand, hit) -> {
+            Guard.run("coffres", () -> {
+                if (level.isClientSide()) {
+                    lastUseDim = dimension(level);
+                    lastUsePos = hit.getBlockPos();
+                    lastUseTick = tick;
+                }
+            });
+            return InteractionResult.PASS;
+        }));
+        hook("cadre", () -> HudElementRegistry.attachElementBefore(VanillaHudElements.CHAT,
+                Identifier.fromNamespaceAndPath(ID, "session"), (g, delta) -> Guard.run("cadre", () -> Hud.extract(g, delta))));
         LOG.info("IMG Farm {} (Minecraft {}) : {}", modVersion, mcVersion, config.token == null ? "pas lié au site" : "lié au site");
+    }
+
+    private static void hook(String feature, Runnable register) {
+        try {
+            register.run();
+        } catch (LinkageError | RuntimeException e) {
+            Guard.disable(feature, e);
+        }
     }
 
     private static String version(String mod) {
@@ -749,6 +768,10 @@ public final class ImgFarmMod implements ClientModInitializer {
                 config.save();
             }
             say(Msg.ok("Lié au compte " + u + " du site (" + config.site + "). IMG Farm " + modVersion + ", Minecraft " + mcVersion + "."));
+            if (!Guard.disabled().isEmpty()) {
+                say(Msg.error("Coupé sur cette version de Minecraft : " + String.join(", ", Guard.disabled())
+                        + ". Prends la dernière version du mod (Mon profil → Mod Fabric)."));
+            }
         });
     }
 

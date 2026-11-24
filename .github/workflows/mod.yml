@@ -2,11 +2,13 @@
 # Minecraft listée dans img-farm-mod/versions.json, et publie les fichiers dans la release
 # GitHub "mod-latest" (le site y envoie les membres : Mon profil → Mod Fabric).
 #
-# Nouvelle version de Minecraft : ajouter une ligne à versions.json (version de Fabric API sur
-# https://fabricmc.net/develop) et pousser. Si la compilation échoue pour la nouvelle version,
-# les autres fichiers sont quand même publiés : le mod d'une version plus ancienne se charge
-# aussi sur les plus récentes (dépendance minecraft >= sa version) tant que le jeu n'a pas changé
-# ce qu'il utilise.
+# Lot 72 : chaque lundi, l'action regarde s'il existe une version stable de Minecraft plus récente
+# que la dernière de versions.json ; si oui (et que Fabric API est sortie pour elle), elle la
+# compile avec les autres et la publie si la compilation passe (versions.sh). Rien n'est écrit
+# dans le dépôt : on peut ensuite ajouter la ligne à versions.json pour la garder pour de bon.
+# Si la compilation échoue pour la nouvelle version, les autres fichiers sont quand même publiés :
+# le mod d'une version plus ancienne se charge aussi sur les plus récentes (dépendance
+# minecraft >= sa version) ; ce qui ne marche plus est coupé sans planter le jeu (Guard).
 name: Mod
 
 on:
@@ -16,6 +18,8 @@ on:
       - "img-farm-mod/**"
       - ".github/workflows/mod.yml"
   workflow_dispatch:
+  schedule:
+    - cron: "23 8 * * 1" # lundi, vers 3 h 23 au Québec
 
 permissions:
   contents: write
@@ -29,19 +33,23 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.read.outputs.matrix }}
+      skip: ${{ steps.read.outputs.skip }}
     steps:
       - uses: actions/checkout@v5
       - id: read
-        run: echo "matrix=$(jq -c . img-farm-mod/versions.json)" >> "$GITHUB_OUTPUT"
+        env:
+          EVENT: ${{ github.event_name }}
+        run: bash img-farm-mod/versions.sh img-farm-mod/versions.json
 
   build:
     needs: versions
+    if: ${{ needs.versions.outputs.skip != 'true' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.versions.outputs.matrix) }}
-    name: Minecraft ${{ matrix.minecraft }}
+    name: Minecraft ${{ matrix.minecraft }}${{ matrix.auto && ' (nouvelle)' || '' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -60,15 +68,17 @@ jobs:
           # Lot 64b : en cas d'échec, les erreurs deviennent des annotations, lisibles sur la page
           # publique de l'action sans être connecté (le journal complet, lui, demande une connexion).
           set -o pipefail
+          loader=()
+          [ -n "${{ matrix.loader }}" ] && loader=(-Ploader_version="${{ matrix.loader }}")
           if ! gradle build --no-daemon \
               -Pminecraft_version="${{ matrix.minecraft }}" \
-              -Pfabric_api_version="${{ matrix.fabric_api }}" 2>&1 | tee build.log; then
+              -Pfabric_api_version="${{ matrix.fabric_api }}" "${loader[@]}" 2>&1 | tee build.log; then
             # Une seule annotation (GitHub n'en montre que 10 par étape) : les erreurs Java d'abord
             { grep -E "\.java:[0-9]+: error:" -A2 build.log || true; grep -E "^\* What went wrong" -A4 build.log || true; } \
               | grep -v "^--$" | head -45 | cut -c1-300 > errors.txt || true
             [ -s errors.txt ] || tail -30 build.log > errors.txt
             msg=$(sed 's/%/%25/g; s/\r//g' errors.txt | awk 'BEGIN{ORS="%0A"} {print}')
-            echo "::error title=Mod ${{ matrix.minecraft }} : compilation échouée::${msg}"
+            echo "::error title=Mod ${{ matrix.minecraft }} : compilation échouée${{ matrix.auto && ' (nouvelle version, le mod est à adapter)' || '' }}::${msg}"
             exit 1
           fi
           mkdir -p ../dist
@@ -81,10 +91,14 @@ jobs:
           path: dist/*.jar
 
   release:
-    needs: build
-    if: ${{ !cancelled() }}
+    needs: [versions, build]
+    if: ${{ !cancelled() && needs.versions.outputs.skip != 'true' }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: img-farm-mod/versions.json
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v5
         with:
           path: dist
@@ -107,7 +121,14 @@ jobs:
             echo "3. Sur le site : Mon profil → Mod Fabric → Lier le mod, puis en jeu \`/imgfarm lier CODE\`."
             echo
             echo "Fichiers :"
-            for j in "${jars[@]}"; do echo "- \`$(basename "$j")\`"; done
+            for j in "${jars[@]}"; do
+              f=$(basename "$j"); mc=${f##*+mc}; mc=${mc%.jar}
+              if jq -e --arg v "$mc" 'any(.[]; .minecraft == $v)' img-farm-mod/versions.json >/dev/null; then
+                echo "- \`$f\`"
+              else
+                echo "- \`$f\` (nouvelle version, compilée automatiquement : pas encore essayée en jeu)"
+              fi
+            done
             echo
             echo "Compilé automatiquement depuis ${GITHUB_SHA::7}."
           } > notes.md

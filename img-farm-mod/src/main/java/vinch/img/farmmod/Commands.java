@@ -19,7 +19,7 @@ import static net.fabricmc.fabric.api.client.command.v2.ClientCommands.literal;
 final class Commands {
 
     private static final SuggestionProvider<FabricClientCommandSource> ITEMS =
-            (c, b) -> SharedSuggestionProvider.suggest(ImgFarmMod.allItemIds(), b);
+            (c, b) -> SharedSuggestionProvider.suggest(Guard.call("suggestions", ImgFarmMod::allItemIds, List.of()), b);
     private static final SuggestionProvider<FabricClientCommandSource> GOALS =
             (c, b) -> SharedSuggestionProvider.suggest(List.of("30m", "1h", "640"), b);
     private static final SuggestionProvider<FabricClientCommandSource> TYPES =
@@ -36,7 +36,7 @@ final class Commands {
 
     private static LiteralArgumentBuilder<FabricClientCommandSource> run(String name, Runnable action) {
         return literal(name).executes(c -> {
-            action.run();
+            Guard.command(name, action);
             return 1;
         });
     }
@@ -49,12 +49,15 @@ final class Commands {
                 })
                 .then(argument("item", StringArgumentType.word()).suggests(ITEMS)
                         .executes(c -> {
-                            mod().start(auto, getString(c, "item"), null);
+                            String item = getString(c, "item");
+                            Guard.command(name, () -> mod().start(auto, item, null));
                             return 1;
                         })
                         .then(argument("objectif", StringArgumentType.word()).suggests(GOALS)
                                 .executes(c -> {
-                                    mod().start(auto, getString(c, "item"), getString(c, "objectif"));
+                                    String item = getString(c, "item");
+                                    String goal = getString(c, "objectif");
+                                    Guard.command(name, () -> mod().start(auto, item, goal));
                                     return 1;
                                 })));
     }
@@ -62,7 +65,7 @@ final class Commands {
     static void register(CommandDispatcher<FabricClientCommandSource> dispatcher, CommandBuildContext context) {
         dispatcher.register(ClientCommands.literal("imgfarm")
                 .executes(c -> {
-                    mod().help();
+                    Guard.command("aide", () -> mod().help());
                     return 1;
                 })
                 .then(run("aide", () -> mod().help()))
@@ -72,11 +75,12 @@ final class Commands {
                 .then(run("coffre", () -> mod().addContainer()))
                 .then(literal("construction")
                         .executes(c -> {
-                            mod().startConstruction(null);
+                            Guard.command("construction", () -> mod().startConstruction(null));
                             return 1;
                         })
                         .then(argument("partie", StringArgumentType.word()).suggests(PARTS).executes(c -> {
-                            mod().startConstruction(getString(c, "partie"));
+                            String part = getString(c, "partie");
+                            Guard.command("construction", () -> mod().startConstruction(part));
                             return 1;
                         })))
                 .then(run("pause", () -> mod().pause()))
@@ -84,7 +88,8 @@ final class Commands {
                 .then(run("stop", () -> mod().stop()))
                 .then(run("annuler", () -> mod().cancel()))
                 .then(literal("type").then(argument("type", StringArgumentType.word()).suggests(TYPES).executes(c -> {
-                    mod().setType(getString(c, "type"));
+                    String type = getString(c, "type");
+                    Guard.command("type", () -> mod().setType(type));
                     return 1;
                 })))
                 .then(run("envoyer", () -> mod().send()))
@@ -95,11 +100,13 @@ final class Commands {
                 // Lier : tapé par le joueur seulement (jamais depuis un lien envoyé par un serveur)
                 .then(literal("lier").requires(FabricClientCommandSource::attended)
                         .then(argument("code", StringArgumentType.word()).executes(c -> {
-                            mod().link(getString(c, "code"));
+                            String code = getString(c, "code");
+                            Guard.command("lier", () -> mod().link(code));
                             return 1;
                         })))
                 .then(argument("recherche", StringArgumentType.greedyString()).suggests(ITEMS).executes(c -> {
-                    mod().best(getString(c, "recherche"));
+                    String q = getString(c, "recherche");
+                    Guard.command("recherche", () -> mod().best(q));
                     return 1;
                 })));
     }

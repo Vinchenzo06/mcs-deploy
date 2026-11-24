@@ -62,7 +62,17 @@ cd img-farm-mod
 gradle build -Pminecraft_version=26.3 -Pfabric_api_version=0.166.2+26.3
 ```
 
-**Nouvelle version de Minecraft** : ajouter `{ "minecraft": "26.4", "fabric_api": "…+26.4" }` à
-`versions.json` (versions sur https://fabricmc.net/develop) et pousser. Si la compilation échoue pour
-cette version, les autres fichiers sont quand même publiés ; corriger le code puis repousser.
+**Nouvelle version de Minecraft** (lot 72) : rien à faire dans le cas normal. Chaque lundi, l'action
+regarde s'il existe une version stable plus récente que la dernière de `versions.json`
+(`versions.sh` : meta.fabricmc.net, Fabric API sur Modrinth, dernier Fabric Loader) ; si oui, elle la
+compile avec les autres et publie son fichier si ça passe (« compilée automatiquement : pas encore
+essayée en jeu » dans la release). Rien n'est écrit dans le dépôt : une fois essayée, ajouter
+`{ "minecraft": "26.4", "fabric_api": "…+26.4" }` à `versions.json` pour la garder (sinon elle reste
+recalculée à chaque passage). Si la compilation échoue, l'erreur est sur la page de l'action
+(annotation) et les autres fichiers sont quand même publiés.
+
+**Filet de sécurité** (`Guard`) : le fichier d'une version se charge aussi sur les suivantes. Si le jeu
+a changé ce qu'une fonction utilise (comptage, cadre, coffres, commandes…), cette fonction est coupée
+au lieu de planter le jeu, le joueur est prévenu une fois dans le chat (et dans `/imgfarm compte`), et
+le reste du mod continue.
 Le site importe les nouveaux items tout seul (Admin → Items).

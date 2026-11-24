@@ -377,9 +377,10 @@ Fabric seulement (pas Forge), Minecraft 26.2 et plus, avec Fabric API. Détails 
   même). Agent 0.20.0 nécessaire (`--update-agent`).
 - **Plugin img-farm** : rien à faire (API Paper 1.21.4, marche sur les versions suivantes ; les nouveaux
   items sont reconnus dès que le serveur tourne en nouvelle version).
-- **Mod** : ajouter une ligne à `img-farm-mod/versions.json` (version de Fabric API sur
-  https://fabricmc.net/develop) et pousser. En attendant, le fichier de la version précédente se
-  charge sur la nouvelle et marche en général (il ne lit les items que par leur identifiant).
+- **Mod** (lot 72) : l'action « Mod » vérifie chaque lundi s'il y a une nouvelle version stable et la
+  compile toute seule (publiée si ça passe) ; ajouter ensuite sa ligne à `img-farm-mod/versions.json`
+  pour la garder. En attendant, le fichier de la version précédente se charge sur la nouvelle ; ce qui
+  n'y marche plus est coupé sans planter le jeu, avec un message au joueur.
 
 ## Sauvegardes
 
