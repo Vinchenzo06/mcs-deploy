@@ -1789,13 +1789,28 @@ def covers(deps, mm):
     return False
 
 
-def hangar_versions(slug, mm):
-    """{version: {url, sha256, file}} des versions Release compatibles avec Velocity mm"""
+def same_major_below(deps, mm):
+    """Déclarée pour la même version majeure de Velocity, mais seulement des mineures plus anciennes
+    (ex. « 4.0-4.2.1 » pour Velocity 4.3) : compatible probable"""
+    want = vkey(mm)[:2]
+    tops = []
+    for d in deps or []:
+        for part in re.split(r'\s*-\s*', str(d)):
+            k = vkey(part)[:2]
+            if k:
+                tops.append(k)
+    return bool(tops) and max(tops)[:1] == want[:1] and max(tops) < want
+
+
+def hangar_versions(slug, mm, probable=False):
+    """{version: {url, sha256, file}} des versions Release compatibles avec Velocity mm
+    (probable=True : déclarées seulement pour des mineures plus anciennes de la même majeure)"""
     out = {}
     for v in get(HANGAR.format(slug)).get('result', []):
         if str((v.get('channel') or {}).get('name', '')).lower() != 'release':
             continue
-        if not covers((v.get('platformDependencies') or {}).get('VELOCITY'), mm):
+        deps = (v.get('platformDependencies') or {}).get('VELOCITY')
+        if not (same_major_below(deps, mm) if probable else covers(deps, mm)):
             continue
         d = (v.get('downloads') or {}).get('VELOCITY') or {}
         url = d.get('downloadUrl') or d.get('externalUrl')
@@ -1803,7 +1818,8 @@ def hangar_versions(slug, mm):
             continue
         fi = d.get('fileInfo') or {}
         out[v['name']] = {'version': v['name'], 'url': url, 'sha256': fi.get('sha256Hash'),
-                          'file': fi.get('name') or f'{slug}-{v["name"]}.jar'}
+                          'file': fi.get('name') or f'{slug}-{v["name"]}.jar',
+                          'declared': ', '.join(str(x) for x in deps or [])}
     return out
 
 
@@ -1839,7 +1855,15 @@ def plan(mm):
             # ViaVersion et ViaBackwards sortent ensemble : on prend la plus récente des deux
             common = sorted(set(via) & set(back), key=vkey, reverse=True)
             if not common:
-                via_note = f'aucune version déclarée compatible avec Velocity {mm} pour l\'instant'
+                # Velocity plus récent que ce que Via déclare (décision de Vincent, lot 70b) : la plus
+                # récente déclarée pour la même version majeure ; le retour arrière protège si elle
+                # ne charge pas, et une version qui déclare ce Velocity passera devant dès sa sortie
+                via, back = hangar_versions('ViaVersion', mm, True), hangar_versions('ViaBackwards', mm, True)
+                common = sorted(set(via) & set(back), key=vkey, reverse=True)
+                if common:
+                    via_note = f'déclarée pour Velocity {via[common[0]]["declared"]}, pas encore {mm} : compatible probable'
+                else:
+                    via_note = f'aucune version déclarée pour Velocity {mm.split(".")[0]}.x pour l\'instant'
         except Exception as e:
             via_note = f'Hangar injoignable ({e})'
     for pid, label, src in (('viaversion', 'ViaVersion', 'via'), ('viabackwards', 'ViaBackwards', 'back')):
@@ -1855,10 +1879,10 @@ def plan(mm):
         url = (meta.get('downloads') or {}).get('velocity')
         ver = str(meta.get('version') or '')
         if url and ver:
+            # LuckPerms ne déclare pas de version de Velocity : même version majeure de LuckPerms
+            # seulement, et le retour arrière protège si elle ne charge pas
             if cur and vkey(ver)[:1] != vkey(cur)[:1]:
                 lp_note = f'LuckPerms {ver} : version majeure différente, gardée à la main'
-            elif mm and vkey(mm)[:1] != (3,):
-                lp_note = f'Velocity {mm} : compatibilité de LuckPerms à vérifier à la main'
             else:
                 lp_target = {'version': ver, 'url': url, 'sha256': None, 'file': os.path.basename(url)}
     except Exception as e:
@@ -1950,7 +1974,7 @@ def show(mm, items):
         t = (i['target'] or {}).get('version')
         line = f'  {i["label"]:<13} installé {i["current"] or "-":<12}'
         if i['update']:
-            line += f' → {t} disponible (compatible)'
+            line += f' → {t} disponible'
         elif t:
             line += ' à jour'
         say(line + (f'   ({i["note"]})' if i['note'] else ''))
@@ -2148,7 +2172,9 @@ step_velocity() {
   cp -f "${jars[@]}" "$VELOCITY_DIR/plugins/"
   install_luckperms velocity "$VELOCITY_DIR/plugins" LUCKPERMS_VELOCITY_URL
   # Lot 70 : ViaVersion + ViaBackwards (un client plus récent ou plus ancien que le serveur
-  # passe quand même), installés s'ils manquent ; mis à jour ensuite par la minuterie de la nuit
+  # passe quand même), installés s'ils manquent ; mis à jour ensuite par la minuterie de la nuit.
+  # Lot 70b : Velocity plus récent que ce que Via déclare → la plus récente déclarée pour la même
+  # version majeure (compatible probable), protégée par le retour arrière
   install_proxy_plugins_tool
   mcs-proxy-plugins --install-missing | sed 's/^/    /' \
     || warn "ViaVersion/ViaBackwards non installés (Hangar injoignable ?) : sudo mcs-proxy-plugins --apply plus tard"

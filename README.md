@@ -365,7 +365,9 @@ Fabric seulement (pas Forge), Minecraft 26.2 et plus, avec Fabric API. Détails 
   récente). `/mcs create` propose les 4 dernières versions de Mojang (lues toutes les 12 h par le proxy).
 - **Proxy** (lot 70) : ViaVersion + ViaBackwards sur Velocity. Chaque nuit vers 4 h 50,
   `mcs-proxy-plugins.timer` prend leur dernière version (et celle de LuckPerms) **déclarée compatible
-  avec le Velocity installé** (Hangar), seulement si personne n'est connecté ; si un plugin ne charge
+  avec le Velocity installé** (Hangar ; si Velocity est plus récent que toutes leurs déclarations, la
+  plus récente déclarée pour la même version majeure, ex. 4.2.1 pour Velocity 4.3), seulement si personne
+  n'est connecté ; si un plugin ne charge
   pas, les anciennes versions sont remises et cette version n'est plus réessayée la nuit. Velocity
   reste à la main (`sudo mcs-deploy plateforme`). Ne mets pas ViaVersion sur les serveurs eux-mêmes.
 - **Plugins et mods des serveurs** (lot 70) : onglet **Plugins** (ou Mods) de la page d'un serveur sur
