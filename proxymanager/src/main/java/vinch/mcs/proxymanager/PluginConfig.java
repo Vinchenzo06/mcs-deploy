@@ -34,6 +34,8 @@ public class PluginConfig {
     private String imgMotd = "";
     // Lot 65 : true = seule l'adresse IMG fait entrer (les autres adresses sont refusées)
     private boolean imgOnly = false;
+    // Lot 66 : clé de /console (mcs-rcon) sur l'API locale ; vide = /console refusé
+    private String consoleKey = "";
 
     // Site IMG Farm DB (lot 43) : /link CODE lie un compte Minecraft à un compte du site.
     // Vides = /link désactivé.
@@ -72,6 +74,7 @@ public class PluginConfig {
                 if (data.get("img-icon") != null) config.setImgIcon(String.valueOf(data.get("img-icon")));
                 if (data.get("img-motd") != null) config.setImgMotd(String.valueOf(data.get("img-motd")));
                 if (data.containsKey("img-only")) config.setImgOnly(Boolean.TRUE.equals(data.get("img-only")));
+                if (data.get("console-key") != null) config.setConsoleKey(String.valueOf(data.get("console-key")));
                 if (data.get("farmdb-url") != null) config.setFarmdbUrl(String.valueOf(data.get("farmdb-url")));
                 if (data.get("farmdb-token") != null) config.setFarmdbToken(String.valueOf(data.get("farmdb-token")));
             }

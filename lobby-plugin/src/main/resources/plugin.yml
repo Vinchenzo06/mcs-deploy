@@ -1,7 +1,0 @@
-name: MCSLobbyPlugin
-version: 1.0.0
-main: vinch.mcs.lobby.McsLobbyPlugin
-api-version: '26.1.2'
-authors: [MCS]
-description: Plugin lobby pour le réseau MCS
-softdepend: [LuckPerms]

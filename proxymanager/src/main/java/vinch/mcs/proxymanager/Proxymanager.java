@@ -136,6 +136,8 @@ public class Proxymanager {
         try {
             this.apiServer = new ApiServer(server, logger, config, () -> playerServersAllowed);
             apiServer.start();
+            // Lot 66 : console du proxy pour mcs-rcon (le lobby du VPS est retiré)
+            apiServer.addContext("/console", new ConsoleHandler(server, logger, config.getConsoleKey()));
         } catch (Exception e) {
             logger.error("Erreur démarrage API locale : ", e);
         }

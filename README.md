@@ -6,7 +6,6 @@ Dépôt unique du projet : le code (API, plugins, agent) et le kit qui installe 
 mcs-deploy/
 ├── api/             API Spring Boot        (ancien dossier mcs-api)
 ├── proxymanager/    plugin Velocity        (ancien dossier proxymanager)
-├── lobby-plugin/    plugin du lobby Paper  (ancien dossier mcs-lobby-plugin)
 ├── agent/           agent Go des volontaires (ancien dossier mcs-agent)
 └── deploy/          scripts d'installation du VPS et des machines volontaires
 ```
@@ -80,7 +79,6 @@ sudo mcs-admin TonPseudo
 |---|---|
 | l'API (`api/`) | `sudo mcs-deploy api` |
 | le plugin Velocity (`proxymanager/`) ou le plugin img-farm | `sudo mcs-deploy velocity` |
-| le plugin lobby (`lobby-plugin/`) | `sudo mcs-deploy lobby` |
 | les scripts (`deploy/`) ou plusieurs choses | `sudo mcs-deploy` |
 | l'agent (`agent/`) | sur chaque machine : `sudo bash node-setup.sh --update-agent` |
 | le mod (`img-farm-mod/`) | rien : l'action « Mod » publie la release `mod-latest` |
@@ -103,7 +101,7 @@ joueurs qui ont mis leur jeu à jour ne passent pas le proxy), et une ligne dans
 | `sudo mcs-remove-node <id>` | Révoque une machine (jeton refusé, tunnels supprimés) |
 | `sudo mcs-admin <pseudo>` | Groupe admin LuckPerms (vérifié) |
 | `sudo mcs-lp-export` | État LuckPerms en JSON (groupes, joueurs) |
-| `sudo mcs-rcon "<commande>"` | Commande dans la console du lobby |
+| `sudo mcs-rcon "<commande>"` | Commande dans la console du proxy (`lp …` = LuckPerms) |
 | `sudo mcs-protect [<pseudo/nom> [on\|off]]` | Serveur protégé contre toute suppression |
 | `sudo mcs-team [<pseudo/nom> [on\|off]]` | Serveur de la team IMG (reçoit les plugins de la team) |
 
@@ -240,8 +238,8 @@ contourner, et refusé si l'API ne répond pas.
 
 ### LuckPerms du réseau
 
-Proxy et lobby partagent la même base LuckPerms (PostgreSQL `luckperms`, sur le VPS
-seulement). Les serveurs de jeu n'y sont **jamais** branchés : leur propriétaire a accès aux
+Le proxy a la base LuckPerms du réseau (PostgreSQL `luckperms`, sur le VPS
+seulement ; le lobby du VPS est retiré depuis le lot 66). Les serveurs de jeu n'y sont **jamais** branchés : leur propriétaire a accès aux
 fichiers, donc au mot de passe. Titre d'un groupe : `lp group vip meta setprefix 20 "&aᴠɪᴘ "`
 (dans `sudo mcs-rcon`). L'étape `bootstrap` ne réécrit plus les quotas et préfixes déjà réglés.
 
@@ -424,11 +422,9 @@ Mise en place, une fois :
   ou qui plante en boucle (3 fois en 5 min), et garde les vieux journaux compressés sous
   300 Mo. Le propriétaire est prévenu, avec la version de Java à essayer si c'est la cause.
   Choisir une version de Java autre que celle conseillée demande une confirmation.
-- **Toutes les versions de client au lobby (lot 35)** : ViaVersion, ViaBackwards et ViaRewind
-  sont installés sur le lobby et mis à jour à chaque `mcs-deploy` (Modrinth, sinon GitHub).
-  Un client 1.7 à la plus récente entre au lobby ; pour rejoindre un serveur d'une autre
-  version que la sienne, ce serveur doit avoir ViaVersion (ou le proxy, lot 36).
-  `LOBBY_VIA=false` dans mcs.env les retire.
+- **Lobby du VPS retiré (lot 66)** : play.asearia.ca ne servait plus. Tout le monde entre par
+  l'adresse IMG ; `mcs-rcon` passe par la console du proxy (`/console` de son API locale,
+  clé `CONSOLE_KEY`). Les fichiers de l'ancien lobby restent dans `/opt/minecraft/lobby`.
 - **Rangement (lot 33)** : à chaque arrêt, quelle qu'en soit la cause, le serveur est rangé au
   central (sauvegarde cachée au propriétaire, 2 min après l'arrêt). La copie sur sa machine
   n'est qu'un cache, utilisé seulement s'il est à jour : au démarrage, le serveur démarre sur
@@ -482,7 +478,7 @@ Mise en place, une fois :
     exception pour un serveur : `/mcs backup set <serveur> <type> <max> [durée]` ou `reset`.
 - Mise à jour du serveur de sauvegarde (sans code) :
   `curl ... backup-setup.sh -o backup-setup.sh && sudo bash backup-setup.sh --update`.
-- Le VPS (bases, `/etc/mcs`, lobby, proxy) est sauvegardé chaque nuit (`sudo mcs-backup-vps`).
+- Le VPS (bases, `/etc/mcs`, proxy, site IMG) est sauvegardé chaque nuit (`sudo mcs-backup-vps`).
 - État : `sudo mcs-backup-status` (sur le VPS et sur le serveur de sauvegarde).
 - **À garder précieusement** : `/etc/mcs-backup` sur le serveur de sauvegarde (mots de
   passe des dépôts). Le VPS en a aussi une copie.

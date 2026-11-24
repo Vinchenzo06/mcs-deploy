@@ -3,7 +3,7 @@
 #  MCS - Bootstrap du VPS central (Ubuntu 24.04)
 #
 #  Installe et configure : Java 25 (JDK), Maven, PostgreSQL, rathole (serveur),
-#  mcs-api, Velocity + proxymanager, lobby Paper + MCSLobbyPlugin + LuckPerms.
+#  mcs-api, Velocity + proxymanager + LuckPerms (le lobby Paper du VPS est retiré au lot 66).
 #  Les plugins et l'API sont compilés ici, depuis le code du dépôt GitHub.
 #
 #  Normalement lancé par la commande "mcs-deploy" (voir README).
@@ -35,7 +35,6 @@ VELOCITY_DIR="$MC_ROOT/velocity"
 LOBBY_DIR="$MC_ROOT/lobby"
 API_DIR="/opt/mcs-api"
 FILL_API="https://fill.papermc.io/v3/projects"
-RCON_PORT=25575
 MAVEN_VERSION=3.9.11
 MAVEN_HOME=/opt/maven
 M2_REPO=/var/cache/mcs/m2
@@ -325,8 +324,8 @@ load_config() {
   fi
 
   : "${TIMEZONE:=America/Toronto}" "${USER_AGENT:=mcs-deploy/0.3 (+https://github.com/Vinchenzo06/mcs-deploy)}"
-  : "${PAPER_VERSION:=26.1.2}" "${VELOCITY_VERSION:=4.2.1-SNAPSHOT}" "${FORCE_UPDATE:=false}" "${LOBBY_VIA:=true}"
-  : "${API_XMX:=384M}" "${VELOCITY_XMX:=512M}" "${LOBBY_XMX:=512M}"
+  : "${VELOCITY_VERSION:=4.2.1-SNAPSHOT}" "${FORCE_UPDATE:=false}"
+  : "${API_XMX:=384M}" "${VELOCITY_XMX:=512M}"
   : "${PORT_START:=25600}" "${PORT_END:=29999}" "${NODE_PORTS:=20}"
   : "${ENABLE_SSH_TUNNEL:=true}" "${SSH_TUNNEL_PORT:=2222}" "${WG_PORT:=51820}"
   : "${API_DOMAIN:=}" "${ACME_EMAIL:=}"
@@ -335,7 +334,7 @@ load_config() {
   : "${FARMDB_URL:=}"
   # Lot 65 : seule l'adresse IMG fait entrer (play.asearia.ca et les autres sont refusées)
   : "${IMG_ONLY:=true}"
-  : "${SRC_API:=api}" "${SRC_PROXY:=proxymanager}" "${SRC_LOBBY:=lobby-plugin}"
+  : "${SRC_API:=api}" "${SRC_PROXY:=proxymanager}"
   : "${SRC_IMGFARM:=img-farm-plugin}"
   : "${QUOTA_DEFAULT:=1 6144 2}" "${QUOTA_VIP:=2 12288 4}"
   : "${QUOTA_PREMIUM:=2 16384 5}" "${QUOTA_ADMIN:=16 32768 32}"
@@ -352,7 +351,7 @@ load_config() {
     source "$SECRETS_FILE"
   fi
   local k
-  for k in DB_PASSWORD LOBBY_API_KEY VELOCITY_PLUGIN_KEY RCON_PASSWORD FORWARDING_SECRET IP_MASK_KEY LP_DB_PASSWORD BACKUP_VPS_HTTP_PASSWORD BACKUP_VPS_REPO_PASSWORD FARMDB_TOKEN; do
+  for k in DB_PASSWORD LOBBY_API_KEY VELOCITY_PLUGIN_KEY RCON_PASSWORD FORWARDING_SECRET IP_MASK_KEY LP_DB_PASSWORD BACKUP_VPS_HTTP_PASSWORD BACKUP_VPS_REPO_PASSWORD FARMDB_TOKEN CONSOLE_KEY; do
     save_secret "$k" "${!k:-$(gen_secret)}"
   done
 
@@ -377,17 +376,21 @@ EOF
 }
 
 install_helpers() {
-  # mcs-rcon : envoyer des commandes à la console du lobby
+  # mcs-rcon : envoyer des commandes à la console du proxy (lot 66 : avant, celle du lobby
+  # du VPS par RCON). « lp … » devient « lpv … » (LuckPerms du proxy, même base PostgreSQL).
   cat > /usr/local/bin/mcs-rcon <<'PYEOF'
 #!/usr/bin/env python3
-"""mcs-rcon : envoie des commandes à la console du lobby via RCON.
+"""mcs-rcon : envoie des commandes à la console du proxy Velocity (LuckPerms : lp ou lpv).
 Usage : sudo mcs-rcon [--delay SECONDES] "commande" ["autre commande" ...]
-  --delay : pause entre deux commandes (utile pour LuckPerms, qui est asynchrone)"""
+  --delay : pause entre deux commandes (utile pour LuckPerms, qui est asynchrone)
+La sortie des commandes est relue dans le journal du proxy."""
+import json
 import os
-import socket
-import struct
+import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 
 
 def load_secret(key):
@@ -400,26 +403,20 @@ def load_secret(key):
                     return line.split("=", 1)[1].strip()
     except OSError:
         pass
-    sys.exit("RCON_PASSWORD introuvable (lance avec sudo)")
+    sys.exit(f"{key} introuvable (lance avec sudo)")
 
 
-def read_exact(sock, n):
-    data = b""
-    while len(data) < n:
-        chunk = sock.recv(n - len(data))
-        if not chunk:
-            raise ConnectionError("connexion RCON fermée")
-        data += chunk
-    return data
-
-
-def send(sock, req_id, ptype, body):
-    payload = body.encode("utf-8") + b"\x00\x00"
-    sock.sendall(struct.pack("<iii", len(payload) + 8, req_id, ptype) + payload)
-    length = struct.unpack("<i", read_exact(sock, 4))[0]
-    resp = read_exact(sock, length)
-    resp_id, _ = struct.unpack("<ii", resp[:8])
-    return resp_id, resp[8:-2].decode("utf-8", "replace")
+def send(cmd, key):
+    if cmd == "lp" or cmd.startswith("lp "):
+        cmd = "lpv" + cmd[2:]
+    req = urllib.request.Request("http://127.0.0.1:8082/console", method="POST",
+                                 data=json.dumps({"command": cmd}).encode(),
+                                 headers={"X-Console-Key": key, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            r.read()
+    except urllib.error.HTTPError as e:
+        sys.exit(f"Proxy : {e.code} {e.read().decode(errors='replace')}")
 
 
 def main():
@@ -432,24 +429,25 @@ def main():
         args = args[2:]
     if not args:
         sys.exit(__doc__)
-    port = int(os.environ.get("RCON_PORT", "25575"))
-    with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
-        resp_id, _ = send(sock, 1, 3, load_secret("RCON_PASSWORD"))
-        if resp_id == -1:
-            sys.exit("RCON : mot de passe refusé")
-        for i, cmd in enumerate(args):
-            if i and delay:
-                time.sleep(delay)
-            _, out = send(sock, 2, 2, cmd)
-            if out.strip():
-                print(out.strip())
+    key = load_secret("CONSOLE_KEY")
+    since = time.time() - 1
+    for i, cmd in enumerate(args):
+        if i and delay:
+            time.sleep(delay)
+        send(cmd, key)
+    time.sleep(1.5)
+    out = subprocess.run(["journalctl", "-u", "minecraft-velocity", "--since", f"@{since:.0f}", "-o", "cat", "-q",
+                          "--no-pager"], capture_output=True, text=True).stdout
+    for line in out.splitlines():
+        if "Console (mcs-rcon)" not in line:
+            print(line)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, ConnectionError) as e:
-        sys.exit(f"RCON indisponible : {e}")
+    except OSError as e:
+        sys.exit(f"Proxy injoignable : {e}")
 PYEOF
   chmod 755 /usr/local/bin/mcs-rcon
 
@@ -457,7 +455,7 @@ PYEOF
   cat > /usr/local/bin/mcs-status <<'SHEOF'
 #!/usr/bin/env bash
 echo "=== Services ==="
-for s in postgresql rathole-server wg-quick@wg-mcs mcs-api caddy minecraft-velocity minecraft-lobby; do
+for s in postgresql rathole-server wg-quick@wg-mcs mcs-api caddy minecraft-velocity farmdb; do
   st=$(systemctl is-active "$s")
   [[ "$st" == "active" ]] && mark=" " || mark="⚠"
   printf "%s %-20s %s\n" "$mark" "$s" "$st"
@@ -506,7 +504,7 @@ else
 fi
 echo
 echo "=== Ports en écoute ==="
-ss -ltnp | grep -E ':(25565|25566|8081|8082|2333|2222|80|443)\b' | awk '{print "  " $4 "  " $6}'
+ss -ltnp | grep -E ':(25565|8081|8082|2333|2222|80|443|3100)\b' | awk '{print "  " $4 "  " $6}'
 echo
 echo "=== Sortie Internet des serveurs (WireGuard) ==="
 if command -v wg >/dev/null && wg show wg-mcs >/dev/null 2>&1; then
@@ -534,13 +532,13 @@ runuser -u postgres -- psql -qtA -d mcs_db -c "
 SHEOF
   chmod 755 /usr/local/bin/mcs-status
 
-  # mcs-lp-export : état LuckPerms du lobby en JSON (les commandes lp via RCON
+  # mcs-lp-export : état LuckPerms du réseau en JSON (les commandes lp
   # sont asynchrones et ne renvoient pas leur résultat, l'export si)
   cat > /usr/local/bin/mcs-lp-export <<'SHEOF'
 #!/usr/bin/env bash
 # sudo mcs-lp-export > luckperms.json
 set -uo pipefail
-lp_dir=/opt/minecraft/lobby/plugins/LuckPerms
+lp_dir=/opt/minecraft/velocity/plugins/luckperms  # lot 66 : LuckPerms du proxy
 name="mcs-export-$$-$RANDOM"
 file="$lp_dir/$name.json.gz"
 tmp=$(mktemp)
@@ -884,7 +882,7 @@ id=$1
 # Groupe LuckPerms "host" : titre ʜᴏsᴛ sur le réseau tant qu'il possède une machine
 lp_host() {
   mcs-rcon "lp user $1 parent $2 host" >/dev/null 2>&1 \
-    || echo "! Groupe host non mis à jour pour $1 (lobby éteint ?) : sudo mcs-rcon \"lp user $1 parent $2 host\""
+    || echo "! Groupe host non mis à jour pour $1 (proxy éteint ?) : sudo mcs-rcon \"lp user $1 parent $2 host\""
 }
 old_owner=$("${psql[@]}" -c "SELECT p.minecraft_username FROM nodes n JOIN players p ON p.id = n.owner_player_id WHERE n.id = $id")
 release_old_owner() {
@@ -1289,7 +1287,7 @@ export RESTIC_PASSWORD="$BACKUP_VPS_REPO_PASSWORD"
 export RESTIC_CACHE_DIR=/var/cache/mcs-restic
 restic cat config >/dev/null 2>&1 || restic init
 paths=(/etc/mcs "$dumps")
-for p in /opt/minecraft/lobby /opt/minecraft/velocity /etc/caddy /etc/ssh/sshd_config.d; do
+for p in /opt/minecraft/velocity /etc/caddy /etc/ssh/sshd_config.d; do
   [[ -e "$p" ]] && paths+=("$p")
 done
 # Lot 65 : le site IMG Farm DB (même VPS). Une copie fraîche de sa base d'abord (VACUUM INTO,
@@ -1302,7 +1300,6 @@ fi
 restic backup --tag vps --host vps \
   --exclude '/opt/farmdb/data/farmdb.sqlite*' --exclude '/opt/farmdb/data/icons' \
   --exclude '/opt/minecraft/*/logs' --exclude '/opt/minecraft/*/cache' \
-  --exclude '/opt/minecraft/lobby/libraries' --exclude '/opt/minecraft/lobby/versions' \
   --exclude '/opt/minecraft/*/*.jar' \
   "${paths[@]}"
 echo "✔ Sauvegarde du VPS terminée"
@@ -1387,7 +1384,7 @@ step_system() {
 
   id "$MC_USER" &>/dev/null || useradd --system --home-dir "$MC_ROOT" --shell /usr/sbin/nologin "$MC_USER"
   id "$API_USER" &>/dev/null || useradd --system --home-dir "$API_DIR" --shell /usr/sbin/nologin "$API_USER"
-  mkdir -p "$VELOCITY_DIR/plugins" "$LOBBY_DIR/plugins" "$API_DIR"
+  mkdir -p "$VELOCITY_DIR/plugins" "$API_DIR"
   chown -R "$MC_USER:$MC_USER" "$MC_ROOT"
   chown -R "$API_USER:$API_USER" "$API_DIR"
 
@@ -1444,7 +1441,7 @@ step_postgres() {
   "${psql[@]}" -d mcs_db -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp"' >/dev/null
   ok "Base mcs_db prête (utilisateur mcs_api)"
 
-  # LuckPerms du réseau (proxy + lobby, sur le VPS seulement ; jamais les serveurs de jeu)
+  # LuckPerms du réseau (proxy, sur le VPS seulement ; jamais les serveurs de jeu)
   if [[ "$("${psql[@]}" -c "SELECT 1 FROM pg_roles WHERE rolname='luckperms'")" == "1" ]]; then
     "${psql[@]}" -c "ALTER ROLE luckperms WITH LOGIN PASSWORD '$LP_DB_PASSWORD'" >/dev/null
   else
@@ -1454,7 +1451,7 @@ step_postgres() {
     runuser -u postgres -- createdb -O luckperms luckperms
   fi
   write_lp_env
-  ok "Base luckperms prête (partagée par le proxy et le lobby)"
+  ok "Base luckperms prête (LuckPerms du proxy)"
 }
 
 step_rathole() {
@@ -1696,8 +1693,9 @@ ping-passthrough = "DISABLED"
 enable-player-address-logging = true
 
 [servers]
-lobby = "127.0.0.1:25566"
-try = ["lobby"]
+# Lot 66 : plus de lobby sur le VPS. Les joueurs entrent par l'adresse IMG (ImgGate les envoie
+# au lobby IMG) ; les serveurs MCS sont ajoutés par proxymanager.
+try = []
 
 [forced-hosts]
 
@@ -1738,6 +1736,7 @@ img-lobby: "$IMG_LOBBY"
 img-icon: "$IMG_ICON"
 img-motd: "${IMG_MOTD//\"/\\\"}"
 img-only: $IMG_ONLY
+console-key: $CONSOLE_KEY
 farmdb-url: "$FARMDB_URL"
 farmdb-token: $FARMDB_TOKEN
 EOF
@@ -1775,7 +1774,7 @@ EOF
     wait_port 25565 90 || die "Velocity ne redémarre pas. Logs : journalctl -u minecraft-velocity -n 100"
   fi
   if luckperms_on_postgres minecraft-velocity "$velocity_since"; then
-    ok "LuckPerms du proxy sur PostgreSQL (partagé avec le lobby)"
+    ok "LuckPerms du proxy sur PostgreSQL"
   elif compgen -G "$VELOCITY_DIR/plugins/LuckPerms-*.jar" >/dev/null; then
     warn "LuckPerms du proxy ne semble pas utiliser PostgreSQL : 'journalctl -u minecraft-velocity | grep -i storage'"
   fi
@@ -1866,127 +1865,21 @@ step_plateforme() {
   fi
 }
 
+# Lot 66 : le lobby Paper du VPS (play.asearia.ca) est retiré : il ne servait plus (les joueurs
+# entrent par l'adresse IMG) et prenait ~1 Go de mémoire. Ses fichiers restent dans
+# /opt/minecraft/lobby (et dans les anciennes sauvegardes du VPS) : rm -rf pour les supprimer.
 step_lobby() {
-  step "Lobby Paper + MCSLobbyPlugin + LuckPerms + ViaVersion"
-  build_jar "$SRC_LOBBY" "$JARS_DIR/lobby/mcs-lobby-plugin.jar"
-  need_java
-
-  if [[ ! -f "$LOBBY_DIR/paper.jar" || "$FORCE_UPDATE" == "true" ]]; then
-    local url=${PAPER_URL:-}
-    [[ -n "$url" ]] || url=$(papermc_url paper "$PAPER_VERSION")
-    [[ -n "$url" ]] || die "Paper $PAPER_VERSION introuvable (renseigne PAPER_URL dans mcs.env)"
-    download "$url" "$LOBBY_DIR/paper.jar"
-  fi
-
-  shopt -s nullglob
-  local jars=("$JARS_DIR"/lobby/*.jar)
-  (( ${#jars[@]} )) || die "Aucun plugin dans $JARS_DIR/lobby/ (mcs-lobby-plugin attendu)"
-  rm -f "$LOBBY_DIR"/plugins/mcs-lobby-plugin*.jar
-  cp -f "${jars[@]}" "$LOBBY_DIR/plugins/"
-
-  shopt -u nullglob
-  install_luckperms bukkit "$LOBBY_DIR/plugins" LUCKPERMS_BUKKIT_URL
-  [[ -f "$LP_ENV_FILE" ]] || write_lp_env
-
-  # Toutes les versions de client acceptées au lobby (1.8.9 PvP, vieux modpacks...) :
-  # ViaVersion (clients plus récents), ViaBackwards (plus anciens), ViaRewind (1.7–1.8)
-  if [[ "$LOBBY_VIA" == "true" ]]; then
-    install_plugin viaversion "$LOBBY_DIR/plugins" ViaVersion ViaVersion/ViaVersion
-    install_plugin viabackwards "$LOBBY_DIR/plugins" ViaBackwards ViaVersion/ViaBackwards
-    install_plugin viarewind "$LOBBY_DIR/plugins" ViaRewind ViaVersion/ViaRewind
+  step "Lobby du VPS : retiré (lot 66)"
+  if systemctl list-unit-files minecraft-lobby.service >/dev/null 2>&1 \
+      && [[ -f /etc/systemd/system/minecraft-lobby.service ]]; then
+    systemctl disable --now minecraft-lobby >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/minecraft-lobby.service
+    systemctl daemon-reload
+    ok "Lobby arrêté et retiré (fichiers gardés dans $LOBBY_DIR)"
   else
-    rm -f "$LOBBY_DIR"/plugins/ViaVersion-*.jar "$LOBBY_DIR"/plugins/ViaBackwards-*.jar "$LOBBY_DIR"/plugins/ViaRewind-*.jar
+    ok "Déjà retiré"
   fi
-
-  # Passage de LuckPerms du fichier local (H2) à la base partagée : on exporte
-  # une seule fois les groupes et joueurs actuels, réimportés après redémarrage
-  local lp_dir="$LOBBY_DIR/plugins/LuckPerms" lp_marker="$ETC_DIR/.luckperms-postgres"
-  if [[ ! -f "$lp_marker" ]] && systemctl is-active --quiet minecraft-lobby \
-      && compgen -G "$lp_dir/luckperms-h2*" >/dev/null; then
-    rm -f "$lp_dir/mcs-migration.json.gz"
-    if mcs-rcon "lp export mcs-migration" >/dev/null; then
-      local i
-      for ((i = 0; i < 60; i++)); do
-        zcat "$lp_dir/mcs-migration.json.gz" 2>/dev/null | jq -e . >/dev/null 2>&1 && break
-        sleep 1
-      done
-    fi
-    if [[ -s "$lp_dir/mcs-migration.json.gz" ]]; then
-      ok "LuckPerms exporté avant le passage à PostgreSQL"
-    else
-      warn "Export LuckPerms impossible : groupes recréés par l'étape bootstrap, relance mcs-admin pour les admins"
-    fi
-  fi
-
-  echo "eula=true" > "$LOBBY_DIR/eula.txt"
-
-  local props="$LOBBY_DIR/server.properties"
-  set_prop "$props" server-port 25566
-  set_prop "$props" server-ip 127.0.0.1          # joignable uniquement via Velocity
-  set_prop "$props" online-mode false
-  set_prop "$props" enforce-secure-profile false
-  set_prop "$props" motd "MCS Lobby"
-  set_prop "$props" view-distance 6
-  set_prop "$props" simulation-distance 4
-  set_prop "$props" enable-rcon true
-  set_prop "$props" rcon.port "$RCON_PORT"
-  set_prop "$props" rcon.password "$RCON_PASSWORD"
-  set_prop "$props" broadcast-rcon-to-ops false
-
-  local spigot="$LOBBY_DIR/spigot.yml"
-  if [[ -f "$spigot" ]]; then
-    sed -i 's/^\(\s*bungeecord:\s*\)false/\1true/' "$spigot"
-  else
-    printf 'settings:\n  bungeecord: true\n' > "$spigot"
-  fi
-
-  mkdir -p "$LOBBY_DIR/plugins/MCSLobbyPlugin"
-  cat > "$LOBBY_DIR/plugins/MCSLobbyPlugin/config.yml" <<EOF
-# Généré par install-vps.sh
-api-url: http://127.0.0.1:8081
-api-key: $LOBBY_API_KEY
-EOF
-  configure_luckperms_file "$LOBBY_DIR/plugins/LuckPerms/config.yml" || true
-  chown -R "$MC_USER:$MC_USER" "$LOBBY_DIR"
-
-  write_unit minecraft-lobby <<EOF
-[Unit]
-Description=MCS - Lobby Paper
-After=network-online.target minecraft-velocity.service
-Wants=network-online.target
-
-[Service]
-User=$MC_USER
-WorkingDirectory=$LOBBY_DIR
-EnvironmentFile=-$LP_ENV_FILE
-ExecStart=$JAVA_BIN -Xms256M -Xmx$LOBBY_XMX -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -jar paper.jar nogui
-# always : /stop ou /restart en jeu arrêtent "proprement" ; systemd relance quand même
-Restart=always
-RestartSec=10
-SuccessExitStatus=143
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  local lobby_since
-  lobby_since=$(date '+%Y-%m-%d %H:%M:%S')
-  restart_service minecraft-lobby
-  echo "    Démarrage du lobby (premier lancement = génération du monde)..."
-  wait_port "$RCON_PORT" 240 || die "Le lobby ne démarre pas. Logs : journalctl -u minecraft-lobby -n 100"
-  ok "Lobby prêt sur 127.0.0.1:25566"
-
-  if [[ ! -f "$lp_marker" ]]; then
-    if [[ -s "$lp_dir/mcs-migration.json.gz" ]]; then
-      mcs-rcon "lp import mcs-migration" >/dev/null && sleep 15
-      ok "Groupes et joueurs LuckPerms importés dans PostgreSQL"
-    fi
-    touch "$lp_marker"
-  fi
-  if luckperms_on_postgres minecraft-lobby "$lobby_since"; then
-    ok "LuckPerms du lobby sur PostgreSQL (partagé avec le proxy)"
-  else
-    warn "LuckPerms du lobby ne semble pas utiliser PostgreSQL : vérifie 'journalctl -u minecraft-lobby | grep -i storage'"
-  fi
+  rm -rf "$JARS_DIR/lobby"
 }
 
 step_firewall() {

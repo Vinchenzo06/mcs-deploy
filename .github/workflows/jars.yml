@@ -1,4 +1,4 @@
-# Lot 62 : compile l'API, le proxy (proxymanager), le plugin img-farm et le plugin du lobby
+# Lot 62 : compile l'API, le proxy (proxymanager) et le plugin img-farm (lot 66 : plus de plugin du lobby)
 # à chaque modification, et les publie dans la release GitHub "jars-latest". mcs-deploy les
 # télécharge au lieu de compiler sur le VPS (plus rapide, et rien de lourd sur le VPS) ; il
 # compare l'empreinte git du dossier de chaque module (fichier TREES) avec son propre code et
@@ -12,7 +12,6 @@ on:
       - "api/**"
       - "proxymanager/**"
       - "img-farm-plugin/**"
-      - "lobby-plugin/**"
       - ".github/workflows/jars.yml"
   workflow_dispatch:
 
@@ -51,7 +50,6 @@ jobs:
           build api mcs-api.jar
           build proxymanager proxymanager.jar
           build img-farm-plugin img-farm.jar
-          build lobby-plugin mcs-lobby-plugin.jar
           cd dist && sha256sum *.jar > SHA256SUMS && cat TREES SHA256SUMS
 
       - name: Publication (release "jars-latest")
@@ -61,6 +59,6 @@ jobs:
           gh release delete jars-latest --yes --cleanup-tag || true
           gh release create jars-latest dist/* \
             --title "Jars MCS (dernière version)" \
-            --notes "API, proxy, plugins img-farm et lobby, compilés automatiquement depuis ${GITHUB_SHA::7}." \
+            --notes "API, proxy et plugin img-farm, compilés automatiquement depuis ${GITHUB_SHA::7}." \
             --target "$GITHUB_SHA" \
             --latest=false
