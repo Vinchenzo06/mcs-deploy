@@ -69,11 +69,14 @@ class ImgServersHandler {
     /** "srv:<id>" ou "create:<uuid>" -> dernière erreur d'une action terminée après la réponse */
     private final Map<String, LastError> errors = new ConcurrentHashMap<>();
 
+    private final ProxyAdminHandler proxyAdmin;
+
     ImgServersHandler(ProxyServer proxy, ApiClient api, PlayerSync playerSync, Logger logger) {
         this.proxy = proxy;
         this.api = api;
         this.playerSync = playerSync;
         this.logger = logger;
+        this.proxyAdmin = new ProxyAdminHandler(proxy, api, logger);
     }
 
     /**
@@ -82,6 +85,11 @@ class ImgServersHandler {
      */
     void handle(String path, JsonNode body, BiConsumer<Integer, JsonNode> reply,
                 java.util.function.Consumer<ApiClient.FileContent> bytes) {
+        // Lot 70c : proxy Velocity (journal, console, infos) pour les admins du réseau
+        if (path.startsWith("/img/proxy/")) {
+            proxyAdmin.handle(path, body, reply);
+            return;
+        }
         UUID uuid = UUID.fromString(body.path("uuid").asText(""));
         if (path.startsWith("/img/backups")) {
             withPlayer(uuid, reply, pid -> backupsAdmin(path.substring("/img/backups".length()), pid, body, reply));

@@ -1717,6 +1717,7 @@ ENV_FILE = '/etc/mcs/mcs.env'
 UA = 'mcs-deploy/0.3 (+https://github.com/Vinchenzo06/mcs-deploy)'
 HANGAR = 'https://hangar.papermc.io/api/v1/projects/{}/versions?limit=25&offset=0&channel=Release&platform=VELOCITY'
 LUCKPERMS = 'https://metadata.luckperms.net/data/all'
+FILL = 'https://fill.papermc.io/v3/projects/velocity'
 SERVICE = 'minecraft-velocity'
 
 
@@ -1769,6 +1770,29 @@ def velocity_version():
         if m:
             return f'{m[1]}.{m[2]}'
     return None
+
+
+def velocity_jars(mm):
+    """(jar installé, dernier jar de la même version majeure) : pour Admin → Réseau (lot 70c)"""
+    cur = latest = None
+    try:
+        with open(os.path.join(VDIR, 'velocity.jar.url')) as f:
+            cur = os.path.basename(f.read().strip())
+    except OSError:
+        pass
+    try:
+        groups = get(FILL).get('versions') or {}
+        versions = [v for vs in groups.values() for v in vs]
+        major = (mm or '').split('.')[0]
+        version = next((v for v in versions if major and v.startswith(major + '.')), None)
+        if version:
+            builds = get(f'{FILL}/versions/{version}/builds')
+            best = [b for b in builds if b.get('channel') in ('RECOMMENDED', 'STABLE')] + list(builds)
+            url = (((best[0].get('downloads') or {}).get('server:default') or {}).get('url')) if best else None
+            latest = os.path.basename(url) if url else None
+    except Exception:
+        pass
+    return cur, latest
 
 
 def covers(deps, mm):
@@ -1947,10 +1971,13 @@ def read_status():
 
 def write_status(mm, items, result=None, message=None, failed=None):
     old = read_status()
+    jars = velocity_jars(mm)
     now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
     st = {
         'checkedAt': now,
         'velocity': mm,
+        'velocityJar': jars[0],
+        'velocityLatestJar': jars[1],
         'plugins': [{'id': i['id'], 'label': i['label'], 'current': i['current'],
                      'available': (i['target'] or {}).get('version'), 'update': i['update'],
                      'note': i['note']} for i in items],
@@ -2151,6 +2178,149 @@ EOF
   systemctl enable --now mcs-proxy-plugins.timer >/dev/null 2>&1 || true
 }
 
+# Lot 70c : Admin → Réseau du site peut demander trois actions sur le proxy (mettre à jour
+# Velocity, ses plugins, le redémarrer). Le site (farmdb) dépose une demande dans
+# /var/lib/mcs-site (écriture seulement, groupe farmdb) ; mcs-site-action la fait en root.
+install_site_actions() {
+  if ! id farmdb >/dev/null 2>&1; then
+    return 0 # pas de site IMG sur ce VPS
+  fi
+  local fresh=false
+  [[ -d /var/lib/mcs-site ]] || fresh=true
+  install -d -m 0730 -o root -g farmdb /var/lib/mcs-site
+  install -d -m 0755 /var/lib/mcs-status
+  cat > /usr/local/bin/mcs-site-action <<'PYEOF'
+#!/usr/bin/env python3
+"""mcs-site-action (lot 70c) : actions sur le proxy demandées depuis Admin → Réseau du site IMG.
+
+Le site (utilisateur farmdb, sans droits root) dépose une demande <nom>.request dans
+/var/lib/mcs-site/ ; mcs-site-action.path la voit et lance ce script en root. Seules trois
+actions existent, sans paramètre :
+  velocity-update  sudo mcs-deploy --no-pull plateforme (Velocity puis plugins compatibles)
+  plugins-apply    sudo mcs-proxy-plugins --apply (retour arrière si un plugin ne charge pas)
+  proxy-restart    redémarre le proxy
+Résultat : /var/lib/mcs-status/proxy-action.json (lu par le site).
+"""
+import datetime
+import glob
+import json
+import os
+import pwd
+import re
+import stat
+import subprocess
+import sys
+
+REQ_DIR = '/var/lib/mcs-site'
+STATUS = '/var/lib/mcs-status/proxy-action.json'
+ACTIONS = {
+    'velocity-update': ('Mise à jour de Velocity', ['/usr/local/bin/mcs-deploy', '--no-pull', 'plateforme'], 1500),
+    'plugins-apply': ('Mise à jour des plugins du proxy', ['/usr/local/bin/mcs-proxy-plugins', '--apply'], 600),
+    'proxy-restart': ('Redémarrage du proxy', ['systemctl', 'restart', 'minecraft-velocity'], 180),
+}
+ANSI = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
+
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
+
+
+def write(st):
+    os.makedirs(os.path.dirname(STATUS), mode=0o755, exist_ok=True)
+    tmp = STATUS + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(st, f, ensure_ascii=False, indent=1)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, STATUS)
+
+
+def allowed_uids():
+    uids = {0}
+    try:
+        uids.add(pwd.getpwnam('farmdb').pw_uid)
+    except KeyError:
+        pass
+    return uids
+
+
+def main():
+    if os.geteuid() != 0:
+        print('Lance avec sudo')
+        return 1
+    for path in sorted(glob.glob(os.path.join(REQ_DIR, '*.request'))):
+        try:
+            st = os.lstat(path)
+            raw = b''
+            if stat.S_ISREG(st.st_mode):  # jamais un lien vers un autre fichier
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                with os.fdopen(fd, 'rb') as f:
+                    raw = f.read(4096)
+        except OSError:
+            continue
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        try:
+            req = json.loads(raw.decode('utf-8'))
+        except Exception:
+            req = {}
+        action = str(req.get('action', ''))
+        by = re.sub(r'[^\w .@-]', '', str(req.get('by', '?')))[:40] or '?'
+        if not stat.S_ISREG(st.st_mode) or st.st_uid not in allowed_uids():
+            print(f'Demande ignorée (propriétaire {st.st_uid})')
+            continue
+        if action not in ACTIONS:
+            print(f'Action inconnue ignorée : {action!r}')
+            continue
+        label, cmd, timeout = ACTIONS[action]
+        print(f'{label}, demandée par {by} depuis le site')
+        state = {'action': action, 'label': label, 'by': by, 'startedAt': now(), 'running': True}
+        write(state)
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                               env={**os.environ, 'TERM': 'dumb', 'NO_COLOR': '1'})
+            out = ANSI.sub('', (p.stdout or '') + (p.stderr or ''))
+            ok = p.returncode == 0
+        except subprocess.TimeoutExpired as e:
+            out = ANSI.sub('', str(e.stdout or '')) + '\nDélai dépassé.'
+            ok = False
+        except Exception as e:
+            out, ok = str(e), False
+        state.update({'running': False, 'ok': ok, 'finishedAt': now(), 'output': out[-6000:]})
+        write(state)
+        print(('Fini' if ok else 'Échec') + f' : {label}')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
+PYEOF
+  chmod 755 /usr/local/bin/mcs-site-action
+  cat > /etc/systemd/system/mcs-site-action.path <<'EOF'
+[Unit]
+Description=MCS - actions sur le proxy demandées par le site IMG
+[Path]
+PathExistsGlob=/var/lib/mcs-site/*.request
+[Install]
+WantedBy=multi-user.target
+EOF
+  cat > /etc/systemd/system/mcs-site-action.service <<'EOF'
+[Unit]
+Description=MCS - action sur le proxy demandée par le site IMG
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mcs-site-action
+TimeoutStartSec=30min
+EOF
+  systemctl daemon-reload
+  systemctl enable --now mcs-site-action.path >/dev/null 2>&1 || true
+  # Le site ne voit un dossier créé après son démarrage qu'une fois relancé (ProtectSystem=strict)
+  [[ "$fresh" == "true" ]] && systemctl try-restart farmdb >/dev/null 2>&1 || true
+  ok "Actions du site sur le proxy prêtes (Admin → Réseau)"
+}
+
 step_velocity() {
   step "Velocity + proxymanager"
   build_jar "$SRC_PROXY" "$JARS_DIR/velocity/proxymanager.jar"
@@ -2176,6 +2346,7 @@ step_velocity() {
   # Lot 70b : Velocity plus récent que ce que Via déclare → la plus récente déclarée pour la même
   # version majeure (compatible probable), protégée par le retour arrière
   install_proxy_plugins_tool
+  install_site_actions
   mcs-proxy-plugins --install-missing | sed 's/^/    /' \
     || warn "ViaVersion/ViaBackwards non installés (Hangar injoignable ?) : sudo mcs-proxy-plugins --apply plus tard"
   # Ambassador : changement de serveur pour les clients Forge 1.13–1.20.1 (lot 36)

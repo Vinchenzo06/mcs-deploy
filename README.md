@@ -112,6 +112,7 @@ dans `img-farm-mod/versions.json` pour le mod. Le site importe les nouveaux item
 | `sudo mcs-deploy auto` | Seulement les étapes dont le code a changé |
 | `sudo mcs-deploy plateforme` | Velocity à sa dernière version, puis ses plugins vers une version compatible (anciens jars gardés en `.old`) |
 | `sudo mcs-proxy-plugins [--apply]` | ViaVersion, ViaBackwards, LuckPerms du proxy : état, ou mise à jour tout de suite |
+| Site → Admin → Réseau → Proxy Velocity | Mettre à jour Velocity ou ses plugins, redémarrer le proxy (fait par root : `mcs-site-action`), console et journal (IP masquées) ; admins du réseau seulement |
 | `sudo mcs-status` | État des services, ports et machines volontaires |
 | `sudo mcs-add-node [--ssh] [--owner <pseudo>] [nom]` | Code de jumelage pour une nouvelle machine |
 | `sudo mcs-node-owner [<id> <pseudo>\|--none]` | Joueur propriétaire (hébergeur) d'une machine |
