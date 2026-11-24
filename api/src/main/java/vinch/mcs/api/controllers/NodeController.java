@@ -6,6 +6,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import vinch.mcs.api.dto.CreateNodeRequest;
 import vinch.mcs.api.dto.CreateNodeResponse;
+import vinch.mcs.api.services.NetworkService;
 import vinch.mcs.api.services.NodeService;
 import vinch.mcs.api.websocket.AgentWebSocketHandler;
 
@@ -18,6 +19,19 @@ public class NodeController {
 
     private final NodeService nodeService;
     private final AgentWebSocketHandler agentWebSocketHandler;
+    private final NetworkService networkService;
+
+    // Lot 69 : les machines pour Admin → Réseau du site IMG (admins du réseau seulement)
+    @GetMapping("/overview")
+    public ResponseEntity<?> overview(@RequestParam Long playerId) {
+        try {
+            return ResponseEntity.ok(networkService.overview(playerId));
+        } catch (SecurityException e) {
+            return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", String.valueOf(e.getMessage())));
+        }
+    }
 
     @PostMapping
     public ResponseEntity<CreateNodeResponse> createNode(@Valid @RequestBody CreateNodeRequest request) {

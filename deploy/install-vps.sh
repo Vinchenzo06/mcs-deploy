@@ -452,6 +452,24 @@ PYEOF
   chmod 755 /usr/local/bin/mcs-rcon
 
   # mcs-status : état rapide de toute la plateforme
+  # img-update (lot 69) : tout mettre à jour d'un coup après un push (site puis MCS)
+  cat > /usr/local/bin/img-update <<'SHEOF'
+#!/usr/bin/env bash
+# sudo img-update : le site IMG (farmdb-update) puis MCS (mcs-deploy auto : seulement ce qui a changé)
+set -uo pipefail
+[[ $EUID -eq 0 ]] || { echo "Lance avec sudo"; exit 1; }
+status=0
+if command -v farmdb-update >/dev/null; then
+  echo "########## Site IMG"
+  farmdb-update || status=1
+fi
+echo
+echo "########## MCS"
+mcs-deploy auto || status=1
+exit $status
+SHEOF
+  chmod 755 /usr/local/bin/img-update
+
   cat > /usr/local/bin/mcs-status <<'SHEOF'
 #!/usr/bin/env bash
 echo "=== Services ==="
@@ -1389,7 +1407,7 @@ step_system() {
   chown -R "$API_USER:$API_USER" "$API_DIR"
 
   install_helpers
-  ok "Paquets, utilisateurs ($MC_USER, $API_USER), outils mcs-status / mcs-rcon / mcs-admin / mcs-add-node / mcs-remove-node"
+  ok "Paquets, utilisateurs ($MC_USER, $API_USER), outils mcs-status / mcs-rcon / mcs-admin / mcs-add-node / mcs-remove-node / img-update"
 
   # Lot 65 : 2 Go d'échange. Sans swap, un pic de mémoire (trois Java sur 3,8 Go) tue un
   # service au lieu de le ralentir. swappiness 10 : utilisé seulement en dernier recours.
@@ -2042,9 +2060,19 @@ main() {
   local steps=("$@") s
   (( ${#steps[@]} )) || steps=("${ALL_STEPS[@]}")
   for s in "${steps[@]}"; do
-    declare -F "step_$s" >/dev/null || die "Étape inconnue : $s (disponibles : ${ALL_STEPS[*]})"
+    declare -F "step_$s" >/dev/null || die "Étape inconnue : $s (disponibles : ${ALL_STEPS[*]} plateforme)"
     "step_$s"
+    record_step "$s"
   done
+}
+
+# Lot 69 : version du code déployée par chaque étape (/etc/mcs/deployed/<étape>) ;
+# « sudo mcs-deploy auto » s'en sert pour ne lancer que ce qui a changé depuis.
+record_step() {
+  local head
+  head=$(git -C "$SRC_DIR" rev-parse HEAD 2>/dev/null) || return 0
+  install -d -m 755 "$ETC_DIR/deployed"
+  echo "$head" > "$ETC_DIR/deployed/$1"
 }
 
 main "$@"

@@ -70,18 +70,33 @@ sudo mcs-admin TonPseudo
 
 ## Au quotidien
 
-1. Claude dépose un patch `NN-nom.patch` dans ton dossier `mcs-deploy`.
-2. Dans le terminal d'IntelliJ : `git am NN-nom.patch` (applique **et** crée le commit avec son
-   message), puis `git push`. Les actions GitHub compilent les jars, l'agent et le mod.
-3. Sur le VPS :
+1. Claude dépose les patchs dans `patchs\` : `NN-nom.patch` dans le dossier `mcs-deploy`,
+   `farmdb-N-nom.patch` dans le dossier `img-farmdb`.
+2. Depuis le dossier `mcs-deploy` (terminal d'IntelliJ ou PowerShell) :
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File outils\appliquer-patchs.ps1
+   ```
+   Il applique les patchs en attente des deux dépôts dans l'ordre (`git am`), les range dans
+   `patchs\appliques\` et fait `git push`. Au premier échec il s'arrête sans pousser ce dépôt
+   (`git am --abort` pour revenir en arrière). `-SansPush` pour seulement appliquer.
+   Les actions GitHub compilent ensuite les jars, l'agent et le mod.
+3. Sur le VPS, une fois les actions GitHub terminées :
+   ```bash
+   sudo img-update
+   ```
+   = `farmdb-update` (le site) puis `mcs-deploy auto` (MCS) : seulement les étapes dont le
+   code a changé depuis leur dernier déploiement.
 
-| Le lot a modifié | Commande sur le VPS |
+| Le lot a modifié | Ce que fait `mcs-deploy auto` |
 |---|---|
-| l'API (`api/`) | `sudo mcs-deploy api` |
-| le plugin Velocity (`proxymanager/`) ou le plugin img-farm | `sudo mcs-deploy velocity` |
-| les scripts (`deploy/`) ou plusieurs choses | `sudo mcs-deploy` |
-| l'agent (`agent/`) | sur chaque machine : `sudo bash node-setup.sh --update-agent` |
-| le mod (`img-farm-mod/`) | rien : l'action « Mod » publie la release `mod-latest` |
+| l'API (`api/`) | `api` |
+| le plugin Velocity (`proxymanager/`) ou le plugin img-farm | `velocity` |
+| le script d'installation (`deploy/install-vps.sh`) | mise à jour complète |
+| l'agent (`agent/`) | rappelle de lancer, sur chaque machine : `sudo bash node-setup.sh --update-agent` |
+| le mod (`img-farm-mod/`) ou la doc | rien : l'action « Mod » publie la release `mod-latest` |
+
+Chaque étape note la version déployée dans `/etc/mcs/deployed/`. Les étapes à la main
+(`sudo mcs-deploy api`, etc.) marchent toujours pareil.
 
 Nouvelle version de Minecraft : `sudo mcs-deploy plateforme` le jour de la sortie (sinon les
 joueurs qui ont mis leur jeu à jour ne passent pas le proxy), et une ligne dans
@@ -91,7 +106,9 @@ joueurs qui ont mis leur jeu à jour ne passent pas le proxy), et une ligne dans
 
 | Commande | Rôle |
 |---|---|
+| `sudo img-update` | Le site IMG puis MCS (`mcs-deploy auto`) : la commande après chaque push |
 | `sudo mcs-deploy [étapes]` | Récupère GitHub, compile, installe |
+| `sudo mcs-deploy auto` | Seulement les étapes dont le code a changé |
 | `sudo mcs-deploy plateforme` | Velocity et LuckPerms à leur dernière version (ancien jar gardé en `.old`) |
 | `sudo mcs-status` | État des services, ports et machines volontaires |
 | `sudo mcs-add-node [--ssh] [--owner <pseudo>] [nom]` | Code de jumelage pour une nouvelle machine |

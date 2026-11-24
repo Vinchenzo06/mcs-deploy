@@ -84,6 +84,11 @@ class ImgServersHandler {
             withPlayer(uuid, reply, pid -> backupsAdmin(path.substring("/img/backups".length()), pid, body, reply));
             return;
         }
+        // Lot 69 : machines du réseau pour Admin → Réseau du site (l'API vérifie que c'est un admin)
+        if (path.equals("/img/network")) {
+            withPlayer(uuid, reply, pid -> jsonResult(api.networkOverview(pid), reply));
+            return;
+        }
         String rest = path.substring("/img/servers".length());
         withPlayer(uuid, reply, pid -> route(uuid, rest, pid, body, reply, bytes));
     }

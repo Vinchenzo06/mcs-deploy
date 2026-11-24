@@ -25,3 +25,6 @@ dependency-reduced-pom.xml
 
 # Config et secrets locaux
 *.env
+
+# Patchs en attente / appliqués (lot 69)
+patchs/

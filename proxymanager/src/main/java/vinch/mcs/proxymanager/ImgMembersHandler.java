@@ -87,7 +87,8 @@ public class ImgMembersHandler implements HttpHandler {
             byte[] raw = exchange.getRequestBody().readNBytes(64 * 1024);
             JsonNode body = raw.length == 0 ? json.createObjectNode() : json.readTree(raw);
             // Lots 53-54 : serveurs de la team (page Serveur du site), console et fichiers
-            if (path.equals("/img/servers") || path.startsWith("/img/servers/") || path.startsWith("/img/backups/")) {
+            if (path.equals("/img/servers") || path.startsWith("/img/servers/") || path.startsWith("/img/backups/")
+                    || path.equals("/img/network")) {
                 servers.handle(path, body, (code, out) -> sendQuietly(exchange, code, out),
                         content -> sendBytesQuietly(exchange, content));
                 return;

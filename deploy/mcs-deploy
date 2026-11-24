@@ -9,6 +9,8 @@
 #    sudo mcs-deploy --no-pull api   sans récupérer GitHub (code déjà présent)
 #    sudo mcs-deploy --no-build lobby  sans recompiler (réutilise le dernier jar)
 #    sudo mcs-deploy --local-build api compiler sur le VPS au lieu de prendre le jar de GitHub
+#    sudo mcs-deploy auto            seulement ce qui a changé depuis le dernier déploiement (lot 69)
+#    sudo img-update                 le site IMG puis MCS (auto), en une commande
 #
 #  Étapes : system java postgres rathole api velocity lobby firewall bootstrap summary
 # =============================================================================
@@ -29,7 +31,7 @@ while (( $# )); do
     --no-pull)  PULL=false; shift ;;
     --no-build) export MCS_SKIP_BUILD=1; shift ;;
     --local-build) export MCS_LOCAL_BUILD=1; shift ;;
-    -h|--help)  sed -n '3,14p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '3,16p' "$0"; exit 0 ;;
     *) steps+=("$1"); shift ;;
   esac
 done
@@ -47,6 +49,50 @@ if [[ "$PULL" == "true" && -z "${MCS_PULLED:-}" ]]; then
   echo "    $(git -C "$INSTALL_DIR" log -1 --format='%h  %s  (%cr)')"
   # Relance la version fraîchement récupérée de ce script
   exec env MCS_PULLED=1 bash "$INSTALL_DIR/deploy/mcs-deploy" "${ORIG_ARGS[@]}"
+fi
+
+# Lot 69 : « auto » = seulement les étapes dont le code a changé depuis leur dernier
+# déploiement (chaque étape note la version déployée dans /etc/mcs/deployed/<étape>)
+if [[ "${steps[*]:-}" == "auto" ]]; then
+  rec=/etc/mcs/deployed
+  head=$(git -C "$INSTALL_DIR" rev-parse HEAD)
+  # 0 = changé, 1 = rien de changé, 2 = version de départ inconnue (on considère changé)
+  changed_since() { # $1 = fichier de /etc/mcs/deployed, $2... = dossiers ou fichiers
+    local base
+    base=$(cat "$rec/$1" 2>/dev/null || true)
+    shift
+    if [[ -z "$base" ]] || ! git -C "$INSTALL_DIR" cat-file -e "$base^{commit}" 2>/dev/null; then
+      return 2
+    fi
+    [[ -n "$(git -C "$INSTALL_DIR" diff --name-only "$base" "$head" -- "$@")" ]]
+  }
+  if [[ ! -d "$rec" ]]; then
+    # Premier « auto » : la version présente est celle déployée avec le dernier lot
+    install -d -m 755 "$rec"
+    for s in system api velocity lobby agent; do echo "$head" > "$rec/$s"; done
+    echo "==> Point de départ enregistré ($(git -C "$INSTALL_DIR" log -1 --format=%h)) : la prochaine fois, « auto » déploiera seulement ce qui a changé."
+    exit 0
+  fi
+  r=0; changed_since agent agent || r=$?
+  if (( r == 0 )); then
+    echo "  ! L'agent a changé : sur chaque machine, sudo bash node-setup.sh --update-agent"
+  fi
+  echo "$head" > "$rec/agent"
+  r=0; changed_since system deploy/install-vps.sh || r=$?
+  if (( r != 1 )); then
+    echo "==> Le script d'installation a changé : mise à jour complète"
+    exec env MCS_SRC_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/deploy/install-vps.sh"
+  fi
+  steps=()
+  r=0; changed_since api api || r=$?
+  (( r != 1 )) && steps+=(api)
+  r=0; changed_since velocity proxymanager img-farm-plugin || r=$?
+  (( r != 1 )) && steps+=(velocity)
+  if (( ${#steps[@]} == 0 )); then
+    echo "==> Rien à déployer sur le VPS (rien de changé dans l'API, le proxy ou l'installation)"
+    exit 0
+  fi
+  echo "==> À déployer : ${steps[*]}"
 fi
 
 exec env MCS_SRC_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/deploy/install-vps.sh" "${steps[@]}"
