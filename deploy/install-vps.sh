@@ -234,7 +234,7 @@ need_maven() {
 # vient exactement du même code que celui du VPS (empreinte git du dossier du module, fichier TREES).
 # Si l'action GitHub compile encore ce commit, on l'attend (6 min au plus) ; sinon : 1 = compiler ici.
 prebuilt_jar() {
-  local mod=$1 dest=$2 file want repo base tmp i status head
+  local mod=$1 dest=$2 file want repo base tmp i status head run
   [[ "${MCS_LOCAL_BUILD:-0}" == "1" ]] && return 1
   repo=$(sed -n 's/^MCS_REPO=//p' /etc/mcs/deploy.env 2>/dev/null | tr -d '"')
   [[ -n "$repo" || -n "${MCS_JARS_URL:-}" ]] || return 1
@@ -259,10 +259,18 @@ prebuilt_jar() {
     fi
     # Pas (encore) la bonne version : l'action GitHub compile-t-elle ce commit en ce moment ?
     [[ -n "$repo" ]] || break
-    status=$(curl -fsS -A "$USER_AGENT" "https://api.github.com/repos/$repo/actions/workflows/jars.yml/runs?head_sha=$head&per_page=1" 2>/dev/null \
-             | grep -o '"status": *"[a-z_]*"' | head -1 | sed 's/.*"\([a-z_]*\)"$/\1/' || true)
+    run=$(curl -fsS -A "$USER_AGENT" "https://api.github.com/repos/$repo/actions/workflows/jars.yml/runs?head_sha=$head&per_page=1" 2>/dev/null \
+          | jq -r '.workflow_runs[0] // empty | "\(.status) \(.conclusion // "")"' 2>/dev/null || true)
+    status=${run%% *}
     case "$status" in
       queued|in_progress|waiting|pending|requested) ;;
+      completed)
+        # Lot 73 : tests (ou compilation) échoués sur GitHub pour ce code : on ne le déploie pas
+        if [[ "${run#* }" == "failure" ]]; then
+          rm -rf "$tmp"
+          die "$mod : les tests ou la compilation ont échoué sur GitHub pour ce code (action « Jars », erreurs en annotation) : rien n'est déployé. Corrige puis repousse ; pour forcer quand même : sudo mcs-deploy --local-build api (ou velocity)"
+        fi
+        break ;;
       *) break ;;
     esac
     (( i == 1 )) && echo "    $mod : GitHub compile encore ce code, on attend (6 min au plus)…"

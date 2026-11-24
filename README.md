@@ -103,6 +103,18 @@ qui ont mis leur jeu à jour dès que sa version compatible sort (la minuterie d
 prend). `sudo mcs-deploy plateforme` quand tu veux le Velocity qui la connaît, et une ligne
 dans `img-farm-mod/versions.json` pour le mod. Le site importe les nouveaux items tout seul.
 
+## Tests automatiques (lot 73)
+
+GitHub les lance à chaque push ; en cas d'échec, les erreurs sont en annotation sur la page de
+l'action (lisibles sans être connecté) et **rien n'est publié** :
+
+| Action | Tests | Si ça échoue |
+|---|---|---|
+| « Jars » | API (`api/src/test` : versions de Java, rythme et rotation des sauvegardes, mémoire et quotas disque, liste Modrinth) et proxy (IP masquées) | pas de jar publié ; `mcs-deploy` refuse de déployer ce code (`--local-build` pour forcer) |
+| « Agent » | `agent/*_test.go` : chemins dans le dossier du serveur, liens et zip piégés, mémoire Java (même calcul que l'API), Modrinth | pas d'agent publié |
+| « Mod » | `img-farm-mod/src/test` : règles de comptage (Tracker), filet de sécurité (Guard) | pas de fichier pour cette version |
+| « Tests » (dépôt img-farmdb) | `/mc`, `/mod`, origine de `/api`, invités (`npm test`) | ne pas lancer `img-update` avant correction |
+
 ## Commandes du VPS
 
 | Commande | Rôle |

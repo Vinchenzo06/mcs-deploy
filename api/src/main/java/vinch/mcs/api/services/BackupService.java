@@ -734,11 +734,18 @@ public class BackupService {
      * et mensuelle profitent de la quotidienne (pas une 2e sauvegarde le même jour).
      */
     private Set<BackupKind> dueKinds(Server s, LocalDateTime now) {
-        Map<BackupKind, Rule> rules = effective(s);
+        return dueKinds(effective(s),
+                at(backupRepository.findByServerTagIdAndStatusOrderByCreatedAtDesc(s.getId(), "SUCCESS"), CENTRAL),
+                s.getCreatedAt(), now);
+    }
+
+    /** Lot 73 : le calcul seul (testé), d'après les sauvegardes réussies au central, de la plus récente à la plus ancienne */
+    static Set<BackupKind> dueKinds(Map<BackupKind, Rule> rules, List<Backup> centralOk, LocalDateTime serverCreatedAt,
+                                    LocalDateTime now) {
         LocalDateTime lastAuto = null;
         LocalDateTime lastWeekly = null;
         LocalDateTime lastMonthly = null;
-        for (Backup b : at(backupRepository.findByServerTagIdAndStatusOrderByCreatedAtDesc(s.getId(), "SUCCESS"), CENTRAL)) {
+        for (Backup b : centralOk) {
             boolean auto = b.is(BackupKind.DAILY) || b.is(BackupKind.WEEKLY) || b.is(BackupKind.MONTHLY);
             if (auto && lastAuto == null) {
                 lastAuto = b.getCreatedAt();
@@ -753,7 +760,7 @@ public class BackupService {
         if (lastAuto == null) {
             // Pas encore de sauvegarde automatique : la première 1 h après la création (lot 58 ;
             // avant, 24 h : un nouveau serveur restait une journée sans aucune copie)
-            lastAuto = s.getCreatedAt() == null ? null : s.getCreatedAt().minusHours(23);
+            lastAuto = serverCreatedAt == null ? null : serverCreatedAt.minusHours(23);
         }
         boolean dailyOn = rules.get(BackupKind.DAILY).max() > 0;
         boolean weeklyDue = rules.get(BackupKind.WEEKLY).max() > 0 && olderThan(lastWeekly, Duration.ofDays(7), now);
@@ -924,7 +931,7 @@ public class BackupService {
      * permanente ne prend pas de place dans les autres types : faire une 3e manuelle
      * ne touche jamais une permanente.
      */
-    private static Set<Long> retained(List<Backup> ok, Map<BackupKind, Rule> rules, LocalDateTime now,
+    static Set<Long> retained(List<Backup> ok, Map<BackupKind, Rule> rules, LocalDateTime now,
                                       boolean serverDeleted) {
         Set<Long> perm = keptPermanent(ok, rules.get(BackupKind.PERMANENT));
         Set<Long> kept = new HashSet<>(serverDeleted ? Set.of() : perm);

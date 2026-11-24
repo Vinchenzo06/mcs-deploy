@@ -34,13 +34,24 @@ jobs:
           java-version: "25"
           cache: maven
 
-      - name: Compilation
+      - name: Tests et compilation
         run: |
+          # Lot 73 : les tests de chaque module passent avant sa publication. En cas d'échec, rien
+          # n'est publié, mcs-deploy refuse de déployer ce code (voir prebuilt_jar) et les erreurs
+          # sont en annotation, lisibles sur la page de l'action sans être connecté.
           mkdir -p dist
+          set -o pipefail
           build() {
             local mod=$1 out=$2 jar
             echo "::group::$mod"
-            mvn -q -B -f "$mod/pom.xml" -DskipTests clean package
+            if ! mvn -q -B -f "$mod/pom.xml" clean package 2>&1 | tee "$mod.log"; then
+              echo "::endgroup::"
+              msg=$({ grep -hE "^\[ERROR\] (Tests run|.*(FAIL|expected|Expected|COMPILATION|error:|\.java))" "$mod.log" \
+                        "$mod"/target/surefire-reports/*.txt 2>/dev/null || tail -30 "$mod.log"; } \
+                    | head -40 | cut -c1-300 | sed 's/%/%25/g; s/\r//g' | awk 'BEGIN{ORS="%0A"} {print}')
+              echo "::error title=$mod : tests ou compilation échoués::${msg}"
+              exit 1
+            fi
             jar=$(find "$mod/target" -maxdepth 1 -name '*.jar' ! -name 'original-*' ! -name '*-sources.jar' \
                   ! -name '*-javadoc.jar' -printf '%T@ %p\n' | sort -rn | awk 'NR == 1 { print $2 }')
             cp "$jar" "dist/$out"

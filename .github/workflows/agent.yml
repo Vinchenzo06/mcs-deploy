@@ -28,9 +28,18 @@ jobs:
           go-version-file: agent/go.mod
           cache-dependency-path: agent/go.sum
 
-      - name: Vérification
+      - name: Vérification et tests (lot 73)
         working-directory: agent
-        run: go vet ./...
+        run: |
+          go vet ./...
+          # En cas d'échec : les erreurs en annotation (lisible sans connexion), rien n'est publié
+          set -o pipefail
+          if ! go test ./... 2>&1 | tee test.log; then
+            msg=$({ grep -E -- "--- FAIL|_test\.go:[0-9]+:|panic:" test.log || tail -30 test.log; } | head -40 | cut -c1-300 \
+                  | sed 's/%/%25/g; s/\r//g' | awk 'BEGIN{ORS="%0A"} {print}')
+            echo "::error title=Agent : tests échoués::${msg}"
+            exit 1
+          fi
 
       - name: Compilation (linux amd64 + arm64)
         working-directory: agent
