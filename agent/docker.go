@@ -33,6 +33,8 @@ type CreateServerRequest struct {
 	TeamPlugins *[]teamPlugin `json:"team_plugins,omitempty"`
 	// Plugins/mods Modrinth choisis pour ce serveur (lot 70) : nil = API d'avant, ne rien changer
 	ModrinthProjects *[]string `json:"modrinth_projects,omitempty"`
+	// Fichiers du modèle d'un serveur à la demande (lot 76), posés à la création seulement
+	TemplateFiles []templateFile `json:"template_files,omitempty"`
 	// Liste vidée : MODRINTH_PROJECTS vide pour que l'image retire les fichiers posés avant
 	clearModrinth bool
 }
@@ -98,6 +100,13 @@ func CreateServer(dataPath string, req CreateServerRequest) error {
 	}
 
 	ensureForwardingConfig(serverPath, req)
+	// Serveur à la demande (lot 76) : config des plugins du modèle avant le 1er démarrage
+	if req.Restore == nil {
+		if err := writeTemplateFiles(serverPath, req.TemplateFiles); err != nil {
+			_ = os.RemoveAll(serverPath)
+			return fmt.Errorf("fichiers du modèle : %w", err)
+		}
+	}
 	// Serveur de la team (lot 49) : plugins posés avant le tout premier démarrage
 	syncTeamPlugins(serverPath, req.ServerID, req.TeamPlugins)
 	args := runArgs(serverPath, req, "run", "-d")

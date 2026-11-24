@@ -449,6 +449,24 @@ public class ApiClient {
         return call("POST", "/api/v1/servers/" + serverId + "/restore", body, Duration.ofMinutes(21));
     }
 
+    /** Lot 76 : serveurs à la demande */
+    public CompletableFuture<JsonNode> pools() {
+        return call("GET", "/api/v1/pools", null, Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> poolClaim(String pool, long playerId, java.util.List<String> occupied) {
+        return call("POST", "/api/v1/pools/" + pool + "/claim",
+                java.util.Map.of("playerId", playerId, "occupied", occupied), Duration.ofSeconds(15));
+    }
+
+    public CompletableFuture<JsonNode> poolCreate(String pool, long playerId) {
+        return call("POST", "/api/v1/pools/" + pool + "/create", java.util.Map.of("playerId", playerId), Duration.ofMinutes(22));
+    }
+
+    public CompletableFuture<JsonNode> poolIdleStop(long serverId) {
+        return call("POST", "/api/v1/pools/servers/" + serverId + "/idle-stop", java.util.Map.of(), Duration.ofMinutes(3));
+    }
+
     /** Lot 70 : plugins/mods Modrinth d'un serveur */
     public CompletableFuture<JsonNode> getModrinth(long serverId, long playerId) {
         return call("GET", "/api/v1/servers/" + serverId + "/modrinth?playerId=" + playerId, null, Duration.ofSeconds(10));

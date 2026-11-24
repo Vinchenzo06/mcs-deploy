@@ -1,0 +1,36 @@
+{
+  "_comment": "Lot 76 : serveurs à la demande. keep = toujours là ; maxExtra = en plus au besoin, supprimés après idleDeleteHours sans personne ; arrêtés après idleStopMinutes vides. files/ = fichiers posés à la création (config des plugins). owner = pseudo du propriétaire (vide = premier admin).",
+  "owner": "",
+  "pools": [
+    {
+      "name": "speedrun",
+      "label": "Speedrun",
+      "description": "Speedrun solo : tue l'Ender Dragon le plus vite possible. Une mort = monde neuf.",
+      "prefix": "speedrun",
+      "type": "PAPER",
+      "version": "26.3",
+      "ramMb": 4096,
+      "cpu": 2,
+      "modrinth": ["worldreset"],
+      "keep": 1,
+      "maxExtra": 3,
+      "idleDeleteHours": 24,
+      "idleStopMinutes": 15
+    },
+    {
+      "name": "monde-neuf",
+      "label": "Monde neuf",
+      "description": "Un monde tout neuf pour aller chercher un item, recréé à la demande (/reset).",
+      "prefix": "monde-neuf",
+      "type": "PAPER",
+      "version": "26.3",
+      "ramMb": 4096,
+      "cpu": 2,
+      "modrinth": ["worldreset"],
+      "keep": 1,
+      "maxExtra": 3,
+      "idleDeleteHours": 24,
+      "idleStopMinutes": 15
+    }
+  ]
+}

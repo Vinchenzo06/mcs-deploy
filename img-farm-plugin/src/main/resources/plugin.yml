@@ -11,3 +11,6 @@ commands:
   menu:
     description: Menu IMG — tes serveurs, créer un serveur, la farm
     usage: /menu
+  jouer:
+    description: Rejoindre un serveur à la demande (speedrun, monde neuf…) — pour les PNJ du lobby
+    usage: /jouer <jeu>

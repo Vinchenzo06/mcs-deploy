@@ -173,9 +173,22 @@ class MenuRelay {
     }
 
     /** Actions sans risque seulement, exécutées comme la commande /mcs du joueur */
+    private PoolJoin poolJoin;
+
+    void setPoolJoin(PoolJoin poolJoin) {
+        this.poolJoin = poolJoin;
+    }
+
     private void act(Player player, JsonNode data, BiConsumer<Integer, JsonNode> reply) {
         String cmd = data.path("cmd").asText("");
         String ref = data.path("ref").asText("").trim();
+        // Lot 76 : /jouer <jeu> depuis un serveur (PNJ du lobby, menu) : rejoindre un serveur à la
+        // demande est sans risque (création bornée par les limites du groupe, au nom du joueur)
+        if ("jouer".equals(cmd) && poolJoin != null && PoolJoin.POOL.matcher(ref).matches()) {
+            poolJoin.join(player, ref);
+            reply.accept(200, json.createObjectNode().put("ok", true));
+            return;
+        }
         if (!SAFE.contains(cmd) || (!ref.isEmpty() && !REF.matcher(ref).matches())) {
             reply.accept(400, error("Action non permise depuis le menu : confirme-la dans le chat."));
             return;

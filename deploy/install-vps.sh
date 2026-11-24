@@ -1572,6 +1572,12 @@ step_api() {
   build_jar "$SRC_API" "$JARS_DIR/mcs-api.jar"
   need_java
   install -o "$API_USER" -g "$API_USER" -m 644 "$JARS_DIR/mcs-api.jar" "$API_DIR/mcs-api.jar"
+  # Lot 76 : serveurs à la demande (pools.json + fichiers des modèles), lus par l'API
+  if [[ -d "$SRC_DIR/deploy/pools" ]]; then
+    install -d -m 755 /var/lib/mcs/pools
+    rsync -a --delete --chmod=D755,F644 "$SRC_DIR/deploy/pools/" /var/lib/mcs/pools/ 2>/dev/null \
+      || cp -a "$SRC_DIR/deploy/pools/." /var/lib/mcs/pools/
+  fi
 
   cat > "$ETC_DIR/api.env" <<EOF
 DB_PASSWORD=$DB_PASSWORD

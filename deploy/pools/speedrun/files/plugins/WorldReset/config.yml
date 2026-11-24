@@ -1,0 +1,15 @@
+# Lot 76 — WorldReset pour le speedrun (posé à la création du serveur, jamais écrasé ensuite).
+# Les clés absentes prennent la valeur par défaut du plugin.
+language: en
+# Une mort = monde neuf (0 = désactivé)
+death-limit: 1
+backup:
+  # Mondes jetables : pas de copie à chaque reset (sinon le disque se remplit)
+  enabled: false
+timer:
+  enabled: true
+  # Chacun son chrono (plusieurs joueurs peuvent être sur le même serveur)
+  scope: INDIVIDUAL
+  goal:
+    type: ENTITY
+    value: minecraft:ender_dragon

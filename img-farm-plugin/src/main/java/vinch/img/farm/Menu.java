@@ -170,7 +170,7 @@ final class Menu implements Listener {
     }
 
     /** Action sans risque faite par le proxy (comme /mcs du joueur) */
-    private void act(Player p, String cmd, String ref) {
+    void act(Player p, String cmd, String ref) {
         p.closeInventory();
         JsonObject d = new JsonObject();
         d.addProperty("cmd", cmd);

@@ -394,6 +394,46 @@ Fabric seulement (pas Forge), Minecraft 26.2 et plus, avec Fabric API. Détails 
   pour la garder. En attendant, le fichier de la version précédente se charge sur la nouvelle ; ce qui
   n'y marche plus est coupé sans planter le jeu, avec un message au joueur.
 
+## Serveurs à la demande : speedrun, monde neuf (lot 76)
+
+Des serveurs prêts à jouer, créés et supprimés tout seuls, décrits dans
+`deploy/pools/pools.json` (copié dans `/var/lib/mcs/pools` par l'installation) :
+
+| Jeu | Commande | Plugin | Réglages |
+|---|---|---|---|
+| Speedrun | `/jouer speedrun` | WorldReset (Modrinth) | chrono individuel, but : l'Ender Dragon, une mort = monde neuf |
+| Monde neuf | `/jouer monde-neuf` | WorldReset (Modrinth) | pas de chrono ni de limite de morts, `/reset` = nouveau monde pour farmer un item |
+
+- **Toujours un de chaque** (`keep`) : créé tout seul par l'API s'il manque (une machine doit être en ligne).
+- **`/jouer <jeu>`** (ou `/jouer` pour la liste cliquable) : un serveur du jeu où personne n'est ;
+  s'il est arrêté, il démarre ; si tous sont pris, un nouveau est créé (1 à 3 min, `maxExtra` = 3 au plus en plus).
+- **Arrêtés après 15 min vides** (`idleStopMinutes`) par le proxy ; ils redémarrent au prochain `/jouer`.
+- **Les serveurs en plus sont supprimés après un jour sans personne** (`idleDeleteHours` = 24), jamais
+  ceux gardés. La dernière entrée d'un joueur est notée à chaque connexion.
+- Ils appartiennent au premier admin (ou au pseudo `owner` de pools.json), sont des **serveurs de la team**
+  (tous les membres y entrent), ne comptent dans le quota de personne et **ne sont pas sauvegardés**
+  (mondes jetables).
+- **Réglages des plugins** : `deploy/pools/<jeu>/files/…` (ex. `plugins/WorldReset/config.yml`) est posé dans
+  le dossier du serveur à sa création, avant le premier démarrage, jamais par-dessus un fichier existant.
+  Changer ces fichiers vaut pour les **prochains** serveurs ; pour un serveur existant, passe par l'onglet
+  Fichiers du site. La sauvegarde de WorldReset à chaque reset est coupée (`backup.enabled: false`) pour ne pas
+  remplir le disque.
+- **Agent 0.21.0 requis** sur les machines (fichiers du modèle) : `sudo bash node-setup.sh --update-agent`.
+
+### Relier au lobby (PNJ)
+
+Sur le lobby, installe **FancyNpcs** (Modrinth, licence MIT) depuis l'onglet Plugins du serveur, puis en jeu :
+
+```
+/npc create speedrun
+/npc action speedrun ANY_CLICK add player_command jouer speedrun
+/npc create monde-neuf
+/npc action monde-neuf ANY_CLICK add player_command jouer monde-neuf
+```
+
+`/jouer` existe aussi dans le plugin img-farm (installé sur les serveurs de la team) : la commande lancée par
+le PNJ passe par le proxy comme le menu. Un panneau ou un menu peut faire pareil.
+
 ## Sauvegardes
 
 Un **serveur de sauvegarde** (chez toi) garde des sauvegardes chiffrées (restic) de tous

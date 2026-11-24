@@ -804,6 +804,10 @@ public class BackupService {
                     || runningServers.contains(s.getId())) {
                 continue;
             }
+            // Lot 76 : serveurs à la demande (speedrun, monde neuf…) : mondes jetables, pas de sauvegarde automatique
+            if (s.getPool() != null) {
+                continue;
+            }
             if (backingOff(backupRepository.findTop30ByServerTagIdOrderByCreatedAtDesc(s.getId()), CENTRAL, now)) {
                 continue;
             }

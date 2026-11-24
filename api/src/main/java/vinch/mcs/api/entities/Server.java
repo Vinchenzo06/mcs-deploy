@@ -132,6 +132,14 @@ public class Server {
     @Column(name = "modrinth_projects", columnDefinition = "TEXT")
     private String modrinthProjects;
 
+    // Lot 76 : groupe de serveurs à la demande (speedrun, monde-neuf…) ; null = serveur ordinaire
+    @Column(name = "pool", length = 32)
+    private String pool;
+
+    // Lot 76 : dernière entrée d'un joueur (contrôle d'accès du proxy)
+    @Column(name = "last_joined_at")
+    private LocalDateTime lastJoinedAt;
+
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) createdAt = LocalDateTime.now();

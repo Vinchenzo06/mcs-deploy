@@ -37,4 +37,7 @@ public class CreateServerRequest {
     private Boolean replaceDeleted;
     // Serveur de la team IMG (lot 49) : créé depuis l'entrée IMG ou le site IMG Farm DB
     private Boolean team;
+    // Lot 76 : serveur d'un groupe à la demande (créé par MCS, hors quota) et ses plugins Modrinth
+    private String pool;
+    private String modrinthProjects;
 }

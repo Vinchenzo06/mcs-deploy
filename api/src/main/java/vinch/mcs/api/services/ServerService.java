@@ -87,6 +87,9 @@ public class ServerService {
         ModrinthPlugins.apply(data, server);
         if (restore != null) {
             data.put("restore", restore);
+        } else if (server.getPool() != null) {
+            // Lot 76 : fichiers du modèle du groupe (config des plugins…), posés avant le 1er démarrage
+            data.put("template_files", Pools.templateFiles(server.getPool()));
         }
 
         JsonNode result;
@@ -193,14 +196,17 @@ public class ServerService {
             throw new RuntimeException("CPU minimum : 1 cœur");
         }
 
+        // Lot 76 : un serveur à la demande (pool) ne compte dans le quota de personne : ses limites
+        // sont celles du groupe (PoolService)
+        boolean pool = request.getPool() != null;
         // Vérifier la limite de serveurs du joueur
-        long count = serverRepository.countByOwnerId(owner.getId());
-        if (count >= owner.getMaxServers()) {
+        long count = pool ? 0 : serverRepository.countByOwnerId(owner.getId());
+        if (!pool && count >= owner.getMaxServers()) {
             throw new RuntimeException("Limite de serveurs atteinte : " + owner.getMaxServers());
         }
         // Un serveur supprimé dont les sauvegardes sont encore gardées occupe une place :
         // créer au-delà supprime les sauvegardes du plus ancien (après confirmation)
-        LinkedHashMap<Long, List<Backup>> held = backupService.heldDeleted(owner.getId());
+        LinkedHashMap<Long, List<Backup>> held = pool ? new LinkedHashMap<>() : backupService.heldDeleted(owner.getId());
         if (restoringTag != null) {
             held.remove(restoringTag);
         }
@@ -230,7 +236,7 @@ public class ServerService {
         long currentRamUsed = serverRepository.sumAllocatedRamByOwnerId(owner.getId());
         long ramAfterCreation = currentRamUsed + request.getRamMb();
 
-        if (ramAfterCreation > owner.getTotalRamMb()) {
+        if (!pool && ramAfterCreation > owner.getTotalRamMb()) {
             long remaining = owner.getTotalRamMb() - currentRamUsed;
             throw new RuntimeException(String.format(
                     "Pas assez de RAM disponible. Demandé : %d Mo, budget restant : %d Mo (sur %d Mo total)",
@@ -242,7 +248,7 @@ public class ServerService {
         long currentCpuUsed = serverRepository.sumAllocatedCpuByOwnerId(owner.getId());
         long cpuAfterCreation = currentCpuUsed + request.getCpuCores();
 
-        if (cpuAfterCreation > owner.getTotalCpuCores()) {
+        if (!pool && cpuAfterCreation > owner.getTotalCpuCores()) {
             long remaining = owner.getTotalCpuCores() - currentCpuUsed;
             throw new RuntimeException(String.format(
                     "Pas assez de CPU disponible. Demandé : %d vcore(s), budget restant : %d vcore(s) (sur %d total)",
@@ -291,6 +297,8 @@ public class ServerService {
                 .allocatedStorageMb(storageMb)
                 .status(ServerStatus.CREATING)
                 .isTeam(Boolean.TRUE.equals(request.getTeam()))
+                .pool(request.getPool())
+                .modrinthProjects(request.getModrinthProjects())
                 .build();
 
         server = serverRepository.save(server);

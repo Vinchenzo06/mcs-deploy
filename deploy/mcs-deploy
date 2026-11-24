@@ -84,7 +84,7 @@ if [[ "${steps[*]:-}" == "auto" ]]; then
     exec env MCS_SRC_DIR="$INSTALL_DIR" bash "$INSTALL_DIR/deploy/install-vps.sh"
   fi
   steps=()
-  r=0; changed_since api api || r=$?
+  r=0; changed_since api api deploy/pools || r=$?
   (( r != 1 )) && steps+=(api)
   r=0; changed_since velocity proxymanager img-farm-plugin || r=$?
   (( r != 1 )) && steps+=(velocity)

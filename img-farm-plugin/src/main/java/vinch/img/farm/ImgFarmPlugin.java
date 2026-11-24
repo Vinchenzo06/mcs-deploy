@@ -83,6 +83,22 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
                 return true;
             });
         }
+        // Lot 76 : /jouer <jeu> lancé ici (PNJ FancyNpcs du lobby : action « player_command jouer speedrun »)
+        // -> le proxy trouve ou prépare un serveur à la demande. Tapée par un joueur, /jouer va
+        // directement au proxy ; cette commande sert aux PNJ, panneaux et menus.
+        PluginCommand jouer = getCommand("jouer");
+        if (jouer != null) {
+            jouer.setExecutor((sender, command, label, args) -> {
+                if (!(sender instanceof Player pl)) {
+                    sender.sendMessage("Commande réservée aux joueurs.");
+                } else if (args.length != 1 || !args[0].toLowerCase(java.util.Locale.ROOT).matches("[a-z0-9-]{2,24}")) {
+                    pl.sendMessage(error("Utilisation : /jouer <jeu> (ex. /jouer speedrun)"));
+                } else {
+                    menu.act(pl, "jouer", args[0].toLowerCase(java.util.Locale.ROOT));
+                }
+                return true;
+            });
+        }
         PluginCommand cmd = getCommand("farm");
         if (cmd != null) {
             cmd.setExecutor(this);

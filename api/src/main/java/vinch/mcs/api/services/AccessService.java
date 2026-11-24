@@ -305,6 +305,15 @@ public class AccessService {
 
     /** Le joueur (uuid) peut-il entrer sur ce serveur (nom Velocity) ? Appelé par le proxy. */
     @Transactional(readOnly = true)
+    /** Lot 76 : dernière entrée d'un joueur (les serveurs à la demande en trop sont supprimés après un jour sans personne) */
+    private void joined(Server s) {
+        try {
+            serverRepository.touchJoined(s.getId(), java.time.LocalDateTime.now());
+        } catch (Exception e) {
+            log.warn("Dernière entrée du serveur {} : {}", s.getId(), e.getMessage());
+        }
+    }
+
     public Map<String, Object> checkJoin(String velocityName, UUID uuid) {
         Optional<Server> server = serverRepository.findByVelocityName(velocityName);
         if (server.isEmpty()) {
@@ -321,9 +330,11 @@ public class AccessService {
         }
         if (consumePass(s.getId(), uuid)) {
             log.info("{} entre sur {} avec un laissez-passer", p.getMinecraftUsername(), s.getVelocityName());
+            joined(s);
             return Map.of("allowed", true, "reason", "pass");
         }
         if (rightsOf(p, s).contains(Right.JOIN)) {
+            joined(s);
             return Map.of("allowed", true, "reason", relation(p, s));
         }
         return Map.of("allowed", false,

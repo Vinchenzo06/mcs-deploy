@@ -59,6 +59,7 @@ public class Proxymanager {
     private PlayerSync playerSync;
     private ImgGate imgGate;
     private MenuRelay menuRelay;
+    private PoolJoin poolJoin;
     private FarmdbMembers farmdbMembers;
     private ImgRole imgRole;
 
@@ -334,6 +335,16 @@ public class Proxymanager {
             }
         } else if (!config.getFarmdbUrl().isBlank()) {
             logger.warn("/link désactivé : farmdb-token absent ou trop court");
+        }
+
+        // Lot 76 : /jouer <jeu> — serveurs à la demande (speedrun, monde neuf…)
+        poolJoin = new PoolJoin(server, apiClient, logger);
+        poolJoin.setPlugin(this);
+        commandManager.register(commandManager.metaBuilder("jouer").build(), poolJoin);
+        server.getScheduler().buildTask(this, poolJoin::tick).delay(java.time.Duration.ofSeconds(30))
+                .repeat(java.time.Duration.ofMinutes(1)).schedule();
+        if (menuRelay != null) {
+            menuRelay.setPoolJoin(poolJoin);
         }
 
         // /mcs sur le proxy : disponible sur le lobby et sur tous les serveurs de jeu
