@@ -82,6 +82,7 @@ public final class ImgFarmMod implements ClientModInitializer {
     boolean busy;
 
     private long tick;
+    private boolean pluginWarned; // lot 75 : prévenu une fois par connexion
     private int saveIn = 600;
     // Dernier bloc utilisé (clic droit) : pour savoir quel coffre vient de s'ouvrir
     private String lastUseDim;
@@ -250,6 +251,11 @@ public final class ImgFarmMod implements ClientModInitializer {
         }
         LocalPlayer p = mc.player;
         if (s.farm() && trackedItem == null && s.item != null && tick % 100 == 1) trackedItem = findItem(s.item).orElse(null);
+        if (!pluginWarned && tick % 100 == 50 && pluginServer()) {
+            pluginWarned = true;
+            say(Msg.info("Ce serveur a le plugin de la team : ta session du mod continue ici. Ne lance pas /farm en même temps "
+                    + "(ce serait compté deux fois)."));
+        }
         if (s.farm() && p != null && tracker != null && trackedItem != null) {
             long before = s.quantity;
             observe(mc, p, s);
@@ -324,6 +330,7 @@ public final class ImgFarmMod implements ClientModInitializer {
 
     private void onJoin() {
         lastMenu = null;
+        pluginWarned = false;
         if (tracker != null) tracker.reset();
         FarmSession s = session;
         if (s == null) return;
@@ -374,8 +381,33 @@ public final class ImgFarmMod implements ClientModInitializer {
         return true;
     }
 
+    // ---------- Lot 75 : un seul chemin pour la farm ----------
+
+    /**
+     * Ce serveur a-t-il le plugin img-farm de la team ? Ses commandes (/farm, /menu, et
+     * « imgfarm:farm ») sont dans l'arbre de commandes que le serveur envoie au client.
+     */
+    static boolean pluginServer() {
+        return Guard.call("détection du plugin", () -> {
+            var conn = Minecraft.getInstance().getConnection();
+            if (conn == null) return false;
+            var root = conn.getCommands().getRoot();
+            return root.getChild("imgfarm:farm") != null || (root.getChild("farm") != null && root.getChild("menu") != null);
+        }, false);
+    }
+
+    /** Sur un serveur avec le plugin, /farm mesure déjà la session côté serveur : deux sessions compteraient deux fois */
+    private boolean usePluginInstead(String farmArgs) {
+        if (!pluginServer()) return false;
+        say(Msg.info("Ce serveur a le plugin de la team : mesure ta session avec /farm (même chose, comptée par le serveur ; "
+                + "le mod sert ailleurs). ").append(Msg.button("/farm " + farmArgs, "/farm " + farmArgs,
+                "Lancer la session avec le plugin du serveur", ChatFormatting.GREEN)));
+        return true;
+    }
+
     void start(boolean auto, String rawItem, String goal) {
         if (blockIfSession() || busy) return;
+        if (usePluginInstead((auto ? "auto " : "start ") + rawItem + (goal == null || goal.isBlank() ? "" : " " + goal))) return;
         Optional<Item> found = findItem(rawItem.replace("minecraft:", ""));
         if (found.isEmpty()) {
             say(Msg.error("Item inconnu : " + rawItem + " (ex. iron_ingot, wheat)"));
@@ -454,6 +486,7 @@ public final class ImgFarmMod implements ClientModInitializer {
 
     void startConstruction(String rawPart) {
         if (blockIfSession() || busy) return;
+        if (usePluginInstead("construction" + (rawPart == null ? "" : " " + rawPart))) return;
         String part = rawPart == null ? "base" : rawPart.toLowerCase(Locale.ROOT);
         if (!part.equals("base") && !part.equals("module")) {
             say(Msg.error("/imgfarm construction base (une seule fois) ou /imgfarm construction module (un module)"));
@@ -790,6 +823,7 @@ public final class ImgFarmMod implements ClientModInitializer {
         say(Msg.line("/imgfarm construction [base | module]", "chrono de construction"));
         say(Msg.line("/imgfarm pause | reprendre | stop | annuler", ""));
         say(Msg.line("/imgfarm hud", "affiche ou cache le cadre de la session"));
+        say(Msg.line("Serveurs de la team", "ils ont le plugin : utilise /farm (même chose, sans le mod)"));
         say(Msg.line("/imgfarm lier <code> | compte | delier", "liaison au site (code : Mon profil → Mod Fabric)"));
         say(Component.literal("  Objectif : une durée (30m, 1h30) ou un nombre d'items (640). Sans objectif : /imgfarm stop.")
                 .withStyle(ChatFormatting.DARK_GRAY));

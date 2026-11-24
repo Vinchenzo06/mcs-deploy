@@ -9,6 +9,13 @@ team (Farming → Mes sessions), comme celles du plugin.
   un fichier par version de Minecraft (`img-farm-mod-1.0.0+mc26.3.jar`…). Pas de fichier pour ta version ?
   Le plus récent se charge aussi sur les versions suivantes et marche en général.
 
+## Sur les serveurs de la team : /farm
+
+Les serveurs de la team ont le plugin `img-farm` : la même session se mesure avec `/farm`, côté serveur.
+Le mod le voit (les commandes `/farm` et `/menu` du plugin sont dans l'arbre de commandes du serveur) :
+`/imgfarm start`, `auto` ou `construction` y proposent `/farm` (bouton) au lieu de lancer une 2e session
+qui compterait la même chose. Une session du mod déjà en cours continue, avec un avertissement une fois.
+
 ## Lier le mod au site
 
 1. Sur le site : **Mon profil → Mod Fabric → Lier le mod** (code de 8 caractères, 10 minutes).
