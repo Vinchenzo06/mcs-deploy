@@ -490,6 +490,13 @@ if [[ -f "$v" ]]; then
 else
   echo "  velocity.jar         version inconnue : sudo mcs-deploy plateforme"
 fi
+# Lot 70 : plugins du proxy (état de la dernière vérification, sudo mcs-proxy-plugins pour la refaire)
+if [[ -f /var/lib/mcs-status/proxy-plugins.json ]]; then
+  jq -r '.plugins[] | (if .update then "⚠" else " " end) + " " + (.label + "                    ")[0:20] + " " + (.current // "absent")
+         + (if .update then "  (" + .available + " compatible : la nuit si personne, ou sudo mcs-proxy-plugins --apply)" else "" end)' \
+    /var/lib/mcs-status/proxy-plugins.json 2>/dev/null
+  jq -r 'select(.lastResult != null and .lastResult != "ok") | "⚠ plugins du proxy    " + .lastMessage' /var/lib/mcs-status/proxy-plugins.json 2>/dev/null
+fi
 echo
 echo "=== Sauvegardes ==="
 if [[ ! -f /etc/mcs/backup/enabled ]]; then
@@ -1667,6 +1674,459 @@ EOF
   ok "https://$API_DOMAIN actif (canal des agents : $AGENT_API_URL)"
 }
 
+# Lot 70 : ViaVersion, ViaBackwards et LuckPerms du proxy tenus à jour, seulement vers une version
+# déclarée compatible avec le Velocity installé (Hangar) ; chaque nuit si personne n'est connecté,
+# avec retour arrière si un plugin ne charge pas. Velocity reste à la main (étape plateforme).
+install_proxy_plugins_tool() {
+  cat > /usr/local/bin/mcs-proxy-plugins <<'PYEOF'
+#!/usr/bin/env python3
+"""mcs-proxy-plugins (lot 70) : ViaVersion, ViaBackwards et LuckPerms du proxy Velocity, tenus
+à jour, mais seulement vers une version déclarée compatible avec le Velocity installé.
+
+  sudo mcs-proxy-plugins                  état : installé, disponible, compatible
+  sudo mcs-proxy-plugins --apply          met à jour maintenant (redémarre le proxy ; retour
+                                          arrière automatique si un plugin ne charge pas)
+  sudo mcs-proxy-plugins --auto           pareil, seulement si personne n'est connecté
+                                          (minuterie de la nuit : mcs-proxy-plugins.timer)
+  sudo mcs-proxy-plugins --install-missing  installe ceux qui manquent, sans redémarrer
+  --no-restart                            remplace les jars sans redémarrer (mcs-deploy plateforme)
+
+Velocity lui-même et la version de Minecraft des serveurs restent à la main
+(sudo mcs-deploy plateforme). Anciens jars gardés en .jar.old (Velocity ne les charge pas).
+"""
+import datetime
+import glob
+import hashlib
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import time
+import urllib.request
+import zipfile
+
+VDIR = '/opt/minecraft/velocity'
+PLUGINS = os.path.join(VDIR, 'plugins')
+STAGE = os.path.join(VDIR, '.plugins-new')
+# Lisible par le site IMG (Admin → Réseau) : /etc/mcs est fermé (700)
+STATUS = '/var/lib/mcs-status/proxy-plugins.json'
+ENV_FILE = '/etc/mcs/mcs.env'
+UA = 'mcs-deploy/0.3 (+https://github.com/Vinchenzo06/mcs-deploy)'
+HANGAR = 'https://hangar.papermc.io/api/v1/projects/{}/versions?limit=25&offset=0&channel=Release&platform=VELOCITY'
+LUCKPERMS = 'https://metadata.luckperms.net/data/all'
+SERVICE = 'minecraft-velocity'
+
+
+def say(msg):
+    print(msg, flush=True)
+
+
+def env():
+    out = {}
+    try:
+        with open(ENV_FILE) as f:
+            for line in f:
+                m = re.match(r'^\s*([A-Z_][A-Z0-9_]*)=(.*)$', line)
+                if m:
+                    out[m[1]] = m[2].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return out
+
+
+def get(url, binary=False, timeout=30):
+    req = urllib.request.Request(url, headers={'User-Agent': UA, 'Accept': '*/*'})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        data = r.read()
+    return data if binary else json.loads(data)
+
+
+def vkey(s):
+    return tuple(int(x) for x in re.findall(r'\d+', str(s or ''))[:4])
+
+
+def velocity_version():
+    """« 3.5 » : version majeure.mineure du Velocity installé (None si inconnue)"""
+    sources = []
+    try:
+        with open(os.path.join(VDIR, 'velocity.jar.url')) as f:
+            sources.append(os.path.basename(f.read().strip()))
+    except OSError:
+        pass
+    try:
+        with open(os.path.join(VDIR, 'logs', 'latest.log'), errors='replace') as f:
+            m = re.search(r'Booting up Velocity (\S+)', f.read(200000))
+            if m:
+                sources.append('velocity-' + m[1])
+    except OSError:
+        pass
+    sources.append('velocity-' + env().get('VELOCITY_VERSION', ''))
+    for s in sources:
+        m = re.search(r'velocity-(\d+)\.(\d+)', s)
+        if m:
+            return f'{m[1]}.{m[2]}'
+    return None
+
+
+def covers(deps, mm):
+    """La liste de Hangar (« 3.4 », « 3.5 » ou « 3.4-3.5 ») couvre-t-elle Velocity mm ?"""
+    want = vkey(mm)[:2]
+    for d in deps or []:
+        d = str(d).strip()
+        if d.endswith(('.x', '.*')):
+            if vkey(d)[:1] == want[:1]:
+                return True
+            continue
+        parts = [p for p in re.split(r'\s*-\s*', d) if p]
+        if not parts:
+            continue
+        lo, hi = vkey(parts[0])[:2], vkey(parts[-1])[:2]
+        if lo and hi and lo <= want <= hi:
+            return True
+    return False
+
+
+def hangar_versions(slug, mm):
+    """{version: {url, sha256, file}} des versions Release compatibles avec Velocity mm"""
+    out = {}
+    for v in get(HANGAR.format(slug)).get('result', []):
+        if str((v.get('channel') or {}).get('name', '')).lower() != 'release':
+            continue
+        if not covers((v.get('platformDependencies') or {}).get('VELOCITY'), mm):
+            continue
+        d = (v.get('downloads') or {}).get('VELOCITY') or {}
+        url = d.get('downloadUrl') or d.get('externalUrl')
+        if not url or not re.match(r'^\d+\.\d+', str(v.get('name', ''))):
+            continue
+        fi = d.get('fileInfo') or {}
+        out[v['name']] = {'version': v['name'], 'url': url, 'sha256': fi.get('sha256Hash'),
+                          'file': fi.get('name') or f'{slug}-{v["name"]}.jar'}
+    return out
+
+
+def plugin_id(path):
+    try:
+        with zipfile.ZipFile(path) as z:
+            meta = json.loads(z.read('velocity-plugin.json'))
+        return str(meta.get('id', '')), str(meta.get('version', ''))
+    except Exception:
+        return None, None
+
+
+def installed():
+    out = {}
+    for p in sorted(glob.glob(os.path.join(PLUGINS, '*.jar'))):
+        pid, ver = plugin_id(p)
+        if pid:
+            out[pid] = {'path': p, 'version': ver}
+    return out
+
+
+def plan(mm):
+    """Ce qui est installé et la version cible de chaque plugin géré"""
+    inst = installed()
+    items = []
+    via_note = None
+    common = []
+    if mm is None:
+        via_note = 'version de Velocity inconnue : rien ne change'
+    else:
+        try:
+            via, back = hangar_versions('ViaVersion', mm), hangar_versions('ViaBackwards', mm)
+            # ViaVersion et ViaBackwards sortent ensemble : on prend la plus récente des deux
+            common = sorted(set(via) & set(back), key=vkey, reverse=True)
+            if not common:
+                via_note = f'aucune version déclarée compatible avec Velocity {mm} pour l\'instant'
+        except Exception as e:
+            via_note = f'Hangar injoignable ({e})'
+    for pid, label, src in (('viaversion', 'ViaVersion', 'via'), ('viabackwards', 'ViaBackwards', 'back')):
+        target = None
+        if common:
+            target = (via if src == 'via' else back)[common[0]]
+        items.append({'id': pid, 'label': label, 'current': inst.get(pid, {}).get('version'),
+                      'path': inst.get(pid, {}).get('path'), 'target': target, 'note': via_note})
+    lp_target, lp_note = None, None
+    cur = inst.get('luckperms', {}).get('version')
+    try:
+        meta = get(LUCKPERMS)
+        url = (meta.get('downloads') or {}).get('velocity')
+        ver = str(meta.get('version') or '')
+        if url and ver:
+            if cur and vkey(ver)[:1] != vkey(cur)[:1]:
+                lp_note = f'LuckPerms {ver} : version majeure différente, gardée à la main'
+            elif mm and vkey(mm)[:1] != (3,):
+                lp_note = f'Velocity {mm} : compatibilité de LuckPerms à vérifier à la main'
+            else:
+                lp_target = {'version': ver, 'url': url, 'sha256': None, 'file': os.path.basename(url)}
+    except Exception as e:
+        lp_note = f'metadata.luckperms.net injoignable ({e})'
+    items.append({'id': 'luckperms', 'label': 'LuckPerms', 'current': cur,
+                  'path': inst.get('luckperms', {}).get('path'), 'target': lp_target, 'note': lp_note})
+    for it in items:
+        t = it['target']
+        it['update'] = bool(t) and (not it['current'] or vkey(t['version']) > vkey(it['current']))
+    return items
+
+
+def players_online(host):
+    """Joueurs connectés au proxy (ping de la liste des serveurs) ; None si inconnu"""
+    def varint(n):
+        out = b''
+        n &= 0xFFFFFFFF
+        while True:
+            b = n & 0x7F
+            n >>= 7
+            out += bytes([b | (0x80 if n else 0)])
+            if not n:
+                return out
+
+    def read_varint(s):
+        n = shift = 0
+        while True:
+            b = s.recv(1)
+            if not b:
+                raise IOError('fin de flux')
+            n |= (b[0] & 0x7F) << shift
+            shift += 7
+            if not b[0] & 0x80:
+                return n
+
+    try:
+        with socket.create_connection(('127.0.0.1', 25565), timeout=5) as s:
+            h = host.encode()
+            data = varint(0) + varint(767) + varint(len(h)) + h + (25565).to_bytes(2, 'big') + varint(1)
+            s.sendall(varint(len(data)) + data + varint(1) + varint(0))
+            read_varint(s)
+            read_varint(s)
+            size = read_varint(s)
+            raw = b''
+            while len(raw) < size:
+                chunk = s.recv(size - len(raw))
+                if not chunk:
+                    break
+                raw += chunk
+        return int(json.loads(raw.decode('utf-8', 'replace'))['players']['online'])
+    except Exception:
+        return None
+
+
+def read_status():
+    try:
+        with open(STATUS) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def write_status(mm, items, result=None, message=None, failed=None):
+    old = read_status()
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
+    st = {
+        'checkedAt': now,
+        'velocity': mm,
+        'plugins': [{'id': i['id'], 'label': i['label'], 'current': i['current'],
+                     'available': (i['target'] or {}).get('version'), 'update': i['update'],
+                     'note': i['note']} for i in items],
+        'lastResult': result or old.get('lastResult'),
+        'lastMessage': message or old.get('lastMessage'),
+        'lastRunAt': now if result else old.get('lastRunAt'),
+        # Versions qui ont fait échouer le démarrage : la nuit, on attend une version plus récente
+        'failed': old.get('failed', {}) if failed is None else failed,
+    }
+    os.makedirs(os.path.dirname(STATUS), mode=0o755, exist_ok=True)
+    tmp = STATUS + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(st, f, ensure_ascii=False, indent=1)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, STATUS)
+
+
+def show(mm, items):
+    say(f'Velocity : {mm or "version inconnue"}')
+    for i in items:
+        t = (i['target'] or {}).get('version')
+        line = f'  {i["label"]:<13} installé {i["current"] or "-":<12}'
+        if i['update']:
+            line += f' → {t} disponible (compatible)'
+        elif t:
+            line += ' à jour'
+        say(line + (f'   ({i["note"]})' if i['note'] else ''))
+
+
+def stage(item):
+    t = item['target']
+    data = get(t['url'], binary=True, timeout=180)
+    if t.get('sha256') and hashlib.sha256(data).hexdigest().lower() != str(t['sha256']).lower():
+        raise ValueError(f'{item["label"]} : empreinte SHA-256 différente de celle de Hangar')
+    os.makedirs(STAGE, exist_ok=True)
+    path = os.path.join(STAGE, os.path.basename(t['file']))
+    with open(path, 'wb') as f:
+        f.write(data)
+    pid, _ = plugin_id(path)
+    if pid != item['id']:
+        raise ValueError(f'{item["label"]} : le fichier téléchargé n\'est pas le bon plugin ({pid})')
+    return path
+
+
+def swap(item, new_path):
+    """Remplace le jar ; renvoie de quoi revenir en arrière"""
+    st = os.stat(PLUGINS)
+    for old in glob.glob(os.path.join(PLUGINS, '*.jar.old')):
+        if plugin_id(old)[0] == item['id']:
+            os.remove(old)
+    backup = None
+    if item['path'] and os.path.exists(item['path']):
+        backup = item['path'] + '.old'
+        os.replace(item['path'], backup)
+    dest = os.path.join(PLUGINS, os.path.basename(new_path))
+    shutil.move(new_path, dest)
+    os.chown(dest, st.st_uid, st.st_gid)
+    os.chmod(dest, 0o644)
+    return {'new': dest, 'backup': backup, 'orig': item['path']}
+
+
+def rollback(changes):
+    for c in changes:
+        if os.path.exists(c['new']):
+            os.remove(c['new'])
+        if c['backup'] and os.path.exists(c['backup']):
+            os.replace(c['backup'], c['orig'])
+
+
+def restart_and_check(ids):
+    since = time.strftime('%Y-%m-%d %H:%M:%S')
+    subprocess.run(['systemctl', 'restart', SERVICE], check=False)
+    deadline = time.time() + 180
+    while time.time() < deadline:
+        time.sleep(5)
+        log = subprocess.run(['journalctl', '-u', SERVICE, '--since', since, '--no-pager', '-o', 'cat'],
+                             capture_output=True, text=True).stdout
+        if re.search(r'Done \(', log):
+            missing = [i for i in ids if not re.search(r'Loaded plugin ' + re.escape(i) + r' ', log)]
+            return not missing, missing
+    return False, ids
+
+
+def apply(items, restart=True, only_missing=False):
+    todo = [i for i in items if i['update'] and (not only_missing or not i['current'])]
+    if not todo:
+        return 'ok', 'Rien à mettre à jour'
+    staged = []
+    try:
+        for i in todo:
+            staged.append((i, stage(i)))
+    except Exception as e:
+        shutil.rmtree(STAGE, ignore_errors=True)
+        return 'erreur', f'Téléchargement : {e} (rien n\'a changé)'
+    changes = [swap(i, p) for i, p in staged]
+    shutil.rmtree(STAGE, ignore_errors=True)
+    names = ', '.join(f'{i["label"]} {i["target"]["version"]}' for i in todo)
+    if not restart:
+        return 'ok', f'Installé (au prochain démarrage du proxy) : {names}'
+    say(f'Redémarrage du proxy avec : {names}')
+    ok, missing = restart_and_check([i['id'] for i in items if i['current'] or i in todo])
+    if ok:
+        return 'ok', f'Mis à jour : {names}'
+    say(f'  ! Plugin(s) non chargé(s) : {", ".join(missing)}. Retour aux anciennes versions.')
+    rollback(changes)
+    ok2, _ = restart_and_check([])
+    return 'retour-arriere', (f'Échec avec {names} (non chargé : {", ".join(missing)}) : anciennes versions remises'
+                              + ('' if ok2 else ' MAIS le proxy ne redémarre pas : journalctl -u minecraft-velocity -n 100'))
+
+
+def main(argv):
+    if os.geteuid() != 0:
+        say('Lance avec sudo')
+        return 1
+    args = set(argv)
+    if '-h' in args or '--help' in args:
+        say(__doc__)
+        return 0
+    if not os.path.isdir(PLUGINS):
+        say(f'{PLUGINS} introuvable : sudo mcs-deploy velocity')
+        return 1
+    mm = velocity_version()
+    items = plan(mm)
+    show(mm, items)
+    pending = [i for i in items if i['update']]
+    if '--install-missing' in args:
+        result, msg = apply(items, restart=False, only_missing=True)
+        say(msg)
+        write_status(mm, plan(mm), result, msg)
+        return 0 if result == 'ok' else 1
+    if not ({'--apply', '--auto'} & args):
+        write_status(mm, items)
+        if pending:
+            say('Pour mettre à jour maintenant : sudo mcs-proxy-plugins --apply (sinon : cette nuit si personne n\'est connecté)')
+        return 0
+    if not pending:
+        write_status(mm, items, 'ok', 'Déjà à jour')
+        say('Déjà à jour')
+        return 0
+    if '--auto' in args:
+        failed = read_status().get('failed', {})
+        for i in pending:
+            if failed.get(i['id']) == i['target']['version']:
+                i['update'] = False
+                i['note'] = f'{i["target"]["version"]} a déjà échoué : en attente d\'une version plus récente'
+        pending = [i for i in items if i['update']]
+        if not pending:
+            write_status(mm, items, 'ok', 'Rien de nouveau à essayer')
+            say('Rien de nouveau à essayer')
+            return 0
+    restart = '--no-restart' not in args
+    if restart:
+        n = players_online(env().get('IMG_HOST') or 'localhost')
+        if '--auto' in args and n != 0:
+            msg = f'Reporté : {n} joueur(s) connecté(s)' if n else 'Reporté : nombre de joueurs inconnu'
+            write_status(mm, items, 'reporte', msg)
+            say(msg)
+            return 0
+        if n and sys.stdin.isatty():
+            if input(f'{n} joueur(s) seront déconnectés une minute. Continuer ? [o/N] ').strip().lower() not in ('o', 'oui', 'y'):
+                return 0
+    tried = {i['id']: i['target']['version'] for i in pending}
+    result, msg = apply(items, restart=restart)
+    failed = dict(read_status().get('failed', {}))
+    for pid, ver in tried.items():
+        if result == 'retour-arriere':
+            failed[pid] = ver
+        else:
+            failed.pop(pid, None)
+    write_status(mm, plan(mm), result, msg, failed)
+    say(msg)
+    return 0 if result == 'ok' else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))
+PYEOF
+  chmod 755 /usr/local/bin/mcs-proxy-plugins
+  cat > /etc/systemd/system/mcs-proxy-plugins.service <<'EOF'
+[Unit]
+Description=MCS - plugins du proxy (ViaVersion, ViaBackwards, LuckPerms) à jour et compatibles
+After=network-online.target minecraft-velocity.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mcs-proxy-plugins --auto
+EOF
+  cat > /etc/systemd/system/mcs-proxy-plugins.timer <<'EOF'
+[Unit]
+Description=MCS - plugins du proxy, chaque nuit (seulement si personne n'est connecté)
+[Timer]
+OnCalendar=*-*-* 04:47
+RandomizedDelaySec=10min
+Persistent=true
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now mcs-proxy-plugins.timer >/dev/null 2>&1 || true
+}
+
 step_velocity() {
   step "Velocity + proxymanager"
   build_jar "$SRC_PROXY" "$JARS_DIR/velocity/proxymanager.jar"
@@ -1677,6 +2137,7 @@ step_velocity() {
     [[ -n "$url" ]] || url=$(papermc_url velocity "$VELOCITY_VERSION")
     [[ -n "$url" ]] || die "Velocity introuvable via l'API PaperMC (renseigne VELOCITY_URL dans mcs.env)"
     download "$url" "$VELOCITY_DIR/velocity.jar"
+    echo "$url" > "$VELOCITY_DIR/velocity.jar.url"
   fi
 
   shopt -s nullglob
@@ -1686,6 +2147,11 @@ step_velocity() {
   rm -f "$VELOCITY_DIR"/plugins/proxymanager*.jar
   cp -f "${jars[@]}" "$VELOCITY_DIR/plugins/"
   install_luckperms velocity "$VELOCITY_DIR/plugins" LUCKPERMS_VELOCITY_URL
+  # Lot 70 : ViaVersion + ViaBackwards (un client plus récent ou plus ancien que le serveur
+  # passe quand même), installés s'ils manquent ; mis à jour ensuite par la minuterie de la nuit
+  install_proxy_plugins_tool
+  mcs-proxy-plugins --install-missing | sed 's/^/    /' \
+    || warn "ViaVersion/ViaBackwards non installés (Hangar injoignable ?) : sudo mcs-proxy-plugins --apply plus tard"
   # Ambassador : changement de serveur pour les clients Forge 1.13–1.20.1 (lot 36)
   install_plugin ambassador "$VELOCITY_DIR/plugins" Ambassador adde0109/Ambassador velocity
   [[ -f "$LP_ENV_FILE" ]] || write_lp_env
@@ -1843,9 +2309,9 @@ latest_velocity_url() {
 # version de Minecraft : sans un Velocity qui la connaît, ses joueurs ne peuvent pas se connecter.
 # Les anciens jars sont gardés en .old (retour : les remettre et redémarrer).
 step_plateforme() {
-  step "Plateforme : Velocity et LuckPerms"
+  step "Plateforme : Velocity, puis ViaVersion, ViaBackwards et LuckPerms compatibles"
   need_java
-  local url changed=false lp cur
+  local url changed=false
   url=${VELOCITY_URL:-}
   [[ -n "$url" ]] || url=$(latest_velocity_url) || true
   [[ -n "$url" ]] || die "Dernier Velocity introuvable (API PaperMC injoignable ?)"
@@ -1858,28 +2324,19 @@ step_plateforme() {
     ok "Velocity : $(basename "$url")"
     changed=true
   fi
-  lp=$(curl -fsSL https://metadata.luckperms.net/data/all 2>/dev/null | jq -r '.downloads.velocity // empty' || true)
-  if [[ -n "$lp" ]]; then
-    cur=$(compgen -G "$VELOCITY_DIR/plugins/LuckPerms-*.jar" | head -1 || true)
-    if [[ -n "$cur" && "$(basename "$cur")" == "$(basename "$lp")" ]]; then
-      ok "LuckPerms déjà à jour ($(basename "$lp"))"
-    elif download "$lp" "$VELOCITY_DIR/plugins/$(basename "$lp").new"; then
-      [[ -n "$cur" ]] && mv -f "$cur" "$cur.old"
-      mv -f "$VELOCITY_DIR/plugins/$(basename "$lp").new" "$VELOCITY_DIR/plugins/$(basename "$lp")"
-      ok "LuckPerms : $(basename "$lp")"
-      changed=true
-    else
-      warn "LuckPerms : téléchargement échoué, version actuelle gardée"
-    fi
-  else
-    warn "LuckPerms : dernière version introuvable, gardée telle quelle"
-  fi
+  # Lot 70 : plugins du proxy vers la dernière version compatible avec CE Velocity
+  [[ -x /usr/local/bin/mcs-proxy-plugins ]] || install_proxy_plugins_tool
+  local out
+  out=$(mcs-proxy-plugins --apply --no-restart 2>&1) || true
+  echo "$out" | sed 's/^/    /'
+  grep -q "^Installé" <<<"$out" && changed=true
   chown -R "$MC_USER:$MC_USER" "$VELOCITY_DIR"
   if [[ "$changed" == "true" ]]; then
     warn "Redémarrage du proxy : les joueurs connectés sont déconnectés une minute"
     restart_service minecraft-velocity
     wait_port 25565 120 || die "Velocity ne redémarre pas : journalctl -u minecraft-velocity -n 80 (ancien jar : velocity.jar.old)"
     ok "Proxy relancé"
+    mcs-proxy-plugins >/dev/null 2>&1 || true # état à jour pour Admin → Réseau
   fi
 }
 

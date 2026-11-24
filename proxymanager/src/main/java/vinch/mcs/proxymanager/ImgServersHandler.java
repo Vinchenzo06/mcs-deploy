@@ -35,6 +35,9 @@ import java.util.regex.Pattern;
  *   POST /img/servers/{id}/files/delete   {uuid, path}
  *   POST /img/servers/{id}/files/archive  {uuid, dir, paths, name}  (lot 59 ; long : « pending » après 20 s)
  *   POST /img/servers/{id}/files/extract  {uuid, path}
+ * Plugins/mods Modrinth (lot 70, droit FILES ; appliqués au prochain démarrage) :
+ *   POST /img/servers/{id}/modrinth       {uuid}            -> {type, version, supported, kind, projects}
+ *   POST /img/servers/{id}/modrinth       {uuid, projects}  -> nouvelle liste
  * Sauvegardes (lot 58, propriétaire et admins seulement, vérifié par l'API) :
  *   POST /img/servers/{id}/backups                     {uuid}  -> liste, réglages, limites
  *   POST /img/servers/{id}/backups/now                 {uuid}  -> sauvegarde manuelle
@@ -168,6 +171,15 @@ class ImgServersHandler {
             jsonResult(api.console(id, pid, command), reply);
         } else if (parts.length == 2 && what.equals("logs")) {
             jsonResult(api.serverLogs(id, pid, body.path("source").asText("game"), body.path("offset").asLong(-1)), reply);
+        } else if (parts.length == 2 && what.equals("modrinth")) {
+            if (body.has("projects") && body.get("projects").isArray()) {
+                java.util.List<String> projects = new java.util.ArrayList<>();
+                body.get("projects").forEach(p -> projects.add(p.asText("")));
+                logger.info("Site IMG : plugins Modrinth du serveur {} par le joueur {} : {}", id, pid, projects);
+                jsonResult(api.setModrinth(id, pid, projects), reply);
+            } else {
+                jsonResult(api.getModrinth(id, pid), reply);
+            }
         } else if (parts.length == 2 && what.equals("files")) {
             jsonResult(api.listFiles(id, pid, body.path("path").asText("")), reply);
         } else if (parts.length == 3 && what.equals("files") && parts[2].equals("download")) {

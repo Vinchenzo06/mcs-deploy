@@ -84,6 +84,7 @@ public class ServerService {
         data.put("java", java);
         ProxyForwarding.apply(data, server);
         TeamPlugins.apply(data, server);
+        ModrinthPlugins.apply(data, server);
         if (restore != null) {
             data.put("restore", restore);
         }
@@ -588,6 +589,7 @@ public class ServerService {
         data.put("java", JavaVersions.effective(server));
         ProxyForwarding.apply(data, server);
         TeamPlugins.apply(data, server);
+        ModrinthPlugins.apply(data, server);
         if (restore != null) {
             data.put("restore", restore);
         }

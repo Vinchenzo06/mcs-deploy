@@ -128,6 +128,10 @@ public class Server {
     @Column(name = "inactivity_warned_at")
     private LocalDateTime inactivityWarnedAt;
 
+    // Lot 70 : plugins ou mods Modrinth (slugs séparés par des virgules ; null = aucun)
+    @Column(name = "modrinth_projects", columnDefinition = "TEXT")
+    private String modrinthProjects;
+
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) createdAt = LocalDateTime.now();

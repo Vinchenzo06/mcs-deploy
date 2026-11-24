@@ -449,6 +449,16 @@ public class ApiClient {
         return call("POST", "/api/v1/servers/" + serverId + "/restore", body, Duration.ofMinutes(21));
     }
 
+    /** Lot 70 : plugins/mods Modrinth d'un serveur */
+    public CompletableFuture<JsonNode> getModrinth(long serverId, long playerId) {
+        return call("GET", "/api/v1/servers/" + serverId + "/modrinth?playerId=" + playerId, null, Duration.ofSeconds(10));
+    }
+
+    public CompletableFuture<JsonNode> setModrinth(long serverId, long playerId, java.util.List<String> projects) {
+        return call("PUT", "/api/v1/servers/" + serverId + "/modrinth",
+                java.util.Map.of("playerId", playerId, "projects", projects), Duration.ofSeconds(10));
+    }
+
     /** Lot 69 : machines du réseau (admins) */
     public CompletableFuture<JsonNode> networkOverview(long playerId) {
         return call("GET", "/api/v1/admin/nodes/overview?playerId=" + playerId, null, Duration.ofSeconds(10));

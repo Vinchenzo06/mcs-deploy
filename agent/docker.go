@@ -31,6 +31,10 @@ type CreateServerRequest struct {
 	Restore *restoreRequest `json:"restore,omitempty"`
 	// Plugins de la team IMG (lot 46) : nil = ne rien changer
 	TeamPlugins *[]teamPlugin `json:"team_plugins,omitempty"`
+	// Plugins/mods Modrinth choisis pour ce serveur (lot 70) : nil = API d'avant, ne rien changer
+	ModrinthProjects *[]string `json:"modrinth_projects,omitempty"`
+	// Liste vidée : MODRINTH_PROJECTS vide pour que l'image retire les fichiers posés avant
+	clearModrinth bool
 }
 
 // ContainerName retourne le nom standardisé du conteneur pour un serveur donné

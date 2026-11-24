@@ -77,16 +77,57 @@ func forwardingMods(req CreateServerRequest) []string {
 	return mods
 }
 
-// forwardingArgs : variables et étiquette du conteneur pour le forwarding
+var modrinthSlug = regexp.MustCompile(`^[A-Za-z0-9_-]{2,64}$`)
+
+// userModrinth (lot 70) : projets Modrinth choisis pour ce serveur (valides seulement)
+func userModrinth(req CreateServerRequest) []string {
+	if req.ModrinthProjects == nil || mapServerType(req.Type) == "VANILLA" {
+		return nil
+	}
+	var out []string
+	for _, p := range *req.ModrinthProjects {
+		if modrinthSlug.MatchString(p) && len(out) < 40 {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// forwardingArgs : variables et étiquettes du conteneur pour le forwarding et les projets
+// Modrinth. Les projets choisis sont « optionnels » (suffixe ?) : sans version compatible avec
+// ce Minecraft, l'image les ignore au lieu d'empêcher le démarrage ; à chaque démarrage elle
+// prend leur dernière version compatible et retire les fichiers des projets enlevés.
 func forwardingArgs(req CreateServerRequest) []string {
 	args := []string{"--label", "mcs.fwd=" + req.Forwarding}
-	if mods := forwardingMods(req); len(mods) > 0 {
+	projects := forwardingMods(req)
+	user := userModrinth(req)
+	if req.ModrinthProjects != nil {
+		args = append(args, "--label", "mcs.modrinth="+strings.Join(user, ","))
+	}
+	for _, p := range user {
+		projects = append(projects, p+"?")
+	}
+	if len(projects) > 0 || req.clearModrinth {
 		args = append(args,
-			"-e", "MODRINTH_PROJECTS="+strings.Join(mods, ","),
+			"-e", "MODRINTH_PROJECTS="+strings.Join(projects, ","),
 			"-e", "MODRINTH_DOWNLOAD_DEPENDENCIES=required",
 		)
 	}
 	return args
+}
+
+// containerModrinth : projets Modrinth avec lesquels le conteneur a été créé ("" = aucun)
+func containerModrinth(serverID int64) string {
+	out, err := exec.Command("docker", "inspect", "-f", `{{index .Config.Labels "mcs.modrinth"}}`,
+		containerName(serverID)).Output()
+	if err != nil {
+		return ""
+	}
+	v := strings.TrimSpace(string(out))
+	if v == "<no value>" {
+		return ""
+	}
+	return v
 }
 
 // containerForwarding : mode avec lequel le conteneur a été créé ("" = avant le lot 36)

@@ -146,9 +146,19 @@ func handleStartServer(conn *websocket.Conn, config *Config, commandId string, m
 				sendCommandResult(conn, commandId, map[string]interface{}{"server_id": serverID, "status": "started"})
 				return
 			}
-			if needsForwardingMods(req) && containerForwarding(serverID) != req.Forwarding {
-				// Conteneur créé sans les mods de forwarding : recréé avec (fichiers intacts)
-				log.Printf("Serveur %d : conteneur recréé pour le forwarding %s", serverID, req.Forwarding)
+			// Lot 70 : liste Modrinth changée depuis la création du conteneur → recréé (fichiers intacts)
+			modrinthChanged := false
+			if req.ModrinthProjects != nil {
+				before, after := containerModrinth(serverID), strings.Join(userModrinth(req), ",")
+				if before != after {
+					modrinthChanged = true
+					req.clearModrinth = after == "" && before != ""
+				}
+			}
+			if (needsForwardingMods(req) && containerForwarding(serverID) != req.Forwarding) || modrinthChanged {
+				// Conteneur créé sans les mods de forwarding ou avec une autre liste Modrinth :
+				// recréé avec (fichiers intacts)
+				log.Printf("Serveur %d : conteneur recréé (forwarding %s, projets Modrinth %v)", serverID, req.Forwarding, userModrinth(req))
 				if err := RecreateServer(config.Docker.DataPath, req, true); err != nil {
 					sendCommandFailure(conn, commandId, "start_failed", err)
 					return

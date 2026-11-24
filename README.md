@@ -98,9 +98,10 @@ sudo mcs-admin TonPseudo
 Chaque étape note la version déployée dans `/etc/mcs/deployed/`. Les étapes à la main
 (`sudo mcs-deploy api`, etc.) marchent toujours pareil.
 
-Nouvelle version de Minecraft : `sudo mcs-deploy plateforme` le jour de la sortie (sinon les
-joueurs qui ont mis leur jeu à jour ne passent pas le proxy), et une ligne dans
-`img-farm-mod/versions.json` pour le mod. Le site importe les nouveaux items tout seul.
+Nouvelle version de Minecraft : ViaVersion sur le proxy laisse en général passer les joueurs
+qui ont mis leur jeu à jour dès que sa version compatible sort (la minuterie de la nuit la
+prend). `sudo mcs-deploy plateforme` quand tu veux le Velocity qui la connaît, et une ligne
+dans `img-farm-mod/versions.json` pour le mod. Le site importe les nouveaux items tout seul.
 
 ## Commandes du VPS
 
@@ -109,7 +110,8 @@ joueurs qui ont mis leur jeu à jour ne passent pas le proxy), et une ligne dans
 | `sudo img-update` | Le site IMG puis MCS (`mcs-deploy auto`) : la commande après chaque push |
 | `sudo mcs-deploy [étapes]` | Récupère GitHub, compile, installe |
 | `sudo mcs-deploy auto` | Seulement les étapes dont le code a changé |
-| `sudo mcs-deploy plateforme` | Velocity et LuckPerms à leur dernière version (ancien jar gardé en `.old`) |
+| `sudo mcs-deploy plateforme` | Velocity à sa dernière version, puis ses plugins vers une version compatible (anciens jars gardés en `.old`) |
+| `sudo mcs-proxy-plugins [--apply]` | ViaVersion, ViaBackwards, LuckPerms du proxy : état, ou mise à jour tout de suite |
 | `sudo mcs-status` | État des services, ports et machines volontaires |
 | `sudo mcs-add-node [--ssh] [--owner <pseudo>] [nom]` | Code de jumelage pour une nouvelle machine |
 | `sudo mcs-node-owner [<id> <pseudo>\|--none]` | Joueur propriétaire (hébergeur) d'une machine |
@@ -361,6 +363,15 @@ Fabric seulement (pas Forge), Minecraft 26.2 et plus, avec Fabric API. Détails 
 - **Site** (items, noms, icônes) : tout seul, vérifié chaque jour (Admin → Items pour le faire tout de suite).
 - **Serveurs MCS** : `LATEST` prend la nouvelle version ; Java choisi tout seul (26.x et plus : la plus
   récente). `/mcs create` propose les 4 dernières versions de Mojang (lues toutes les 12 h par le proxy).
+- **Proxy** (lot 70) : ViaVersion + ViaBackwards sur Velocity. Chaque nuit vers 4 h 50,
+  `mcs-proxy-plugins.timer` prend leur dernière version (et celle de LuckPerms) **déclarée compatible
+  avec le Velocity installé** (Hangar), seulement si personne n'est connecté ; si un plugin ne charge
+  pas, les anciennes versions sont remises et cette version n'est plus réessayée la nuit. Velocity
+  reste à la main (`sudo mcs-deploy plateforme`). Ne mets pas ViaVersion sur les serveurs eux-mêmes.
+- **Plugins et mods des serveurs** (lot 70) : onglet **Plugins** (ou Mods) de la page d'un serveur sur
+  le site. Liste Modrinth gardée par MCS ; à chaque démarrage, l'image prend la dernière version
+  compatible avec la version du serveur et ignore un projet qui n'en a pas (le serveur démarre quand
+  même). Agent 0.20.0 nécessaire (`--update-agent`).
 - **Plugin img-farm** : rien à faire (API Paper 1.21.4, marche sur les versions suivantes ; les nouveaux
   items sont reconnus dès que le serveur tourne en nouvelle version).
 - **Mod** : ajouter une ligne à `img-farm-mod/versions.json` (version de Fabric API sur
