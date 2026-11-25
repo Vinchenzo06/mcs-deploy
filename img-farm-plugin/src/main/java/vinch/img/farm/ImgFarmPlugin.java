@@ -111,6 +111,23 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
             getServer().getPluginManager().registerEvents(perms, this);
             perms.applyOnline();
         }
+        // Lot 76c : panneaux de réglage de WorldReset dans le limbo (fichier du modèle)
+        WorldResetPanel panel = WorldResetPanel.load(this);
+        if (panel != null) {
+            getServer().getPluginManager().registerEvents(panel, this);
+            panel.start();
+        }
+        PluginCommand limbo = getCommand("limbo");
+        if (limbo != null) {
+            limbo.setExecutor((sender, command, label, args) -> {
+                if (!(sender instanceof Player pl)) {
+                    sender.sendMessage("Commande réservée aux joueurs.");
+                } else if (panel == null || !panel.toLimbo(pl)) {
+                    pl.sendMessage(error("Pas de limbo WorldReset sur ce serveur."));
+                }
+                return true;
+            });
+        }
         getServer().getScheduler().runTaskTimer(this, this::everySecond, 20L, 20L);
         getLogger().info("img-farm prêt : /farm (sessions envoyées au site par le proxy, canal " + Bridge.CHANNEL + ")");
     }

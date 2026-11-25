@@ -23,7 +23,7 @@ class PoolsTest {
         Path file = Path.of("..", "deploy", "pools", "pools.json");
         Pools.Config c = Pools.parse(JSON.readTree(Files.readAllBytes(file)));
         assertNull(c.owner());
-        assertEquals(List.of("speedrun", "monde-neuf"), c.pools().stream().map(Pools.Pool::name).toList());
+        assertEquals(List.of("worldreset"), c.pools().stream().map(Pools.Pool::name).toList());
         Pools.Pool s = c.pools().get(0);
         assertEquals(ServerType.PAPER, s.type());
         assertEquals(1, s.keep());

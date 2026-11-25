@@ -93,6 +93,11 @@ final class PoolJoin implements SimpleCommand {
                 return;
             }
             pools = r;
+            // Un seul jeu : on y va directement
+            if (r.path("pools").size() == 1) {
+                join(player, r.path("pools").get(0).path("name").asText());
+                return;
+            }
             player.sendMessage(info("Jeux à la demande (un serveur rien que pour toi) :"));
             for (JsonNode x : r.path("pools")) {
                 String n = x.path("name").asText();

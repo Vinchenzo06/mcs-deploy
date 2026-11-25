@@ -7,3 +7,4 @@ permissions:
   - worldreset.timer.*
   - worldreset.seed.use
   - worldreset.filter.*
+  - worldreset.limbo.self

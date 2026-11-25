@@ -208,7 +208,23 @@ public class PoolService {
      */
     @Scheduled(initialDelay = 180_000, fixedDelay = 600_000)
     public void maintain() {
-        for (Pools.Pool p : Pools.config().pools()) {
+        List<Pools.Pool> pools = Pools.config().pools();
+        // Groupe retiré de pools.json (ex. speedrun et monde-neuf → worldreset) : ses serveurs
+        // arrêtés sont supprimés. Jamais quand pools.json manque ou est vide (fichier illisible…)
+        if (!pools.isEmpty()) {
+            Set<String> names = new HashSet<>(pools.stream().map(Pools.Pool::name).toList());
+            for (Server s : serverRepository.findByPoolIsNotNull()) {
+                if (!names.contains(s.getPool()) && s.getStatus() == ServerStatus.STOPPED) {
+                    try {
+                        log.info("Serveur à la demande {} : groupe « {} » retiré, supprimé", s.getName(), s.getPool());
+                        serverService.deleteServer(s.getId(), true);
+                    } catch (Exception e) {
+                        log.warn("Suppression de {} : {}", s.getName(), e.getMessage());
+                    }
+                }
+            }
+        }
+        for (Pools.Pool p : pools) {
             try {
                 List<Server> list = members(p.name());
                 if (list.size() < p.keep() && !creating.contains(p.name())) {

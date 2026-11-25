@@ -3,6 +3,7 @@ version: ${project.version}
 main: vinch.img.farm.ImgFarmPlugin
 api-version: '1.21'
 authors: [IMG]
+softdepend: [WorldReset]
 description: Sessions de farm mesurées en jeu, envoyées au site IMG Farm DB par le proxy
 commands:
   farm:
@@ -14,3 +15,7 @@ commands:
   jouer:
     description: Rejoindre un serveur à la demande (speedrun, monde neuf…) — pour les PNJ du lobby
     usage: /jouer <jeu>
+  limbo:
+    description: Retour aux panneaux de WorldReset (la partie en cours est gardée)
+    usage: /limbo
+    aliases: [panneaux]

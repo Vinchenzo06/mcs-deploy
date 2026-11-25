@@ -1,0 +1,6 @@
+# Lot 76c — panneaux de réglage de WorldReset dans le monde « limbo » (img-farm les pose à
+# chaque démarrage). x/z : centre du mur ; face : côté où sont les panneaux (SOUTH = vers le
+# point d'apparition du limbo livré avec WorldReset) ; y est trouvé au 1er démarrage puis noté ici.
+x: 7
+z: -9
+face: SOUTH

@@ -1,0 +1,24 @@
+# Lot 76 — WorldReset des serveurs à la demande (posé à la création, jamais écrasé ensuite).
+# Les clés absentes prennent la valeur par défaut du plugin. Tout se change ensuite en jeu
+# sur les panneaux du limbo (but, chrono, mort, départ) ou avec /wr.
+language: en
+# Pas de reset à la mort (0 = désactivé) ; panneau « À la mort » pour l'activer
+death-limit: 0
+reset-on-death: false
+backup:
+  # Mondes jetables : pas de copie à chaque reset (sinon le disque se remplit)
+  enabled: false
+autoreset:
+  enabled: false
+limbo:
+  # 1re connexion pendant une partie : au limbo (panneaux) ; on revient dans sa partie ensuite
+  new-players-to-limbo: true
+  # Pas de limbo forcé au démarrage : un serveur arrêté puis relancé garde la partie en cours
+  start-in-limbo: false
+timer:
+  enabled: true
+  # Chacun son chrono (plusieurs joueurs peuvent être sur le même serveur)
+  scope: INDIVIDUAL
+  goal:
+    type: ENTITY
+    value: minecraft:ender_dragon

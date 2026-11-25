@@ -394,50 +394,62 @@ Fabric seulement (pas Forge), Minecraft 26.2 et plus, avec Fabric API. Détails 
   pour la garder. En attendant, le fichier de la version précédente se charge sur la nouvelle ; ce qui
   n'y marche plus est coupé sans planter le jeu, avec un message au joueur.
 
-## Serveurs à la demande : speedrun, monde neuf (lot 76)
+## Serveurs à la demande : WorldReset (lots 76 à 76c)
 
-Des serveurs prêts à jouer, créés et supprimés tout seuls, décrits dans
-`deploy/pools/pools.json` (copié dans `/var/lib/mcs/pools` par l'installation) :
+Des serveurs WorldReset prêts à jouer (speedrun, ou farm sur un monde tout neuf), créés et supprimés
+tout seuls, décrits dans `deploy/pools/pools.json` (copié dans `/var/lib/mcs/pools` par l'installation).
 
-| Jeu | Commande | Plugin | Réglages |
-|---|---|---|---|
-| Speedrun | `/jouer speedrun` | WorldReset (Modrinth) | chrono individuel, but : l'Ender Dragon, pas de reset à la mort ni d'autoreset |
-| Monde neuf | `/jouer monde-neuf` | WorldReset (Modrinth) | pas de chrono ni de limite de morts, `/wr reset` = nouveau monde pour farmer un item |
+- **`/jouer`** (ou `/jouer worldreset`, ou le PNJ du lobby) : un serveur où personne n'est ; s'il est arrêté,
+  il démarre ; si tous sont pris, un nouveau est créé (1 à 3 min, `maxExtra` = 3 au plus en plus).
+- **Toujours un serveur** (`keep`), créé tout seul par l'API s'il manque (une machine doit être en ligne).
+- **Arrêtés après 15 min vides** (`idleStopMinutes`) par le proxy ; ils redémarrent au prochain `/jouer`
+  et la partie en cours reprend.
+- **Les serveurs en plus sont supprimés après un jour sans personne** (`idleDeleteHours` = 24), jamais celui
+  gardé. Un groupe retiré de pools.json : ses serveurs arrêtés sont supprimés.
+- Ils appartiennent au premier admin (ou au pseudo `owner`), sont des **serveurs de la team**, ne comptent dans
+  le quota de personne et **ne sont pas sauvegardés** (mondes jetables).
+- **Agent 0.21.0 requis** (fichiers du modèle) : `sudo bash node-setup.sh --update-agent`.
 
-**En jeu, chaque joueur peut** (permissions données par img-farm, `plugins/ImgFarm/permissions-joueurs.yml` du
-modèle) : `/wr reset` (nouveau monde), `/wr timer goal ITEM diamond` (changer le but : ENTITY, ITEM, BLOCK,
-ADVANCEMENT, PORTAL, NONE), `/wr timer start|pause|reset`, `/wr death 1` ou `/wr death off`, `/wr filter …`.
-Le but est celui du serveur (pas de chaque joueur) : chacun a d'habitude son serveur.
+### Le limbo et ses panneaux
 
-- **Toujours un de chaque** (`keep`) : créé tout seul par l'API s'il manque (une machine doit être en ligne).
-- **`/jouer <jeu>`** (ou `/jouer` pour la liste cliquable) : un serveur du jeu où personne n'est ;
-  s'il est arrêté, il démarre ; si tous sont pris, un nouveau est créé (1 à 3 min, `maxExtra` = 3 au plus en plus).
-- **Arrêtés après 15 min vides** (`idleStopMinutes`) par le proxy ; ils redémarrent au prochain `/jouer`.
-- **Les serveurs en plus sont supprimés après un jour sans personne** (`idleDeleteHours` = 24), jamais
-  ceux gardés. La dernière entrée d'un joueur est notée à chaque connexion.
-- Ils appartiennent au premier admin (ou au pseudo `owner` de pools.json), sont des **serveurs de la team**
-  (tous les membres y entrent), ne comptent dans le quota de personne et **ne sont pas sauvegardés**
-  (mondes jetables).
-- **Réglages des plugins** : `deploy/pools/<jeu>/files/…` (ex. `plugins/WorldReset/config.yml`) est posé dans
-  le dossier du serveur à sa création, avant le premier démarrage, jamais par-dessus un fichier existant.
-  Changer ces fichiers vaut pour les **prochains** serveurs ; pour un serveur existant, passe par l'onglet
-  Fichiers du site. La sauvegarde de WorldReset à chaque reset est coupée (`backup.enabled: false`) pour ne pas
-  remplir le disque.
-- **Agent 0.21.0 requis** sur les machines (fichiers du modèle) : `sudo bash node-setup.sh --update-agent`.
+À la **première connexion**, on arrive au limbo de WorldReset devant un mur de panneaux (posés par img-farm
+à chaque démarrage, sur chaque nouveau serveur). Clic sur un panneau = valeur suivante :
+
+| Panneau | Choix |
+|---|---|
+| But | Ender Dragon, Entrer dans l'End, Entrer au Nether, Tuer le Wither, Un diamant, Aucun |
+| Chrono | Chacun le sien, Commun, Aucun |
+| ▶ JOUER | partir dans le monde (ou reprendre sa partie) |
+| À la mort | On continue, Monde neuf |
+| Départ | Au hasard, Village, Portail en ruine, Épave (au prochain monde) |
+| ⟳ Nouveau monde | nouveau monde, chrono à zéro (pour tout le serveur) |
+
+On **ne revient pas au limbo à chaque connexion** : une partie commencée reprend où on était, même après un
+arrêt du serveur. Pour revenir aux panneaux : **`/limbo`** (la partie est gardée ; ▶ JOUER la reprend,
+⟳ Nouveau monde en commence une autre).
+
+Les joueurs ont aussi les commandes de WorldReset (permissions données par img-farm,
+`plugins/ImgFarm/permissions-joueurs.yml` du modèle) : `/wr reset`, `/wr timer goal ITEM diamond`
+(ENTITY, ITEM, BLOCK, ADVANCEMENT, PORTAL, NONE), `/wr timer start|pause|reset`, `/wr death 1|off`, `/wr filter …`.
+Les réglages sont ceux du serveur (pas de chaque joueur) : chacun a d'habitude son serveur.
+
+**Fichiers du modèle** (`deploy/pools/worldreset/files/…`, posés à la création, jamais par-dessus un fichier
+existant ; valent pour les **prochains** serveurs) :
+- `plugins/WorldReset/config.yml` : réglages de départ (chrono individuel, Ender Dragon, pas de reset à la
+  mort ni d'autoreset, pas de copie du monde à chaque reset, `new-players-to-limbo: true`) ;
+- `plugins/ImgFarm/panneaux-worldreset.yml` : place du mur dans le limbo (`x`, `z`, `face`) ;
+- `plugins/ImgFarm/permissions-joueurs.yml`.
 
 ### Relier au lobby (PNJ)
 
 Sur le lobby, installe **FancyNpcs** (Modrinth, licence MIT) depuis l'onglet Plugins du serveur, puis en jeu :
 
 ```
-/npc create speedrun
-/npc action speedrun ANY_CLICK add player_command jouer speedrun
-/npc create monde-neuf
-/npc action monde-neuf ANY_CLICK add player_command jouer monde-neuf
+/npc create worldreset
+/npc action worldreset ANY_CLICK add player_command jouer worldreset
 ```
 
-`/jouer` existe aussi dans le plugin img-farm (installé sur les serveurs de la team) : la commande lancée par
-le PNJ passe par le proxy comme le menu. Un panneau ou un menu peut faire pareil.
+`/jouer` existe aussi dans le plugin img-farm : la commande lancée par le PNJ passe par le proxy comme le menu.
 
 ## Sauvegardes
 
