@@ -67,13 +67,47 @@ final class PoolJoin implements SimpleCommand {
             list(player);
             return;
         }
-        join(player, args[0].toLowerCase(java.util.Locale.ROOT));
+        String first = args[0].toLowerCase(java.util.Locale.ROOT);
+        // /jouer avec <joueur> : la partie d'un autre joueur, quel que soit le jeu
+        if (first.equals("avec")) {
+            if (args.length < 2) {
+                player.sendMessage(error("Utilisation : /jouer avec <joueur>"));
+            } else {
+                joinWith(player, null, args[1]);
+            }
+            return;
+        }
+        if (args.length >= 2 && args[1].equalsIgnoreCase("seul")) {
+            claim(player, first);
+        } else if (args.length >= 3 && args[1].equalsIgnoreCase("avec")) {
+            joinWith(player, first, args[2]);
+        } else {
+            join(player, first);
+        }
     }
 
     @Override
     public List<String> suggest(Invocation invocation) {
         List<String> out = new ArrayList<>();
         JsonNode p = pools;
+        String[] a = invocation.arguments();
+        if (a.length == 3 && a[1].equalsIgnoreCase("avec") || a.length == 2 && a[0].equalsIgnoreCase("avec")) {
+            String start = a[a.length - 1].toLowerCase(java.util.Locale.ROOT);
+            for (Player o : proxy.getAllPlayers()) {
+                if (o.getUsername().toLowerCase(java.util.Locale.ROOT).startsWith(start)) {
+                    out.add(o.getUsername());
+                }
+            }
+            return out;
+        }
+        if (a.length == 2) {
+            for (String o : List.of("seul", "avec")) {
+                if (o.startsWith(a[1].toLowerCase(java.util.Locale.ROOT))) {
+                    out.add(o);
+                }
+            }
+            return out;
+        }
         if (p != null && invocation.arguments().length <= 1) {
             String start = invocation.arguments().length == 0 ? "" : invocation.arguments()[0];
             p.path("pools").forEach(x -> {
@@ -122,7 +156,104 @@ final class PoolJoin implements SimpleCommand {
         return out;
     }
 
+    /** Serveurs du groupe (null = tous les groupes) en marche, avec leurs joueurs (pas celui du joueur) */
+    private Map<String, List<String>> playing(JsonNode r, String pool, Player me) {
+        Map<String, List<String>> out = new java.util.LinkedHashMap<>();
+        String mine = me.getCurrentServer().map(c -> c.getServerInfo().getName()).orElse("");
+        for (JsonNode p : r.path("pools")) {
+            if (pool != null && !pool.equals(p.path("name").asText())) {
+                continue;
+            }
+            for (JsonNode s : p.path("servers")) {
+                String vn = s.path("velocityName").asText("");
+                if (vn.equals(mine)) {
+                    continue;
+                }
+                proxy.getServer(vn).ifPresent(rs -> {
+                    List<String> names = rs.getPlayersConnected().stream().map(Player::getUsername).sorted().toList();
+                    if (!names.isEmpty()) {
+                        out.put(s.path("name").asText(vn), names);
+                    }
+                });
+            }
+        }
+        return out;
+    }
+
+    /**
+     * /jouer <jeu> : si des joueurs sont déjà sur un serveur du jeu, on propose de les rejoindre
+     * ou d'avoir son propre monde ; sinon directement un serveur libre.
+     */
     void join(Player player, String pool) {
+        if (!POOL.matcher(pool).matches()) {
+            player.sendMessage(error("Jeu inconnu : /jouer pour la liste."));
+            return;
+        }
+        api.pools().whenComplete((r, e) -> {
+            if (e != null) {
+                player.sendMessage(error(McsCommand.errorText(e)));
+                return;
+            }
+            pools = r;
+            Map<String, List<String>> others = playing(r, pool, player);
+            if (others.isEmpty()) {
+                claim(player, pool);
+                return;
+            }
+            player.sendMessage(info("Des joueurs sont déjà en partie. Tu veux :"));
+            for (Map.Entry<String, List<String>> en : others.entrySet()) {
+                String who = String.join(", ", en.getValue());
+                String cmd = "/jouer " + pool + " avec " + en.getValue().get(0);
+                player.sendMessage(Component.text("  [Rejoindre " + who + "]", NamedTextColor.AQUA)
+                        .clickEvent(ClickEvent.runCommand(cmd))
+                        .hoverEvent(HoverEvent.showText(Component.text("Même monde que " + who + " (" + en.getKey() + ")")))
+                        .append(Component.text("  " + cmd, NamedTextColor.DARK_GRAY)));
+            }
+            String solo = "/jouer " + pool + " seul";
+            player.sendMessage(Component.text("  [Mon propre monde]", NamedTextColor.GREEN)
+                    .clickEvent(ClickEvent.runCommand(solo))
+                    .hoverEvent(HoverEvent.showText(Component.text("Un serveur libre, ou un nouveau au besoin")))
+                    .append(Component.text("  " + solo, NamedTextColor.DARK_GRAY)));
+        });
+    }
+
+    /** Sur le serveur à la demande où est ce joueur (pool null = n'importe quel jeu) */
+    void joinWith(Player player, String pool, String name) {
+        Optional<Player> target = proxy.getPlayer(name);
+        if (target.isEmpty()) {
+            player.sendMessage(error(name + " n'est pas connecté."));
+            return;
+        }
+        api.pools().whenComplete((r, e) -> {
+            if (e != null) {
+                player.sendMessage(error(McsCommand.errorText(e)));
+                return;
+            }
+            pools = r;
+            String where = target.get().getCurrentServer().map(c -> c.getServerInfo().getName()).orElse("");
+            String mine = player.getCurrentServer().map(c -> c.getServerInfo().getName()).orElse("");
+            for (JsonNode p : r.path("pools")) {
+                if (pool != null && !pool.equals(p.path("name").asText())) {
+                    continue;
+                }
+                for (JsonNode s : p.path("servers")) {
+                    if (s.path("velocityName").asText("").equals(where)) {
+                        if (where.equals(mine)) {
+                            player.sendMessage(info("Tu es déjà sur le même serveur que " + target.get().getUsername() + "."));
+                            return;
+                        }
+                        connect(player, where, s.path("name").asText(where));
+                        return;
+                    }
+                }
+            }
+            player.sendMessage(error(target.get().getUsername() + " n'est pas sur un serveur "
+                    + (pool == null ? "à la demande" : pool) + "."));
+        });
+    }
+
+    /** Un serveur du jeu rien que pour soi : libre, démarré ou créé */
+    void claim(Player player, String pool) {
         if (!POOL.matcher(pool).matches()) {
             player.sendMessage(error("Jeu inconnu : /jouer pour la liste."));
             return;

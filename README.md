@@ -401,6 +401,10 @@ tout seuls, décrits dans `deploy/pools/pools.json` (copié dans `/var/lib/mcs/p
 
 - **`/jouer`** (ou `/jouer worldreset`, ou le PNJ du lobby) : un serveur où personne n'est ; s'il est arrêté,
   il démarre ; si tous sont pris, un nouveau est créé (1 à 3 min, `maxExtra` = 3 au plus en plus).
+- **Jouer à plusieurs** : si des joueurs sont déjà en partie, `/jouer` (et le PNJ) propose
+  **[Rejoindre Alice]** (même serveur, même monde) ou **[Mon propre monde]**. Directement :
+  `/jouer avec <joueur>` ou `/jouer worldreset seul`. Sur un même serveur, les réglages (but, chrono…) sont
+  partagés ; la 1re fois, on passe par le limbo puis ▶ JOUER, et on arrive dans le monde en cours.
 - **Toujours un serveur** (`keep`), créé tout seul par l'API s'il manque (une machine doit être en ligne).
 - **Arrêtés après 15 min vides** (`idleStopMinutes`) par le proxy ; ils redémarrent au prochain `/jouer`
   et la partie en cours reprend.
