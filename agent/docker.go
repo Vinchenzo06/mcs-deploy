@@ -194,7 +194,7 @@ func firstStart(serverPath string, req CreateServerRequest) error {
 			_ = exec.Command("docker", "restart", name).Run()
 		}
 	}
-	if err := waitForMinecraftReady(name, 180); err != nil {
+	if err := waitForMinecraftReady(name, 300); err != nil {
 		err = javaFailure(name, err)
 		log.Printf("Avertissement : %v", err)
 		var je *javaError
@@ -429,7 +429,8 @@ func StartServer(serverID int64) error {
 		return fmt.Errorf("docker start a échoué : %s : %w", strings.TrimSpace(string(out)), err)
 	}
 
-	if err := waitForMinecraftReady(containerName(serverID), 120); err != nil {
+	// 4 min : un départ raté pendant la préparation (Modrinth lent) est relancé par Docker (lot 76e)
+	if err := waitForMinecraftReady(containerName(serverID), 240); err != nil {
 		err = javaFailure(containerName(serverID), err)
 		log.Printf("Avertissement : %v", err)
 		var je *javaError

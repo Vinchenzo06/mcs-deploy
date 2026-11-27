@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var javaVersions = []int{8, 11, 16, 17, 21, 25}
@@ -152,12 +153,37 @@ func javaFailure(container string, err error) error {
 	return je
 }
 
-// containerCrashed : le conteneur s'est arrêté ou a déjà redémarré
-func containerCrashed(container string) bool {
+// dockerState : état Docker et nombre de relances automatiques (--restart unless-stopped)
+func dockerState(container string) (string, int, bool) {
 	out, err := exec.Command("docker", "inspect", "-f", "{{.State.Status}} {{.RestartCount}}", container).Output()
 	if err != nil {
-		return false
+		return "", 0, false
 	}
 	f := strings.Fields(string(out))
-	return len(f) == 2 && (f[0] == "exited" || f[0] == "dead" || f[1] != "0")
+	if len(f) != 2 {
+		return "", 0, false
+	}
+	n, _ := strconv.Atoi(f[1])
+	return f[0], n, true
+}
+
+// maxPrepRestarts : relances tolérées pendant la préparation (lot 76e : l'API Modrinth qui ne
+// répond pas à temps fait échouer le départ ; Docker relance et le suivant passe)
+const maxPrepRestarts = 4
+
+// containerCrashed : le conteneur s'est arrêté, ou redémarre en boucle
+func containerCrashed(container string) bool {
+	st, n, ok := dockerState(container)
+	if ok && (st == "exited" || st == "dead") {
+		// Entre la sortie et la relance par Docker, l'état est « exited » un court instant
+		time.Sleep(2 * time.Second)
+		st, n, ok = dockerState(container)
+	}
+	return ok && (st == "exited" || st == "dead" || n > maxPrepRestarts)
+}
+
+// containerCrashedSince : arrêté, ou relancé depuis « base » relances (serveur déjà prêt)
+func containerCrashedSince(container string, base int) bool {
+	st, n, ok := dockerState(container)
+	return ok && (st == "exited" || st == "dead" || n > base)
 }

@@ -293,7 +293,10 @@ final class PoolJoin implements SimpleCommand {
                             }
                             // Démarré au même moment par un autre joueur ? on regarde de nouveau une fois
                             return api.poolClaim(pool, pid, occupied()).thenCompose(next -> {
-                                if ("start".equals(next.path("action").asText()) || tries >= 18) {
+                                // Seulement s'il a été démarré par quelqu'un d'autre entre-temps ; jamais
+                                // créer un serveur en plus parce que celui-ci n'a pas démarré
+                                String na = next.path("action").asText();
+                                if (!(na.equals("join") || na.equals("wait")) || tries >= 18) {
                                     player.sendMessage(error(McsCommand.errorText(e)));
                                     return CompletableFuture.<Void>completedFuture(null);
                                 }

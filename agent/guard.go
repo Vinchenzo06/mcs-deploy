@@ -276,10 +276,16 @@ func trimOldLogs(serverPath string) {
 // refuse toutes les connexions en remplissant son journal.
 func verifyResponding(name string) error {
 	var last string
+	// Relances déjà faites pendant la préparation : seules celles d'après comptent
+	_, base, _ := dockerState(name)
 	for i := 0; i < 8; i++ {
 		time.Sleep(4 * time.Second)
-		if containerCrashed(name) {
-			return javaFailure(name, fmt.Errorf("le serveur s'est arrêté juste après son démarrage"))
+		if containerCrashedSince(name, base) {
+			msg := "le serveur s'est arrêté juste après son démarrage"
+			if cause := crashCause(name); cause != "" {
+				msg += " (" + cause + ")"
+			}
+			return javaFailure(name, fmt.Errorf("%s", msg))
 		}
 		out, err := exec.Command("docker", "exec", name, "mc-health").CombinedOutput()
 		if err == nil {
