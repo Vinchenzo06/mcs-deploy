@@ -63,9 +63,6 @@ public class PoolService {
         }
         return out;
     }
-        }
-        return out;
-    }
 
     private Player owner() {
         String name = Pools.config().owner();
