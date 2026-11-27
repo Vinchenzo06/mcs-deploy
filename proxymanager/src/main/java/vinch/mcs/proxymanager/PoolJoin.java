@@ -195,6 +195,13 @@ final class PoolJoin implements SimpleCommand {
                 return;
             }
             pools = r;
+            // Lot 79 : jeu relié à un serveur existant (Bingo, Créatif) : on y va directement
+            for (JsonNode x : r.path("pools")) {
+                if (pool.equals(x.path("name").asText()) && x.path("fixed").asBoolean(false)) {
+                    claim(player, pool);
+                    return;
+                }
+            }
             Map<String, List<String>> others = playing(r, pool, player);
             if (others.isEmpty()) {
                 claim(player, pool);

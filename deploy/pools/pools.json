@@ -1,5 +1,5 @@
 {
-  "_comment": "Lot 76 : serveurs à la demande. keep = toujours là ; maxExtra = en plus au besoin, supprimés après idleDeleteHours sans personne ; arrêtés après idleStopMinutes vides. files/ = fichiers posés à la création (config des plugins). owner = pseudo du propriétaire (vide = premier admin).",
+  "_comment": "Lot 76 : serveurs à la demande. keep = toujours là ; maxExtra = en plus au besoin, supprimés après idleDeleteHours sans personne ; arrêtés après idleStopMinutes vides. files/ = fichiers posés à la création (config des plugins). owner = pseudo du propriétaire (vide = premier admin). Un groupe avec « server » (lot 79) relie un jeu à un serveur existant de ce nom : /jouer et le menu y envoient, il est démarré s'il est arrêté, rien n'est créé ni supprimé.",
   "owner": "",
   "pools": [
     {
@@ -11,11 +11,25 @@
       "version": "26.3",
       "ramMb": 4096,
       "cpu": 2,
-      "modrinth": ["worldreset"],
+      "modrinth": [
+        "worldreset"
+      ],
       "keep": 1,
       "maxExtra": 3,
       "idleDeleteHours": 24,
       "idleStopMinutes": 15
+    },
+    {
+      "name": "bingo",
+      "label": "Bingo",
+      "description": "Trouve les items de ta grille avant les autres.",
+      "server": "bingo"
+    },
+    {
+      "name": "creatif",
+      "label": "Créatif",
+      "description": "Construis sans limites : blocs infinis, vol, aucun danger.",
+      "server": "creatif"
     }
   ]
 }

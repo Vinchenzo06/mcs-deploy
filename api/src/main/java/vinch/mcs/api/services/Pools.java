@@ -28,12 +28,19 @@ public final class Pools {
     private static final Logger log = LoggerFactory.getLogger(Pools.class);
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Pattern NAME = Pattern.compile("^[a-z0-9-]{2,24}$");
+    private static final Pattern SERVER = Pattern.compile("^[A-Za-z0-9_-]{1,32}$");
     private static final long MAX_FILE = 512 * 1024;
     private static final long MAX_TOTAL = 2 * 1024 * 1024;
 
     public record Pool(String name, String label, String description, String prefix, ServerType type,
                        String version, int ramMb, int cpu, List<String> modrinth, int keep, int maxExtra,
-                       int idleDeleteHours, int idleStopMinutes) {}
+                       int idleDeleteHours, int idleStopMinutes, String server) {
+
+        /** Lot 79 : jeu relié à un serveur existant (ex. « bingo ») au lieu de serveurs créés à la demande */
+        public boolean fixed() {
+            return server != null;
+        }
+    }
 
     public record Config(String owner, List<Pool> pools) {}
 
@@ -81,6 +88,12 @@ public final class Pools {
             List<String> modrinth = new ArrayList<>();
             p.path("modrinth").forEach(m -> modrinth.add(m.asText("")));
             String prefix = p.path("prefix").asText(name);
+            // Lot 79 : « server » = nom d'un serveur existant ; rien n'est créé ni supprimé
+            String server = p.path("server").isTextual() ? p.path("server").asText().trim() : null;
+            if (server != null && !SERVER.matcher(server).matches()) {
+                log.warn("Groupe {} ignoré : nom de serveur invalide « {} »", name, server);
+                continue;
+            }
             ServerType type;
             try {
                 type = ServerType.valueOf(p.path("type").asText("PAPER").toUpperCase(java.util.Locale.ROOT));
@@ -95,10 +108,11 @@ public final class Pools {
                     Math.max(1024, p.path("ramMb").asInt(4096)),
                     Math.max(1, p.path("cpu").asInt(2)),
                     ModrinthPlugins.normalize(modrinth),
-                    Math.max(0, p.path("keep").asInt(1)),
-                    Math.max(0, p.path("maxExtra").asInt(3)),
+                    server != null ? 0 : Math.max(0, p.path("keep").asInt(1)),
+                    server != null ? 0 : Math.max(0, p.path("maxExtra").asInt(3)),
                     Math.max(1, p.path("idleDeleteHours").asInt(24)),
-                    Math.max(0, p.path("idleStopMinutes").asInt(15))));
+                    Math.max(0, p.path("idleStopMinutes").asInt(server != null ? 0 : 15)),
+                    server));
         }
         String owner = root.path("owner").isTextual() ? root.path("owner").asText() : null;
         return new Config(owner == null || owner.isBlank() ? null : owner, List.copyOf(out));

@@ -48,11 +48,21 @@ public class PoolService {
     private static final Set<ServerStatus> GONE = Set.of(ServerStatus.DELETED);
 
     private List<Server> members(String pool) {
+        Pools.Pool p = Pools.get(pool);
         List<Server> out = new ArrayList<>();
-        for (Server s : serverRepository.findByPoolOrderByIdAsc(pool)) {
+        List<Server> all = p != null && p.fixed() ? serverRepository.findAllByName(p.server())
+                : serverRepository.findByPoolOrderByIdAsc(pool);
+        for (Server s : all) {
             if (!GONE.contains(s.getStatus())) {
                 out.add(s);
             }
+        }
+        if (p != null && p.fixed()) {
+            // Même nom chez plusieurs joueurs : le serveur de la team d'abord, puis le plus ancien
+            out.sort(Comparator.comparing((Server s) -> !Boolean.TRUE.equals(s.getIsTeam())).thenComparing(Server::getId));
+        }
+        return out;
+    }
         }
         return out;
     }
@@ -86,6 +96,7 @@ public class PoolService {
             m.put("label", p.label());
             m.put("description", p.description());
             m.put("idleStopMinutes", p.idleStopMinutes());
+            m.put("fixed", p.fixed());
             m.put("servers", members(p.name()).stream().map(PoolService::describe).toList());
             out.add(m);
         }
@@ -120,6 +131,22 @@ public class PoolService {
         List<Server> list = members(p.name());
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("label", p.label());
+        // Lot 79 : serveur existant partagé : on y va, qu'il y ait du monde ou non
+        if (p.fixed()) {
+            if (list.isEmpty()) {
+                throw new RuntimeException("Le serveur « " + p.server() + " » de " + p.label() + " n'existe pas.");
+            }
+            Server s = list.get(0);
+            out.put("action", switch (s.getStatus()) {
+                case RUNNING -> "join";
+                case STOPPED -> "start";
+                case STARTING, CREATING -> "wait";
+                default -> throw new RuntimeException(p.label() + " n'est pas disponible pour l'instant ("
+                        + s.getStatus().name().toLowerCase(java.util.Locale.ROOT) + ").");
+            });
+            out.put("server", describe(s));
+            return out;
+        }
         for (ServerStatus want : List.of(ServerStatus.RUNNING, ServerStatus.STOPPED, ServerStatus.STARTING)) {
             for (Server s : list) {
                 if (s.getStatus() == want && !busy.contains(s.getVelocityName())) {
@@ -157,6 +184,9 @@ public class PoolService {
         Pools.Pool p = pool(poolName);
         if (requesterId != null) {
             requireMember(requesterId);
+        }
+        if (p.fixed()) {
+            throw new RuntimeException(p.label() + " est un serveur existant : rien à créer.");
         }
         if (!creating.add(p.name())) {
             throw new RuntimeException("Un serveur « " + p.label() + " » est déjà en préparation : réessaie dans un instant.");
@@ -225,6 +255,9 @@ public class PoolService {
             }
         }
         for (Pools.Pool p : pools) {
+            if (p.fixed()) {
+                continue; // serveur existant : ni création ni suppression
+            }
             try {
                 List<Server> list = members(p.name());
                 if (list.size() < p.keep() && !creating.contains(p.name())) {

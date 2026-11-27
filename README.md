@@ -447,8 +447,14 @@ existant ; valent pour les **prochains** serveurs) :
 ### Dans le menu (lot 78)
 
 Le menu IMG (`/menu` ou la boussole du lobby) a une rangée **Jeux** : WorldReset, Bingo et Créatif, avec une courte
-description et le nombre de joueurs en partie. Un clic fait comme `/jouer <jeu>`. Un jeu qui n'est pas (encore)
-dans `pools.json` (`bingo`, `creatif`) est affiché « Bientôt disponible ».
+description et le nombre de joueurs en partie. Un clic fait comme `/jouer <jeu>`. Un jeu absent de `pools.json`
+est affiché « Bientôt disponible ».
+
+**Relier un jeu à un serveur existant (lot 79)** : dans `deploy/pools/pools.json`, un groupe avec `server` au lieu
+des réglages de création, par exemple `{"name": "bingo", "label": "Bingo", "description": "…", "server": "bingo"}`.
+`/jouer bingo` et le menu envoient alors sur le serveur nommé `bingo` (démarré s'il est arrêté) ; rien n'est créé,
+arrêté ni supprimé. Pour que tous les membres y entrent et puissent le démarrer, ce doit être un **serveur de la
+team**. Livrés : `bingo` → serveur `bingo`, `creatif` → serveur `creatif`.
 
 ### Spawn du lobby (lot 77, sans EssentialsX)
 

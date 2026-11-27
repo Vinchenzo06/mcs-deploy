@@ -23,7 +23,10 @@ class PoolsTest {
         Path file = Path.of("..", "deploy", "pools", "pools.json");
         Pools.Config c = Pools.parse(JSON.readTree(Files.readAllBytes(file)));
         assertNull(c.owner());
-        assertEquals(List.of("worldreset"), c.pools().stream().map(Pools.Pool::name).toList());
+        assertEquals(List.of("worldreset", "bingo", "creatif"), c.pools().stream().map(Pools.Pool::name).toList());
+        assertEquals("bingo", c.pools().get(1).server());
+        assertEquals(0, c.pools().get(1).keep());
+        assertEquals(0, c.pools().get(1).idleStopMinutes());
         Pools.Pool s = c.pools().get(0);
         assertEquals(ServerType.PAPER, s.type());
         assertEquals(1, s.keep());
@@ -38,12 +41,14 @@ class PoolsTest {
                 {"owner": "Vinch", "pools": [
                   {"name": "Mauvais Nom"},
                   {"name": "bingo", "type": "inconnu"},
+                  {"name": "fixe", "server": "../x"},
                   {"name": "creatif", "prefix": "../x", "ramMb": 10, "keep": -2, "idleDeleteHours": 0}
                 ]}"""));
         assertEquals("Vinch", c.owner());
         assertEquals(1, c.pools().size());
         Pools.Pool p = c.pools().get(0);
         assertEquals("creatif", p.prefix());
+        assertNull(p.server());
         assertEquals(1024, p.ramMb());
         assertEquals(0, p.keep());
         assertEquals(3, p.maxExtra());
