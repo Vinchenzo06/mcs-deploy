@@ -19,3 +19,13 @@ commands:
     description: Retour aux panneaux de WorldReset (la partie en cours est gardée)
     usage: /limbo
     aliases: [panneaux]
+  setspawn:
+    description: Le spawn du serveur est ici (arrivée à chaque connexion) — admins
+    usage: /setspawn
+  spawn:
+    description: Retour au spawn du serveur
+    usage: /spawn
+permissions:
+  imgfarm.spawn.set:
+    description: /setspawn
+    default: op

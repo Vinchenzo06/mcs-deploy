@@ -444,6 +444,18 @@ existant ; valent pour les **prochains** serveurs) :
 - `plugins/ImgFarm/panneaux-worldreset.yml` : place du mur dans le limbo (`x`, `z`, `face`) ;
 - `plugins/ImgFarm/permissions-joueurs.yml`.
 
+### Spawn du lobby (lot 77, sans EssentialsX)
+
+Le plugin img-farm s'en charge : sur le lobby, place-toi où les joueurs doivent arriver et tape **`/setspawn`**
+(op ou permission `imgfarm.spawn.set`). Ensuite, sur ce serveur seulement :
+- on arrive au spawn **à chaque connexion** (aussi en revenant d'un autre serveur) ;
+- on réapparaît au spawn après une mort ; tomber dans le vide ramène au spawn, sans dégâts ;
+- **`/spawn`** pour y retourner.
+
+Réglages dans `plugins/ImgFarm/spawn.yml` (`a-chaque-connexion`, `apres-une-mort`, `vide-ramene-au-spawn`,
+puis redémarrer) ; supprimer le fichier = plus de spawn imposé. Les autres serveurs n'ont pas ce fichier : rien
+ne change pour eux.
+
 ### Relier au lobby (PNJ)
 
 Sur le lobby, installe **FancyNpcs** (Modrinth, licence MIT) depuis l'onglet Plugins du serveur, puis en jeu :

@@ -117,6 +117,35 @@ public final class ImgFarmPlugin extends JavaPlugin implements CommandExecutor, 
             getServer().getPluginManager().registerEvents(panel, this);
             panel.start();
         }
+        // Lot 77 : spawn du lobby (/setspawn, /spawn, à chaque connexion), sans EssentialsX
+        LobbySpawn lobbySpawn = new LobbySpawn(this);
+        lobbySpawn.load();
+        getServer().getPluginManager().registerEvents(lobbySpawn, this);
+        PluginCommand setspawn = getCommand("setspawn");
+        if (setspawn != null) {
+            setspawn.setExecutor((sender, command, label, args) -> {
+                if (!(sender instanceof Player pl)) {
+                    sender.sendMessage("Commande réservée aux joueurs.");
+                } else if (!LobbySpawn.canSet(pl)) {
+                    pl.sendMessage(error("Réservé aux admins du serveur."));
+                } else if (lobbySpawn.set(pl)) {
+                    pl.sendMessage(info("Spawn enregistré ici : les joueurs y arrivent à chaque connexion "
+                            + "(plugins/ImgFarm/spawn.yml pour régler)."));
+                }
+                return true;
+            });
+        }
+        PluginCommand spawnCmd = getCommand("spawn");
+        if (spawnCmd != null) {
+            spawnCmd.setExecutor((sender, command, label, args) -> {
+                if (!(sender instanceof Player pl)) {
+                    sender.sendMessage("Commande réservée aux joueurs.");
+                } else if (!lobbySpawn.teleport(pl)) {
+                    pl.sendMessage(error("Pas de spawn sur ce serveur."));
+                }
+                return true;
+            });
+        }
         PluginCommand limbo = getCommand("limbo");
         if (limbo != null) {
             limbo.setExecutor((sender, command, label, args) -> {
