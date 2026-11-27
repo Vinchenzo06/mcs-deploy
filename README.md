@@ -444,6 +444,12 @@ existant ; valent pour les **prochains** serveurs) :
 - `plugins/ImgFarm/panneaux-worldreset.yml` : place du mur dans le limbo (`x`, `z`, `face`) ;
 - `plugins/ImgFarm/permissions-joueurs.yml`.
 
+### Dans le menu (lot 78)
+
+Le menu IMG (`/menu` ou la boussole du lobby) a une rangée **Jeux** : WorldReset, Bingo et Créatif, avec une courte
+description et le nombre de joueurs en partie. Un clic fait comme `/jouer <jeu>`. Un jeu qui n'est pas (encore)
+dans `pools.json` (`bingo`, `creatif`) est affiché « Bientôt disponible ».
+
 ### Spawn du lobby (lot 77, sans EssentialsX)
 
 Le plugin img-farm s'en charge : sur le lobby, place-toi où les joueurs doivent arriver et tape **`/setspawn`**

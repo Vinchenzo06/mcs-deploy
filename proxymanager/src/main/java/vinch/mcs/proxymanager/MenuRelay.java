@@ -86,6 +86,26 @@ class MenuRelay {
                 reply.accept(200, json.createObjectNode().put("ok", true));
             }
             case "act" -> act(player, data, reply);
+            // Lot 78 : jeux à la demande pour le menu (existent-ils ? combien de joueurs en partie ?)
+            case "pools" -> api.pools().whenComplete((r, e) -> {
+                if (e != null) {
+                    reply.accept(502, error(text(e)));
+                    return;
+                }
+                ObjectNode out = json.createObjectNode();
+                com.fasterxml.jackson.databind.node.ArrayNode list = out.putArray("pools");
+                for (JsonNode p : r.path("pools")) {
+                    int playing = 0;
+                    for (JsonNode sv : p.path("servers")) {
+                        playing += proxy.getServer(sv.path("velocityName").asText(""))
+                                .map(x -> x.getPlayersConnected().size()).orElse(0);
+                    }
+                    list.addObject().put("name", p.path("name").asText())
+                            .put("label", p.path("label").asText())
+                            .put("playing", playing);
+                }
+                reply.accept(200, out);
+            });
             case "servers", "server" -> withPlayer(player, reply, pid -> {
                 if (op.equals("servers")) {
                     servers(pid, reply);

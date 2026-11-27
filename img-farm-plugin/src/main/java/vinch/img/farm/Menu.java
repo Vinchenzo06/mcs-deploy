@@ -323,7 +323,7 @@ final class Menu implements Listener {
     // ---------- Menu principal ----------
 
     void main(Player p) {
-        Gui g = new Gui(3, "Menu IMG");
+        Gui g = new Gui(4, "Menu IMG");
         g.set(10, item(Material.ENDER_CHEST, "Mes serveurs", NamedTextColor.AQUA,
                 "Les serveurs de la team et les tiens :", "rejoindre, démarrer, arrêter,", "console, sauvegardes…", "", "» Clic : ouvrir"), c -> servers(p));
         g.set(12, item(Material.NETHER_STAR, "Créer un serveur", NamedTextColor.GREEN,
@@ -350,6 +350,63 @@ final class Menu implements Listener {
                     "RAM : " + gb(lng(q, "ramUsedMb")) + " / " + gb(lng(q, "totalRamMb")),
                     "CPU : " + lng(q, "cpuUsedCores") + " / " + lng(q, "totalCpuCores")), null);
         });
+        games(p, g, null);
+        bridge.send(p, "pools", new JsonObject(), r -> {
+            if (!r.ok() || p.getOpenInventory().getTopInventory().getHolder() != g) return;
+            Map<String, Long> playing = new HashMap<>();
+            if (r.body().has("pools")) {
+                for (JsonElement e : r.body().getAsJsonArray("pools")) {
+                    JsonObject o = e.getAsJsonObject();
+                    playing.put(str(o, "name", ""), lng(o, "playing"));
+                }
+            }
+            games(p, g, playing);
+        });
+    }
+
+    // ---------- Jeux (lot 78) ----------
+
+    /** Nom du groupe (pools.json), objet, titre, couleur, description */
+    private static final Object[][] GAMES = {
+            {"worldreset", Material.ENDER_EYE, "WorldReset", NamedTextColor.DARK_PURPLE,
+                    new String[]{"Speedrun ou farm sur un monde", "tout neuf. But, chrono et départ", "au choix sur les panneaux du limbo."}},
+            {"bingo", Material.FILLED_MAP, "Bingo", NamedTextColor.YELLOW,
+                    new String[]{"Trouve les items de ta grille", "avant les autres sur un monde neuf."}},
+            {"creatif", Material.BRICKS, "Créatif", NamedTextColor.GREEN,
+                    new String[]{"Construis sans limites :", "blocs infinis, vol, aucun danger."}},
+    };
+
+    /** playing null : pas encore de réponse du proxy ; sinon joueurs en partie par jeu existant */
+    private void games(Player p, Gui g, Map<String, Long> playing) {
+        int[] slots = {29, 31, 33};
+        for (int i = 0; i < GAMES.length; i++) {
+            String pool = (String) GAMES[i][0];
+            List<String> lore = new ArrayList<>(List.of((String[]) GAMES[i][4]));
+            lore.add("");
+            boolean ready = playing != null && playing.containsKey(pool);
+            if (playing == null) {
+                lore.add("Chargement…");
+            } else if (!ready) {
+                lore.add("Bientôt disponible");
+            } else {
+                long n = playing.get(pool);
+                if (n > 0) lore.add(n + " joueur" + (n > 1 ? "s" : "") + " en partie");
+                lore.add("» Clic : jouer");
+            }
+            ItemStack it = item((Material) GAMES[i][1], (String) GAMES[i][2], (NamedTextColor) GAMES[i][3],
+                    lore.toArray(new String[0]));
+            String label = (String) GAMES[i][2];
+            if (ready) {
+                g.set(slots[i], it, c -> act(p, "jouer", pool));
+            } else if (playing == null) {
+                g.set(slots[i], it, null);
+            } else {
+                g.set(slots[i], it, c -> {
+                    p.closeInventory();
+                    p.sendMessage(ImgFarmPlugin.info(label + " arrive bientôt sur le réseau."));
+                });
+            }
+        }
     }
 
     // ---------- Serveurs ----------
