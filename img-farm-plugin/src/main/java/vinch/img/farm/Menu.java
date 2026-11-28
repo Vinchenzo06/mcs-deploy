@@ -352,7 +352,12 @@ final class Menu implements Listener {
         });
         games(p, g, null);
         bridge.send(p, "pools", new JsonObject(), r -> {
-            if (!r.ok() || p.getOpenInventory().getTopInventory().getHolder() != g) return;
+            if (p.getOpenInventory().getTopInventory().getHolder() != g) return;
+            if (!r.ok()) {
+                // Proxy pas à jour ou réponse en erreur : les boutons marchent quand même (/jouer)
+                games(p, g, Map.of());
+                return;
+            }
             Map<String, Long> playing = new HashMap<>();
             if (r.body().has("pools")) {
                 for (JsonElement e : r.body().getAsJsonArray("pools")) {
@@ -378,18 +383,20 @@ final class Menu implements Listener {
 
     /** playing null : pas encore de réponse du proxy ; sinon joueurs en partie par jeu existant */
     private void games(Player p, Gui g, Map<String, Long> playing) {
+        // Map vide (et pas null) sans réponse du proxy : on ne sait pas, chaque bouton essaie /jouer
+        boolean unknown = playing != null && playing.isEmpty();
         int[] slots = {29, 31, 33};
         for (int i = 0; i < GAMES.length; i++) {
             String pool = (String) GAMES[i][0];
             List<String> lore = new ArrayList<>(List.of((String[]) GAMES[i][4]));
             lore.add("");
-            boolean ready = playing != null && playing.containsKey(pool);
+            boolean ready = playing != null && (unknown || playing.containsKey(pool));
             if (playing == null) {
                 lore.add("Chargement…");
             } else if (!ready) {
                 lore.add("Bientôt disponible");
             } else {
-                long n = playing.get(pool);
+                long n = playing.getOrDefault(pool, 0L);
                 if (n > 0) lore.add(n + " joueur" + (n > 1 ? "s" : "") + " en partie");
                 lore.add("» Clic : jouer");
             }

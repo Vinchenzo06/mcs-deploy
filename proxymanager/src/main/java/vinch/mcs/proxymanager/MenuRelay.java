@@ -39,7 +39,7 @@ import java.util.regex.Pattern;
  */
 class MenuRelay {
 
-    static final Set<String> OPS = Set.of("context", "servers", "server", "act", "opened");
+    static final Set<String> OPS = Set.of("context", "servers", "server", "act", "opened", "pools");
     private static final Set<String> SAFE = Set.of("join", "start", "info", "list", "quota", "backups", "members");
     private static final Pattern REF = Pattern.compile("^[A-Za-z0-9_./-]{1,80}$");
 
